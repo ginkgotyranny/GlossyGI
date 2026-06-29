@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <memory>
-#include "Model.h"
+#include "ModelTypes.h"
 
 #ifndef MAX_LEVELS
 #define MAX_LEVELS 8

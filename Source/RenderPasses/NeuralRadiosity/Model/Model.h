@@ -2,20 +2,10 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include "ModelTypes.h"
+#include "HashGrid.h"
+#include "HashGridInterp.h"
 #include "tiny-cuda-nn/object.h"
-
-
-#if defined(TCNN_HALF_PRECISION) && TCNN_HALF_PRECISION && defined(__CUDACC__)
-#include <cuda_fp16.h>
-#elif defined(TCNN_HALF_PRECISION) && TCNN_HALF_PRECISION
-struct __half;
-#endif
-
-#if defined(TCNN_HALF_PRECISION) && TCNN_HALF_PRECISION
-using precision_t = __half;
-#else
-using precision_t = float;
-#endif
 
 
 namespace tcnn
@@ -35,12 +25,22 @@ namespace tcnn
     template <typename T, typename PARAMS_T, typename COMPUTE_T>
     class Trainer;
 
+    template <typename T>
+    class Optimizer;
+
+    template <typename T>
+    class Loss;
+
     // Custom models
     template<typename T>
     class NeuralModel;
 
     template<typename T>
     class NeuralConeModel;
+
+    struct Context;
+
+    struct pcg32;
 }
 
 struct ModelIOPtrs
@@ -73,22 +73,12 @@ public:
 private:
     void createOnlineModels();
     void createOfflineModelsIfNeeded();
-
-    std::shared_ptr<tcnn::NeuralModel<precision_t>> mpDiffOfflineNet;
-    std::shared_ptr<tcnn::NeuralModel<precision_t>> mpDiffOnlineNet;
-    std::shared_ptr<tcnn::NeuralConeModel<precision_t>> mpSpecOfflineNet;
-    std::shared_ptr<tcnn::NeuralConeModel<precision_t>> mpSpecOnlineNet;
-    tcnn::NeuralModel<precision_t>* mpDiffNet = nullptr;
-    tcnn::NeuralConeModel<precision_t>* mpSpecNet = nullptr;
-    std::unique_ptr<tcnn::Trainer<float, precision_t, precision_t>> mpDiffOfflineTrainer;
-    std::unique_ptr<tcnn::Trainer<float, precision_t, precision_t>> mpSpecOfflineTrainer;
-    std::unique_ptr<tcnn::Trainer<float, precision_t, precision_t>> mpDiffOnlineTrainer;
-    std::unique_ptr<tcnn::Trainer<float, precision_t, precision_t>> mpSpecOnlineTrainer;
-    tcnn::Trainer<float, precision_t, precision_t>* mpDiffTrainer = nullptr;
-    tcnn::Trainer<float, precision_t, precision_t>* mpSpecTrainer = nullptr;
+    
     cudaStream_t mInferenceStream;
     cudaStream_t mTrainStream;
     bool mOnline = false;
+
+    std::shared_ptr<tcnn::pcg32> mpRng;
 
     uint32_t pixelCount = 1u << 20;
     uint32_t numClusters = 4;
@@ -107,20 +97,45 @@ private:
     float perLevelInterpScale = 2.0f;
     float interpRatio = 1.0f;
 
-    const tcnn::json mOfflineOptConfig = {
-        {"otype", "Adam"},
-        {"learning_rate", 1e-2f}
-    };
-    const tcnn::json mOnlineOptConfig = {
-        {"otype", "EMA"},
-        {"decay", 0.9f},
-        {"nested", mOfflineOptConfig}
-    };
-    const tcnn::json mLossConfig = {
-        {"otype", "RelativeL2Luminance"}
-    };
+    HashGrid::Config mPrimGridConfig;
+    HashGridInterp::Config mClsGridConfig;
 
-    uint32_t mDiffInputDim = padUp(nFeaturesPerLevel * nLevels + 3 * 4 + 1, 16);
-    uint32_t mSpecInputDim = padUp(nFeaturesPerLevel * nLevels + nInterpFeaturesPerLevel * numClusters + 3 * 4 + 1 + numClusters * (3 + 1 + 1), 16);
-    uint32_t mOutputDim = 16;
+    std::shared_ptr<tcnn::GPUMemory<precision_t>> mpPrimGrids;
+    std::shared_ptr<tcnn::GPUMemory<float>>       mpPrimGridsFull;
+    std::shared_ptr<tcnn::GPUMemory<precision_t>> mpPrimGridsGradient;
+    precision_t*                                  mpPrimGridsInference;
+    std::shared_ptr<tcnn::GPUMemory<precision_t>> mpClsGrids;
+    std::shared_ptr<tcnn::GPUMemory<float>>       mpClsGridsFull;
+    std::shared_ptr<tcnn::GPUMemory<precision_t>> mpClsGridsGradient;
+    precision_t*                                  mpClsGridsInference;
+    
+    std::shared_ptr<tcnn::Network<precision_t, precision_t>> mpDiffNet;
+    std::shared_ptr<tcnn::Network<precision_t, precision_t>> mpSpecNet;
+    std::shared_ptr<tcnn::GPUMemory<precision_t>> mpDiffParams;
+    std::shared_ptr<tcnn::GPUMemory<float>>       mpDiffParamsFull;
+    std::shared_ptr<tcnn::GPUMemory<precision_t>> mpDiffParamsGradient;
+    precision_t*                                  mpDiffParamsInference;
+    std::shared_ptr<tcnn::GPUMemory<precision_t>> mpSpecParams;
+    std::shared_ptr<tcnn::GPUMemory<float>>       mpSpecParamsFull;
+    std::shared_ptr<tcnn::GPUMemory<precision_t>> mpSpecParamsGradient;
+    precision_t*                                  mpSpecParamsInference;
+    
+    std::shared_ptr<tcnn::Optimizer<precision_t>> mpPrimGridOpt;
+    std::shared_ptr<tcnn::Optimizer<precision_t>> mpClsGridOpt;
+    std::shared_ptr<tcnn::Optimizer<precision_t>> mpDiffNetOpt;
+    std::shared_ptr<tcnn::Optimizer<precision_t>> mpSpecNetOpt;
+    std::shared_ptr<tcnn::Loss<precision_t>> mpLoss;
+
+    uint32_t mDiffInputDim;
+    uint32_t mSpecInputDim;
+    uint32_t mOutputDim;
+
+    uint32_t mDiffEncOffset;
+    uint32_t mDiffPosOffset;
+    uint32_t mSpecPrimEncOffset;
+    uint32_t mSpecClsEncOffset;
+    uint32_t mSpecPosOffset;
+    uint32_t mSpecClsPosOffset;
+    uint32_t mSpecClsScaleOffset;
+    uint32_t mSpecClsWeightOffset;
 };
