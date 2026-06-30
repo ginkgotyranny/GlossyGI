@@ -31,13 +31,15 @@ struct DiffNetInput
     static const uint numClusters = NUM_CLUSTERS;
     static const uint encDim = N_FEATURES_PER_LEVEL * N_LEVELS;
 
-    static const uint posOffset = encDim;
+    // static const uint posOffset = encDim;
+    static const uint posOffset = 0;
     static const uint dirOffset = posOffset + 3;
     static const uint normalOffset = dirOffset + 3;
     static const uint albedoOffset = normalOffset + 3;
     static const uint roughnessOffset = albedoOffset + 3;
     static const uint totalDim = roughnessOffset + 1;
-    static const uint paddedDim = (totalDim + padDim - 1) / padDim * padDim;
+    // static const uint paddedDim = (totalDim + padDim - 1) / padDim * padDim;
+    static const uint paddedDim = totalDim;
 
     float data[paddedDim];
 
@@ -100,7 +102,8 @@ struct SpecNetInput
     static const uint primEncDim = N_FEATURES_PER_LEVEL * N_LEVELS;
     static const uint clsEncDim = N_FEATURES_PER_LEVEL_SPEC * NUM_CLUSTERS;
 
-    static const uint posOffset = primEncDim + clsEncDim;
+    // static const uint posOffset = primEncDim + clsEncDim;
+    static const uint posOffset = 0;
     static const uint dirOffset = posOffset + 3;
     static const uint normalOffset = dirOffset + 3;
     static const uint albedoOffset = normalOffset + 3;
@@ -109,7 +112,8 @@ struct SpecNetInput
     static const uint clsScaleOffset = clsPosOffset + numClusters * 3;
     static const uint clsWeightOffset = clsScaleOffset + numClusters;
     static const uint totalDim = clsWeightOffset + numClusters;
-    static const uint paddedDim = (totalDim + padDim - 1) / padDim * padDim;
+    // static const uint paddedDim = (totalDim + padDim - 1) / padDim * padDim;
+    static const uint paddedDim = totalDim;
 
     float data[paddedDim];
 

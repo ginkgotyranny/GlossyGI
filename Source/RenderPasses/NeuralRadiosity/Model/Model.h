@@ -126,6 +126,8 @@ private:
     std::shared_ptr<tcnn::Optimizer<precision_t>> mpSpecNetOpt;
     std::shared_ptr<tcnn::Loss<precision_t>> mpLoss;
 
+    uint32_t mDiffGBufferDim;
+    uint32_t mSpecGBufferDim;
     uint32_t mDiffInputDim;
     uint32_t mSpecInputDim;
     uint32_t mOutputDim;
