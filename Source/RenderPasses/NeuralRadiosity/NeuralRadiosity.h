@@ -67,6 +67,9 @@ struct RayBatchBuffer
     /// Specular buffer
     ref<Buffer> specVBuffer;
     ref<Buffer> specPixel;
+    ref<Buffer> specPos;
+    ref<Buffer> specDir;
+    ref<Buffer> specRoughness;
     ref<Buffer> specActive;       // Compaction Input
     ref<Buffer> specIndex;        // Compaction Output
     ref<Buffer> specInput;        // Specular input for neural network
@@ -190,6 +193,24 @@ struct RayBatchBuffer
                 MemoryType::DeviceLocal,
                 nullptr, false
             );
+            specPos = pDevice->createStructuredBuffer(
+                var["specPos"], size,
+                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
+                MemoryType::DeviceLocal,
+                nullptr, false
+            );
+            specDir = pDevice->createStructuredBuffer(
+                var["specDir"], size,
+                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
+                MemoryType::DeviceLocal,
+                nullptr, false
+            );
+            specRoughness = pDevice->createStructuredBuffer(
+                var["specRoughness"], size,
+                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
+                MemoryType::DeviceLocal,
+                nullptr, false
+            );
             specActive = pDevice->createStructuredBuffer(
                 var["specActive"], size,
                 ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
@@ -220,7 +241,7 @@ struct RayBatchBuffer
     ModelIOPtrs getDiffPtrs()
     {
         return {
-            (float*) diffInput->getCudaMemory()->getMappedData(),
+            (precision_t*) diffInput->getCudaMemory()->getMappedData(),
             (float*) diffColor->getCudaMemory()->getMappedData(),
             diffSize
         };
@@ -229,7 +250,7 @@ struct RayBatchBuffer
     ModelIOPtrs getSpecPtrs()
     {
         return {
-            (float*) specInput->getCudaMemory()->getMappedData(),
+            (precision_t*) specInput->getCudaMemory()->getMappedData(),
             (float*) specColor->getCudaMemory()->getMappedData(),
             specSize
         };

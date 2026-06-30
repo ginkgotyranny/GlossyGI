@@ -82,6 +82,13 @@ extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registr
     registry.registerClass<RenderPass, NeuralRadiosity>();
 }
 
+static uint64_t gpuUsedMBs() {
+    cudaDeviceSynchronize();
+    size_t freeBytes = 0, totalBytes = 0;
+    cudaMemGetInfo(&freeBytes, &totalBytes);
+    return (totalBytes - freeBytes) / (1024 * 1024);
+}
+
 NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice)
 {
     for (const auto& [key, value] : props)
@@ -427,6 +434,9 @@ void NeuralRadiosity::compactPass(RenderContext* pRenderContext, const RenderDat
     var["specInput"] = mpRenderBatch->specInput;
     var["specVBuffer"] = mpRenderBatch->specVBuffer;
     var["specPixel"] = mpRenderBatch->specPixel;
+    var["specPos"] = mpRenderBatch->specPos;
+    var["specDir"] = mpRenderBatch->specDir;
+    var["specRoughness"] = mpRenderBatch->specRoughness;
 
     mpCompactPass->execute(pRenderContext, uint3(mFrameDim, 1));
 }
@@ -631,6 +641,9 @@ void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, std::shared_ptr<R
     var[name]["bboxMax"] = aabb.maxPoint;
 
     var["specPixel"] = pRayBatch->specPixel;
+    var["specPos"] = pRayBatch->specPos;
+    var["specDir"] = pRayBatch->specDir;
+    var["specRoughness"] = pRayBatch->specRoughness;
     var["specVBuffer"] = pRayBatch->specVBuffer;
     var["specInput"] = pRayBatch->specInput;
     // var["temporalHistory"] = mpRenderSpecTemporalHistory;
@@ -1002,6 +1015,9 @@ void NeuralRadiosity::bindRayBatchData(ShaderVar& var, std::shared_ptr<RayBatchB
     var["specColor"] = pRayBatch->specColor;
     var["specVBuffer"] = pRayBatch->specVBuffer;
     var["specPixel"] = pRayBatch->specPixel;
+    var["specPos"] = pRayBatch->specPos;
+    var["specDir"] = pRayBatch->specDir;
+    var["specRoughness"] = pRayBatch->specRoughness;
 }
 
 DefineList NeuralRadiosity::getShaderDefines(const RenderData& renderData) const

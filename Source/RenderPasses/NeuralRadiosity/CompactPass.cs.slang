@@ -24,6 +24,9 @@ RWStructuredBuffer<uint> specIndex;
 RWStructuredBuffer<SpecNetInput> specInput;
 RWStructuredBuffer<PackedHitInfo> specVBuffer;
 RWStructuredBuffer<uint2> specPixel;
+RWStructuredBuffer<float4> specPos;
+RWStructuredBuffer<float4> specDir;
+RWStructuredBuffer<float> specRoughness;
 
 
 struct CompactPass
@@ -46,11 +49,11 @@ struct CompactPass
             const uint diffIdx = diffIndex[pixIdx];
             writeDiffInputGBuffer(
                 diffInput, diffIdx,
-                (gPos[pixel].xyz - bboxMin) / (bboxMax - bboxMin),
-                gDir[pixel].xyz,
-                gNormal[pixel].xyz,
-                gAlbedo[pixel].xyz,
-                gRoughness[pixel]
+                (Real3) ((gPos[pixel].xyz - bboxMin) / (bboxMax - bboxMin)),
+                (Real3) (gDir[pixel].xyz),
+                (Real3) (gNormal[pixel].xyz),
+                (Real3) (gAlbedo[pixel].xyz),
+                (Real) (gRoughness[pixel])
             );
         }
 
@@ -59,13 +62,16 @@ struct CompactPass
             const uint specIdx = specIndex[pixIdx];
             specVBuffer[specIdx] = gVBuffer[pixel];
             specPixel[specIdx] = pixel;
+            specPos[specIdx] = gPos[pixel];
+            specDir[specIdx] = gDir[pixel];
+            specRoughness[specIdx] = gRoughness[pixel];
             writeSpecInputGBuffer(
                 specInput, specIdx,
-                gPos[pixel].xyz,
-                gDir[pixel].xyz,
-                gNormal[pixel].xyz,
-                gAlbedo[pixel].xyz,
-                gRoughness[pixel]
+                (Real3) (gPos[pixel].xyz),
+                (Real3) (gDir[pixel].xyz),
+                (Real3) (gNormal[pixel].xyz),
+                (Real3) (gAlbedo[pixel].xyz),
+                (Real) (gRoughness[pixel])
             );
         }
     }

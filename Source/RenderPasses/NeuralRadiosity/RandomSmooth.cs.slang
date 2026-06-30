@@ -27,6 +27,9 @@ RWStructuredBuffer<SpecNetInput> specInput;
 RWStructuredBuffer<NetworkOutput> specColor;
 RWStructuredBuffer<PackedHitInfo> specVBuffer;
 RWStructuredBuffer<uint2> specPixel;
+RWStructuredBuffer<float4> specPos;
+RWStructuredBuffer<float4> specDir;
+RWStructuredBuffer<float> specRoughness;
 
 
 #define is_valid(name) (is_valid_##name != 0)

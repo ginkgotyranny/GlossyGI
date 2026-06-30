@@ -4,15 +4,14 @@ def render_graph_PathTracer():
     g = RenderGraph("OptixDenoiser")
     PathTracer = createPass("PathTracer", {
         'samplesPerPixel': 1,
-        'maxSurfaceBounces': 16,
         'maxDiffuseBounces': 16,
         'maxSpecularBounces': 16,
-        'maxTransmissionBounces': 16
+        'useRTXDI': True,
     })
     g.addPass(PathTracer, "PathTracer")
     GBufferRT = createPass("GBufferRT", {'samplePattern': 'Center', 'sampleCount': 16, 'useAlphaTest': True})
     g.addPass(GBufferRT, "GBufferRT")
-    OptixDenoiser = createPass("OptixDenoiser", {})
+    OptixDenoiser = createPass("OptixDenoiser", {'model': 'HDR'})
     g.addPass(OptixDenoiser, "Denoiser")
     AccumulatePass = createPass("AccumulatePass", {'enabled': True, 'precisionMode': 'Single'})
     g.addPass(AccumulatePass, "AccumulatePass")
@@ -25,7 +24,7 @@ def render_graph_PathTracer():
 
     g.addEdge("PathTracer.albedo",         "Denoiser.albedo")
     g.addEdge("GBufferRT.normW",          "Denoiser.normal")
-    # g.addEdge("GBufferRT.mvec",           "Denoiser.mvec")
+    g.addEdge("GBufferRT.mvec",           "Denoiser.mvec")
     g.addEdge("PathTracer.color",          "AccumulatePass.input")
     g.addEdge("AccumulatePass.output",         "Denoiser.color")
 

@@ -1,4 +1,18 @@
+#ifndef NR_USE_FP16
+#define NR_USE_FP16 1
+#endif
 
+#if NR_USE_FP16
+typealias Real  = float16_t;
+typealias Real2 = float16_t2;
+typealias Real3 = float16_t3;
+typealias Real4 = float16_t4;
+#else
+typealias Real  = float;
+typealias Real2 = float2;
+typealias Real3 = float3;
+typealias Real4 = float4;
+#endif
 
 #ifndef N_LEVELS
 #define N_LEVELS 6
@@ -31,33 +45,33 @@ struct DiffNetInput
     static const uint numClusters = NUM_CLUSTERS;
     static const uint encDim = N_FEATURES_PER_LEVEL * N_LEVELS;
 
-    // static const uint posOffset = encDim;
-    static const uint posOffset = 0;
+    static const uint posOffset = encDim;
+    // static const uint posOffset = 0;
     static const uint dirOffset = posOffset + 3;
     static const uint normalOffset = dirOffset + 3;
     static const uint albedoOffset = normalOffset + 3;
     static const uint roughnessOffset = albedoOffset + 3;
     static const uint totalDim = roughnessOffset + 1;
-    // static const uint paddedDim = (totalDim + padDim - 1) / padDim * padDim;
-    static const uint paddedDim = totalDim;
+    static const uint paddedDim = (totalDim + padDim - 1) / padDim * padDim;
+    // static const uint paddedDim = totalDim;
 
-    float data[paddedDim];
+    Real data[paddedDim];
 
-    float3 getPos() { return float3(data[posOffset], data[posOffset + 1], data[posOffset + 2]); }
-    float3 getDir() { return float3(data[dirOffset], data[dirOffset + 1], data[dirOffset + 2]); }
-    float3 getNormal() { return float3(data[normalOffset], data[normalOffset + 1], data[normalOffset + 2]); }
-    float3 getAlbedo() { return float3(data[albedoOffset], data[albedoOffset + 1], data[albedoOffset + 2]); }
-    float getRoughness() { return data[roughnessOffset]; }
+    Real3 getPos() { return Real3(data[posOffset], data[posOffset + 1], data[posOffset + 2]); }
+    Real3 getDir() { return Real3(data[dirOffset], data[dirOffset + 1], data[dirOffset + 2]); }
+    Real3 getNormal() { return Real3(data[normalOffset], data[normalOffset + 1], data[normalOffset + 2]); }
+    Real3 getAlbedo() { return Real3(data[albedoOffset], data[albedoOffset + 1], data[albedoOffset + 2]); }
+    Real getRoughness() { return data[roughnessOffset]; }
 
     [mutating]
     void clear()
     {
         [unroll]
-        for (uint i = 0; i < paddedDim; i++) data[i] = 0.f;
+        for (uint i = 0; i < paddedDim; i++) data[i] = (Real) 0.f;
     }
 
     [mutating]
-    void setPos(float3 v)
+    void setPos(Real3 v)
     {
         data[posOffset] = v.x;
         data[posOffset + 1] = v.y;
@@ -65,7 +79,7 @@ struct DiffNetInput
     }
 
     [mutating]
-    void setDir(float3 v)
+    void setDir(Real3 v)
     {
         data[dirOffset] = v.x;
         data[dirOffset + 1] = v.y;
@@ -73,7 +87,7 @@ struct DiffNetInput
     }
 
     [mutating]
-    void setNormal(float3 v)
+    void setNormal(Real3 v)
     {
         data[normalOffset] = v.x;
         data[normalOffset + 1] = v.y;
@@ -81,7 +95,7 @@ struct DiffNetInput
     }
 
     [mutating]
-    void setAlbedo(float3 v)
+    void setAlbedo(Real3 v)
     {
         data[albedoOffset] = v.x;
         data[albedoOffset + 1] = v.y;
@@ -89,7 +103,7 @@ struct DiffNetInput
     }
 
     [mutating]
-    void setRoughness(float v) {
+    void setRoughness(Real v) {
         data[roughnessOffset] = v;
     }
 };
@@ -102,8 +116,8 @@ struct SpecNetInput
     static const uint primEncDim = N_FEATURES_PER_LEVEL * N_LEVELS;
     static const uint clsEncDim = N_FEATURES_PER_LEVEL_SPEC * NUM_CLUSTERS;
 
-    // static const uint posOffset = primEncDim + clsEncDim;
-    static const uint posOffset = 0;
+    static const uint posOffset = primEncDim + clsEncDim;
+    // static const uint posOffset = 0;
     static const uint dirOffset = posOffset + 3;
     static const uint normalOffset = dirOffset + 3;
     static const uint albedoOffset = normalOffset + 3;
@@ -112,28 +126,28 @@ struct SpecNetInput
     static const uint clsScaleOffset = clsPosOffset + numClusters * 3;
     static const uint clsWeightOffset = clsScaleOffset + numClusters;
     static const uint totalDim = clsWeightOffset + numClusters;
-    // static const uint paddedDim = (totalDim + padDim - 1) / padDim * padDim;
-    static const uint paddedDim = totalDim;
+    static const uint paddedDim = (totalDim + padDim - 1) / padDim * padDim;
+    // static const uint paddedDim = totalDim;
 
-    float data[paddedDim];
+    Real data[paddedDim];
 
-    float3 getPos() { return float3(data[posOffset], data[posOffset + 1], data[posOffset + 2]); }
-    float3 getDir() { return float3(data[dirOffset], data[dirOffset + 1], data[dirOffset + 2]); }
-    float3 getNormal() { return float3(data[normalOffset], data[normalOffset + 1], data[normalOffset + 2]); }
-    float3 getAlbedo() { return float3(data[albedoOffset], data[albedoOffset + 1], data[albedoOffset + 2]); }
-    float getRoughness() { return data[roughnessOffset]; }
+    Real3 getPos() { return Real3(data[posOffset], data[posOffset + 1], data[posOffset + 2]); }
+    Real3 getDir() { return Real3(data[dirOffset], data[dirOffset + 1], data[dirOffset + 2]); }
+    Real3 getNormal() { return Real3(data[normalOffset], data[normalOffset + 1], data[normalOffset + 2]); }
+    Real3 getAlbedo() { return Real3(data[albedoOffset], data[albedoOffset + 1], data[albedoOffset + 2]); }
+    Real getRoughness() { return data[roughnessOffset]; }
 
-    float3 getClsPos(uint clusterIdx)
+    Real3 getClsPos(uint clusterIdx)
     {
-        return float3(data[clsPosOffset + clusterIdx * 3], data[clsPosOffset + clusterIdx * 3 + 1], data[clsPosOffset + clusterIdx * 3 + 2]);
+        return Real3(data[clsPosOffset + clusterIdx * 3], data[clsPosOffset + clusterIdx * 3 + 1], data[clsPosOffset + clusterIdx * 3 + 2]);
     }
 
-    float getClsScale(uint clusterIdx)
+    Real getClsScale(uint clusterIdx)
     {
         return data[clsScaleOffset + clusterIdx];
     }
 
-    float getClsWeight(uint clusterIdx)
+    Real getClsWeight(uint clusterIdx)
     {
         return data[clsWeightOffset + clusterIdx];
     }
@@ -142,11 +156,11 @@ struct SpecNetInput
     void clear()
     {
         [unroll]
-        for (uint i = 0; i < paddedDim; i++) data[i] = 0.f;
+        for (uint i = 0; i < paddedDim; i++) data[i] = (Real) 0.f;
     }
 
     [mutating]
-    void setPos(float3 v)
+    void setPos(Real3 v)
     {
         data[posOffset] = v.x;
         data[posOffset + 1] = v.y;
@@ -154,7 +168,7 @@ struct SpecNetInput
     }
 
     [mutating]
-    void setDir(float3 v)
+    void setDir(Real3 v)
     {
         data[dirOffset] = v.x;
         data[dirOffset + 1] = v.y;
@@ -162,7 +176,7 @@ struct SpecNetInput
     }
 
     [mutating]
-    void setNormal(float3 v)
+    void setNormal(Real3 v)
     {
         data[normalOffset] = v.x;
         data[normalOffset + 1] = v.y;
@@ -170,7 +184,7 @@ struct SpecNetInput
     }
 
     [mutating]
-    void setAlbedo(float3 v)
+    void setAlbedo(Real3 v)
     {
         data[albedoOffset] = v.x;
         data[albedoOffset + 1] = v.y;
@@ -178,12 +192,12 @@ struct SpecNetInput
     }
 
     [mutating]
-    void setRoughness(float v) {
+    void setRoughness(Real v) {
         data[roughnessOffset] = v;
     }
 
     [mutating]
-    void setClsPos(uint clusterIdx, float3 v)
+    void setClsPos(uint clusterIdx, Real3 v)
     {
         data[clsPosOffset + clusterIdx * 3] = v.x;
         data[clsPosOffset + clusterIdx * 3 + 1] = v.y;
@@ -191,13 +205,13 @@ struct SpecNetInput
     }
 
     [mutating]
-    void setClsScale(uint clusterIdx, float v)
+    void setClsScale(uint clusterIdx, Real v)
     {
         data[clsScaleOffset + clusterIdx] = v;
     }
 
     [mutating]
-    void setClsWeight(uint clusterIdx, float v)
+    void setClsWeight(uint clusterIdx, Real v)
     {
         data[clsWeightOffset + clusterIdx] = v;
     }
@@ -249,11 +263,11 @@ struct NetworkOutput
 void writeDiffInputGBuffer(
     RWStructuredBuffer<DiffNetInput> buffer,
     uint idx,
-    float3 pos,
-    float3 dir,
-    float3 normal,
-    float3 albedo,
-    float roughness)
+    Real3 pos,
+    Real3 dir,
+    Real3 normal,
+    Real3 albedo,
+    Real roughness)
 {
     buffer[idx].data[DiffNetInput::posOffset + 0] = pos.x;
     buffer[idx].data[DiffNetInput::posOffset + 1] = pos.y;
@@ -274,18 +288,18 @@ void writeDiffInputGBuffer(
     buffer[idx].data[DiffNetInput::roughnessOffset] = roughness;
 
     [unroll]
-    for (uint i = DiffNetInput::totalDim; i < DiffNetInput::paddedDim; i++) buffer[idx].data[i] = 0.f;
+    for (uint i = DiffNetInput::totalDim; i < DiffNetInput::paddedDim; i++) buffer[idx].data[i] = (Real) 0.f;
 }
 
 
 void writeSpecInputGBuffer(
     RWStructuredBuffer<SpecNetInput> buffer,
     uint idx,
-    float3 pos,
-    float3 dir,
-    float3 normal,
-    float3 albedo,
-    float roughness)
+    Real3 pos,
+    Real3 dir,
+    Real3 normal,
+    Real3 albedo,
+    Real roughness)
 {
     buffer[idx].data[SpecNetInput::posOffset + 0] = pos.x;
     buffer[idx].data[SpecNetInput::posOffset + 1] = pos.y;
@@ -306,16 +320,16 @@ void writeSpecInputGBuffer(
     buffer[idx].data[SpecNetInput::roughnessOffset] = roughness;
 
     [unroll]
-    for (uint i = SpecNetInput::totalDim; i < SpecNetInput::paddedDim; i++) buffer[idx].data[i] = 0.f;
+    for (uint i = SpecNetInput::totalDim; i < SpecNetInput::paddedDim; i++) buffer[idx].data[i] = (Real) 0.f;
 }
 
 void writeSpecInputClsBuffer(
     RWStructuredBuffer<SpecNetInput> buffer,
     uint idx,
     uint clusterIdx,
-    float3 clsPos,
-    float clsScale,
-    float clsWeight)
+    Real3 clsPos,
+    Real clsScale,
+    Real clsWeight)
 {
     buffer[idx].data[SpecNetInput::clsPosOffset + clusterIdx * 3 + 0] = clsPos.x;
     buffer[idx].data[SpecNetInput::clsPosOffset + clusterIdx * 3 + 1] = clsPos.y;
@@ -325,22 +339,22 @@ void writeSpecInputClsBuffer(
     buffer[idx].data[SpecNetInput::clsWeightOffset + clusterIdx] = clsWeight;
 }
 
-float nan_to_num(float x, float fallback = 0.f)
+Real nan_to_num(Real x, Real fallback = (Real) 0.f)
 {
     return (isnan(x) || !isfinite(x)) ? fallback : x;
 }
 
-float2 nan_to_num(float2 v, float fallback = 0.f)
+Real2 nan_to_num(Real2 v, Real fallback = (Real) 0.f)
 {
-    return select(isnan(v) | !isfinite(v), float2(fallback), v);
+    return select(isnan(v) | !isfinite(v), Real2(fallback), v);
 }
 
-float3 nan_to_num(float3 v, float fallback = 0.f)
+Real3 nan_to_num(Real3 v, Real fallback = (Real) 0.f)
 {
-    return select(isnan(v) | !isfinite(v), float3(fallback), v);
+    return select(isnan(v) | !isfinite(v), Real3(fallback), v);
 }
 
-float4 nan_to_num(float4 v, float fallback = 0.f)
+Real4 nan_to_num(Real4 v, Real fallback = (Real) 0.f)
 {
-    return select(isnan(v) | !isfinite(v), float4(fallback), v);
+    return select(isnan(v) | !isfinite(v), Real4(fallback), v);
 }

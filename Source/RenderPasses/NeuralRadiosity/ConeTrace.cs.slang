@@ -53,6 +53,9 @@ struct TemporalSpecHistory
 
 
 RWStructuredBuffer<uint2> specPixel;
+RWStructuredBuffer<float4> specPos;
+RWStructuredBuffer<float4> specDir;
+RWStructuredBuffer<float> specRoughness;
 RWStructuredBuffer<PackedHitInfo> specVBuffer;
 RWStructuredBuffer<SpecNetInput> specInput;
 // RWStructuredBuffer<TemporalSpecHistory> temporalHistory;
@@ -586,9 +589,9 @@ struct ConeTrace
     {
         if (threadIdx == 0)
         {
-            pos = specInput[pixIdx].getPos();
-            dir = specInput[pixIdx].getDir();
-            float roughness = specInput[pixIdx].getRoughness();
+            pos = specPos[pixIdx].xyz;
+            dir = specDir[pixIdx].xyz;
+            float roughness = specRoughness[pixIdx];
             HitInfo hit = unpackHitInfo(specVBuffer[pixIdx]);
 
             // Load shading data.
@@ -873,17 +876,17 @@ struct ConeTrace
             float clsWeight = size / max(totalCount, 1.0f);
             writeSpecInputClsBuffer(
                 specInput, pixIdx, threadIdx,
-                (clsPos - bboxMin) / (bboxMax - bboxMin),
-                clsScale, clsWeight
+                (Real3) ((clsPos - bboxMin) / (bboxMax - bboxMin)),
+                (Real) clsScale, (Real) clsWeight
             );
         }
         if (threadIdx == 0)
         {
             // Normalize to [0, 1]
             pos = (pos - bboxMin) / (bboxMax - bboxMin);
-            specInput[pixIdx].data[SpecNetInput::posOffset + 0] = pos.x;
-            specInput[pixIdx].data[SpecNetInput::posOffset + 1] = pos.y;
-            specInput[pixIdx].data[SpecNetInput::posOffset + 2] = pos.z;
+            specInput[pixIdx].data[SpecNetInput::posOffset + 0] = (Real) pos.x;
+            specInput[pixIdx].data[SpecNetInput::posOffset + 1] = (Real) pos.y;
+            specInput[pixIdx].data[SpecNetInput::posOffset + 2] = (Real) pos.z;
         }
     }
 

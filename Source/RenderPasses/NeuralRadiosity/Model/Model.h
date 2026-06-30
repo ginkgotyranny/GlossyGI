@@ -45,7 +45,7 @@ namespace tcnn
 
 struct ModelIOPtrs
 {
-    float* inputPtr;
+    precision_t* inputPtr;
     float* outputPtr;
 
     uint32_t size;

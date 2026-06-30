@@ -73,6 +73,7 @@ __global__ void clampGradients(
 }
 
 static uint64_t gpuUsedMBs() {
+    CUDA_CHECK_THROW(cudaDeviceSynchronize());
     size_t freeBytes = 0, totalBytes = 0;
     CUDA_CHECK_THROW(cudaMemGetInfo(&freeBytes, &totalBytes));
     return (totalBytes - freeBytes) / (1024 * 1024);
@@ -325,35 +326,35 @@ void NRModel::inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
     const uint32_t diffBatchSize = padUp(diffPtrs.size, 256);
     const uint32_t specBatchSize = padUp(specPtrs.size, 256);
 
-    tcnn::GPUMatrix<float> diffGBuffer(diffPtrs.inputPtr, mDiffGBufferDim, diffBatchSize);
-    tcnn::GPUMatrix<float> specGBuffer(specPtrs.inputPtr, mSpecGBufferDim, specBatchSize);
+    tcnn::GPUMatrix<precision_t> diffInput(diffPtrs.inputPtr, mDiffInputDim, diffBatchSize);
+    tcnn::GPUMatrix<precision_t> specInput(specPtrs.inputPtr, mSpecInputDim, specBatchSize);
     tcnn::GPUMatrix<float> diffOutput(diffPtrs.outputPtr, mOutputDim, diffBatchSize);
     tcnn::GPUMatrix<float> specOutput(specPtrs.outputPtr, mOutputDim, specBatchSize);
 
     if (diffBatchSize > 0) {
-        tcnn::GPUMatrix<precision_t> networkInput{mDiffInputDim, diffBatchSize, mInferenceStream};
+        // tcnn::GPUMatrix<precision_t> networkInput{mDiffInputDim, diffBatchSize, mInferenceStream};
         // castMatrix(mInferenceStream, diffInput, networkInput);
-        moveGBuffer(mInferenceStream, diffGBuffer, networkInput, mDiffPosOffset);
+        // moveGBuffer(mInferenceStream, diffGBuffer, networkInput, mDiffPosOffset);
         HashGrid::launchForward(
             mInferenceStream,
             mpPrimGridsInference,
-            networkInput.data(),
+            diffInput.data(),
             diffBatchSize,
             mDiffInputDim,
             mDiffEncOffset,
             mDiffPosOffset,
             mPrimGridConfig
         );
-        mpDiffNet->inference(mInferenceStream, networkInput, diffOutput);
+        mpDiffNet->inference(mInferenceStream, diffInput, diffOutput);
     }
     if (specBatchSize > 0) {
-        tcnn::GPUMatrix<precision_t> networkInput{mSpecInputDim, specBatchSize, mInferenceStream};
+        // tcnn::GPUMatrix<precision_t> networkInput{mSpecInputDim, specBatchSize, mInferenceStream};
         // castMatrix(mInferenceStream, specInput, networkInput);
-        moveGBuffer(mInferenceStream, specGBuffer, networkInput, mSpecPosOffset);
+        // moveGBuffer(mInferenceStream, specGBuffer, networkInput, mSpecPosOffset);
         HashGrid::launchForward(
             mInferenceStream,
             mpPrimGridsInference,
-            networkInput.data(),
+            specInput.data(),
             specBatchSize,
             mSpecInputDim,
             mSpecPrimEncOffset,
@@ -363,7 +364,7 @@ void NRModel::inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
         HashGridInterp::launchForward(
             mInferenceStream,
             mpClsGridsInference,
-            networkInput.data(),
+            specInput.data(),
             specBatchSize,
             mSpecInputDim,
             mSpecClsEncOffset,
@@ -372,7 +373,7 @@ void NRModel::inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
             mSpecClsWeightOffset,
             mClsGridConfig
         );
-        mpSpecNet->inference(mInferenceStream, networkInput, specOutput);
+        mpSpecNet->inference(mInferenceStream, specInput, specOutput);
     }
 }
 
@@ -384,39 +385,39 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
     CUDA_CHECK_THROW(cudaMemsetAsync(mpPrimGridsGradient->data(), 0, mpPrimGridsGradient->bytes(), mTrainStream));
     CUDA_CHECK_THROW(cudaMemsetAsync(mpClsGridsGradient->data(), 0, mpClsGridsGradient->bytes(), mTrainStream));
 
-    tcnn::GPUMatrix<float> diffGBuffer(diffPtrs.inputPtr, mDiffGBufferDim, diffBatchSize);
-    tcnn::GPUMatrix<float> specGBuffer(specPtrs.inputPtr, mSpecGBufferDim, specBatchSize);
+    tcnn::GPUMatrix<precision_t> diffInput(diffPtrs.inputPtr, mDiffInputDim, diffBatchSize);
+    tcnn::GPUMatrix<precision_t> specInput(specPtrs.inputPtr, mSpecInputDim, specBatchSize);
     tcnn::GPUMatrix<float> diffTarget(diffPtrs.outputPtr, mOutputDim, diffBatchSize);
     tcnn::GPUMatrix<float> specTarget(specPtrs.outputPtr, mOutputDim, specBatchSize);
 
     if (diffBatchSize > 0) {
-        tcnn::GPUMatrix<precision_t> networkInput{mDiffInputDim, diffBatchSize, mTrainStream};
+        // tcnn::GPUMatrix<precision_t> networkInput{mDiffInputDim, diffBatchSize, mTrainStream};
         tcnn::GPUMatrix<precision_t> networkOutput{mOutputDim, diffBatchSize, mTrainStream};
         tcnn::GPUMatrix<precision_t> dL_dnetworkOutput{mOutputDim, diffBatchSize, mTrainStream};
         tcnn::GPUMatrix<precision_t> dL_dnetworkInput{mDiffInputDim, diffBatchSize, mTrainStream};
         tcnn::GPUMatrix<float> loss{mOutputDim, diffBatchSize, mTrainStream};
         // castMatrix(mTrainStream, diffInput, networkInput);
-        moveGBuffer(mTrainStream, diffGBuffer, networkInput, mDiffPosOffset);
+        // moveGBuffer(mTrainStream, diffGBuffer, networkInput, mDiffPosOffset);
         // Forward
         HashGrid::launchForward(
             mTrainStream,
             mpPrimGrids->data(),
-            networkInput.data(),
+            diffInput.data(),
             diffBatchSize,
             mDiffInputDim,
             mDiffEncOffset,
             mDiffPosOffset,
             mPrimGridConfig
         );
-        auto ctx = mpDiffNet->forward(mTrainStream, networkInput, &networkOutput);
+        auto ctx = mpDiffNet->forward(mTrainStream, diffInput, &networkOutput);
         // Loss
         mpLoss->evaluate(mTrainStream, lossScale, networkOutput, diffTarget, loss, dL_dnetworkOutput);
         // Backward
-        mpDiffNet->backward(mTrainStream, *ctx, networkInput, networkOutput, dL_dnetworkOutput, &dL_dnetworkInput);
+        mpDiffNet->backward(mTrainStream, *ctx, diffInput, networkOutput, dL_dnetworkOutput, &dL_dnetworkInput);
         HashGrid::launchBackward(
             mTrainStream,
             mpPrimGrids->data(),
-            networkInput.data(),
+            diffInput.data(),
             dL_dnetworkInput.data(),
             mpPrimGridsGradient->data(),
             diffBatchSize,
@@ -427,18 +428,18 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
         );
     }
     if (specBatchSize > 0) {
-        tcnn::GPUMatrix<precision_t> networkInput{mSpecInputDim, specBatchSize, mTrainStream};
+        // tcnn::GPUMatrix<precision_t> networkInput{mSpecInputDim, specBatchSize, mTrainStream};
         tcnn::GPUMatrix<precision_t> networkOutput{mOutputDim, specBatchSize, mTrainStream};
         tcnn::GPUMatrix<precision_t> dL_dnetworkOutput{mOutputDim, specBatchSize, mTrainStream};
         tcnn::GPUMatrix<precision_t> dL_dnetworkInput{mSpecInputDim, specBatchSize, mTrainStream};
         tcnn::GPUMatrix<float> loss{mOutputDim, specBatchSize, mTrainStream};
         // castMatrix(mTrainStream, specInput, networkInput);
-        moveGBuffer(mTrainStream, specGBuffer, networkInput, mSpecPosOffset);
+        // moveGBuffer(mTrainStream, specGBuffer, networkInput, mSpecPosOffset);
         // Forward
         HashGrid::launchForward(
             mTrainStream,
             mpPrimGrids->data(),
-            networkInput.data(),
+            specInput.data(),
             specBatchSize,
             mSpecInputDim,
             mSpecPrimEncOffset,
@@ -448,7 +449,7 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
         HashGridInterp::launchForward(
             mTrainStream,
             mpClsGrids->data(),
-            networkInput.data(),
+            specInput.data(),
             specBatchSize,
             mSpecInputDim,
             mSpecClsEncOffset,
@@ -457,15 +458,15 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
             mSpecClsWeightOffset,
             mClsGridConfig
         );
-        auto ctx = mpSpecNet->forward(mTrainStream, networkInput, &networkOutput);
+        auto ctx = mpSpecNet->forward(mTrainStream, specInput, &networkOutput);
         // Loss
         mpLoss->evaluate(mTrainStream, lossScale, networkOutput, specTarget, loss, dL_dnetworkOutput);
         // Backward
-        mpSpecNet->backward(mTrainStream, *ctx, networkInput, networkOutput, dL_dnetworkOutput, &dL_dnetworkInput);
+        mpSpecNet->backward(mTrainStream, *ctx, specInput, networkOutput, dL_dnetworkOutput, &dL_dnetworkInput);
         HashGrid::launchBackward(
             mTrainStream,
             mpPrimGrids->data(),
-            networkInput.data(),
+            specInput.data(),
             dL_dnetworkInput.data(),
             mpPrimGridsGradient->data(),
             specBatchSize,
@@ -477,7 +478,7 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
         HashGridInterp::launchBackward(
             mTrainStream,
             mpClsGrids->data(),
-            networkInput.data(),
+            specInput.data(),
             dL_dnetworkInput.data(),
             mpClsGridsGradient->data(),
             specBatchSize,
