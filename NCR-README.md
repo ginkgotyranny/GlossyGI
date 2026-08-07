@@ -8,7 +8,7 @@ To run this module, we need **Falcor** and **tiny-cuda-nn** properly compiled. I
 
 * `git submodule update --init --recursive`
 * Follow Falcor's `README.md`:
-* `cmake --preset linux-gcc`
+* `cmake --preset linux-gcc -DCMAKE_BUILD_TYPE=Release`
 * `cmake --build build/linux-gcc`
 
 ### Rendering with NeuralRadiosity
