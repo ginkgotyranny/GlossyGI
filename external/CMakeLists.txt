@@ -460,13 +460,21 @@ set_target_properties(dxcompiler PROPERTIES
 set(NRD_DIR ${PACKMAN_DIR}/nrd)
 if(EXISTS ${NRD_DIR}/Include/NRD.h)
     add_library(nrd SHARED IMPORTED GLOBAL)
-    set_target_properties(nrd PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES ${NRD_DIR}/Include
-        IMPORTED_IMPLIB_RELEASE ${NRD_DIR}/Lib/Release/NRD.lib
-        IMPORTED_LOCATION_RELEASE ${NRD_DIR}/Lib/Release/NRD.dll
-        IMPORTED_IMPLIB_DEBUG ${NRD_DIR}/Lib/Debug/NRD.lib
-        IMPORTED_LOCATION_DEBUG ${NRD_DIR}/Lib/Debug/NRD.dll
-    )
+    if(FALCOR_WINDOWS)
+        set_target_properties(nrd PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES ${NRD_DIR}/Include
+            IMPORTED_IMPLIB_RELEASE ${NRD_DIR}/Lib/Release/NRD.lib
+            IMPORTED_LOCATION_RELEASE ${NRD_DIR}/Lib/Release/NRD.dll
+            IMPORTED_IMPLIB_DEBUG ${NRD_DIR}/Lib/Debug/NRD.lib
+            IMPORTED_LOCATION_DEBUG ${NRD_DIR}/Lib/Debug/NRD.dll
+        )
+    elseif(FALCOR_LINUX)
+        set_target_properties(nrd PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES ${NRD_DIR}/Include
+            IMPORTED_LOCATION_RELEASE ${NRD_DIR}/Lib/Release/libNRD.so.3.1.0
+            IMPORTED_LOCATION_DEBUG ${NRD_DIR}/Lib/Debug/libNRD.so.3.1.0
+        )
+    endif()
     set(FALCOR_HAS_NRD ON PARENT_SCOPE)
 else()
     set(FALCOR_HAS_NRD OFF PARENT_SCOPE)

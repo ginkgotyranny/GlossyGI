@@ -27,9 +27,12 @@
  **************************************************************************/
 #include "Falcor.h"
 #include "Core/API/NativeHandleTraits.h"
+#include "Core/API/NativeFormats.h"
 
 #include "NRDPass.h"
 #include "RenderPasses/Shared/Denoising/NRDConstants.slang"
+
+#include <cstdio>
 
 namespace
 {
@@ -103,12 +106,38 @@ const Gui::DropdownList kDenoisingMethod = {
     {(uint32_t)NRDPass::DenoisingMethod::RelaxDiffuseSpecular, "ReLAX"},
     {(uint32_t)NRDPass::DenoisingMethod::ReblurDiffuseSpecular, "ReBLUR"},
 };
+
+template<typename T, typename A>
+T alignTo(T value, A alignment)
+{
+    if (alignment == 0)
+        return value;
+    return T(((value + alignment - 1) / alignment) * alignment);
+}
+
+#if FALCOR_HAS_VULKAN
+void checkVulkan(VkResult result, const char* call)
+{
+    if (result != VK_SUCCESS)
+        FALCOR_THROW("{} failed with VkResult {}.", call, (int32_t)result);
+}
+
+#define FALCOR_VK_CALL(call) checkVulkan((call), #call)
+
+VkDescriptorType getVulkanDescriptorType(nrd::DescriptorType type)
+{
+    return type == nrd::DescriptorType::TEXTURE ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+}
+
+VkImageLayout getVulkanImageLayout(nrd::DescriptorType type)
+{
+    return type == nrd::DescriptorType::TEXTURE ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
+}
+#endif
 } // namespace
 
 NRDPass::NRDPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice)
 {
-    mpDevice->requireD3D12();
-
     DefineList definesRelax;
     definesRelax.add("NRD_USE_OCT_NORMAL_ENCODING", "1");
     definesRelax.add("NRD_USE_MATERIAL_ID", "0");
@@ -284,6 +313,16 @@ NRDPass::NRDPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDev
     }
 }
 
+NRDPass::~NRDPass()
+{
+    releaseBackendResources();
+    if (mpDenoiser)
+    {
+        nrd::DestroyDenoiser(*mpDenoiser);
+        mpDenoiser = nullptr;
+    }
+}
+
 Properties NRDPass::getProperties() const
 {
     Properties props;
@@ -438,10 +477,15 @@ void NRDPass::execute(RenderContext* pRenderContext, const RenderData& renderDat
 
     if (enabled)
     {
+        if (!mWasEnabled)
+            mResetHistory = true;
+        mWasEnabled = true;
         executeInternal(pRenderContext, renderData);
     }
     else
     {
+        mWasEnabled = false;
+
         if (mDenoisingMethod == DenoisingMethod::RelaxDiffuseSpecular || mDenoisingMethod == DenoisingMethod::ReblurDiffuseSpecular)
         {
             pRenderContext->blit(
@@ -493,7 +537,7 @@ void NRDPass::renderUI(Gui::Widgets& widget)
 {
     const nrd::LibraryDesc& nrdLibraryDesc = nrd::GetLibraryDesc();
     char name[256];
-    _snprintf_s(name, 255, "NRD Library v%u.%u.%u", nrdLibraryDesc.versionMajor, nrdLibraryDesc.versionMinor, nrdLibraryDesc.versionBuild);
+    std::snprintf(name, sizeof(name), "NRD Library v%u.%u.%u", nrdLibraryDesc.versionMajor, nrdLibraryDesc.versionMinor, nrdLibraryDesc.versionBuild);
     widget.text(name);
 
     widget.checkbox("Enabled", mEnabled);
@@ -818,7 +862,12 @@ static void copyMatrix(float* dstMatrix, const float4x4& srcMatrix)
 void NRDPass::reinit()
 {
     // Create a new denoiser instance.
-    mpDenoiser = nullptr;
+    releaseBackendResources();
+    if (mpDenoiser)
+    {
+        nrd::DestroyDenoiser(*mpDenoiser);
+        mpDenoiser = nullptr;
+    }
 
     const nrd::LibraryDesc& libraryDesc = nrd::GetLibraryDesc();
 
@@ -838,9 +887,39 @@ void NRDPass::reinit()
 
     createResources();
     createPipelines();
+
+    mFrameIndex = 0;
+    mResetHistory = true;
+    mRecreateDenoiser = false;
 }
 
 void NRDPass::createPipelines()
+{
+    if (mpDevice->getType() == Device::Type::D3D12)
+    {
+#if FALCOR_HAS_D3D12
+        createD3D12Pipelines();
+        return;
+#else
+        FALCOR_THROW("NRDPass: D3D12 support was not compiled in.");
+#endif
+    }
+
+    if (mpDevice->getType() == Device::Type::Vulkan)
+    {
+#if FALCOR_HAS_VULKAN
+        createVulkanPipelines();
+        return;
+#else
+        FALCOR_THROW("NRDPass: Vulkan support was not compiled in.");
+#endif
+    }
+
+    FALCOR_THROW("NRDPass: Unsupported graphics backend.");
+}
+
+#if FALCOR_HAS_D3D12
+void NRDPass::createD3D12Pipelines()
 {
     mpPasses.clear();
     mpCachedProgramKernels.clear();
@@ -933,6 +1012,197 @@ void NRDPass::createPipelines()
         }
     }
 }
+#endif
+
+#if FALCOR_HAS_VULKAN
+void NRDPass::createVulkanPipelines()
+{
+    mVkPipelines.clear();
+    mVkDevice = mpDevice->getNativeHandle(2).as<VkDevice>();
+
+    const nrd::LibraryDesc& libraryDesc = nrd::GetLibraryDesc();
+    const nrd::DenoiserDesc& denoiserDesc = nrd::GetDenoiserDesc(*mpDenoiser);
+    const uint32_t samplerOffset = libraryDesc.spirvBindingOffsets.samplerOffset;
+    const uint32_t textureOffset = libraryDesc.spirvBindingOffsets.textureOffset;
+    const uint32_t constantBufferOffset = libraryDesc.spirvBindingOffsets.constantBufferOffset;
+    const uint32_t storageTextureOffset = libraryDesc.spirvBindingOffsets.storageTextureAndBufferOffset;
+
+    mVkPipelines.reserve(denoiserDesc.pipelineNum);
+
+    for (uint32_t i = 0; i < denoiserDesc.pipelineNum; i++)
+    {
+        const nrd::PipelineDesc& nrdPipelineDesc = denoiserDesc.pipelines[i];
+        FALCOR_CHECK(
+            nrdPipelineDesc.computeShaderSPIRV.bytecode && nrdPipelineDesc.computeShaderSPIRV.size > 0,
+            "NRDPass: Missing SPIR-V bytecode for NRD pipeline '{}'.",
+            nrdPipelineDesc.shaderFileName
+        );
+
+        std::vector<VkSampler> immutableSamplers(denoiserDesc.staticSamplerNum, VK_NULL_HANDLE);
+        std::vector<VkDescriptorSetLayoutBinding> bindings;
+        bindings.reserve(
+            denoiserDesc.staticSamplerNum + nrdPipelineDesc.descriptorRangeNum + (nrdPipelineDesc.hasConstantData ? 1u : 0u)
+        );
+
+        for (uint32_t j = 0; j < denoiserDesc.staticSamplerNum; j++)
+        {
+            immutableSamplers[j] = mpSamplers[j]->getNativeHandle().as<VkSampler>();
+
+            VkDescriptorSetLayoutBinding binding = {};
+            binding.binding = samplerOffset + denoiserDesc.staticSamplers[j].registerIndex;
+            binding.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+            binding.descriptorCount = 1;
+            binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            binding.pImmutableSamplers = &immutableSamplers[j];
+            bindings.push_back(binding);
+        }
+
+        if (nrdPipelineDesc.hasConstantData)
+        {
+            VkDescriptorSetLayoutBinding binding = {};
+            binding.binding = constantBufferOffset + denoiserDesc.constantBufferDesc.registerIndex;
+            binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+            binding.descriptorCount = 1;
+            binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            bindings.push_back(binding);
+        }
+
+        for (uint32_t j = 0; j < nrdPipelineDesc.descriptorRangeNum; j++)
+        {
+            const nrd::DescriptorRangeDesc& nrdDescriptorRange = nrdPipelineDesc.descriptorRanges[j];
+            const uint32_t baseBinding =
+                (nrdDescriptorRange.descriptorType == nrd::DescriptorType::TEXTURE ? textureOffset : storageTextureOffset) +
+                nrdDescriptorRange.baseRegisterIndex;
+
+            for (uint32_t descriptorOffset = 0; descriptorOffset < nrdDescriptorRange.descriptorNum; descriptorOffset++)
+            {
+                VkDescriptorSetLayoutBinding binding = {};
+                binding.binding = baseBinding + descriptorOffset;
+                binding.descriptorType = getVulkanDescriptorType(nrdDescriptorRange.descriptorType);
+                binding.descriptorCount = 1;
+                binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+                bindings.push_back(binding);
+            }
+        }
+
+        VulkanPipeline vkPipeline = {};
+
+        VkDescriptorSetLayoutCreateInfo setLayoutInfo = {};
+        setLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        setLayoutInfo.bindingCount = (uint32_t)bindings.size();
+        setLayoutInfo.pBindings = bindings.data();
+        FALCOR_VK_CALL(vkCreateDescriptorSetLayout(mVkDevice, &setLayoutInfo, nullptr, &vkPipeline.descriptorSetLayout));
+
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
+        pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipelineLayoutInfo.setLayoutCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &vkPipeline.descriptorSetLayout;
+        FALCOR_VK_CALL(vkCreatePipelineLayout(mVkDevice, &pipelineLayoutInfo, nullptr, &vkPipeline.pipelineLayout));
+
+        VkShaderModuleCreateInfo shaderModuleInfo = {};
+        shaderModuleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        shaderModuleInfo.codeSize = nrdPipelineDesc.computeShaderSPIRV.size;
+        shaderModuleInfo.pCode = static_cast<const uint32_t*>(nrdPipelineDesc.computeShaderSPIRV.bytecode);
+        FALCOR_VK_CALL(vkCreateShaderModule(mVkDevice, &shaderModuleInfo, nullptr, &vkPipeline.shaderModule));
+
+        VkPipelineShaderStageCreateInfo shaderStageInfo = {};
+        shaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        shaderStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        shaderStageInfo.module = vkPipeline.shaderModule;
+        shaderStageInfo.pName = nrdPipelineDesc.shaderEntryPointName;
+
+        VkComputePipelineCreateInfo pipelineInfo = {};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        pipelineInfo.stage = shaderStageInfo;
+        pipelineInfo.layout = vkPipeline.pipelineLayout;
+        FALCOR_VK_CALL(vkCreateComputePipelines(mVkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkPipeline.pipeline));
+
+        mVkPipelines.push_back(vkPipeline);
+    }
+
+    std::vector<VkDescriptorPoolSize> poolSizes;
+    if (denoiserDesc.descriptorSetDesc.staticSamplerMaxNum > 0)
+        poolSizes.push_back({VK_DESCRIPTOR_TYPE_SAMPLER, denoiserDesc.descriptorSetDesc.staticSamplerMaxNum});
+    if (denoiserDesc.descriptorSetDesc.constantBufferMaxNum > 0)
+        poolSizes.push_back({VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, denoiserDesc.descriptorSetDesc.constantBufferMaxNum});
+    if (denoiserDesc.descriptorSetDesc.textureMaxNum > 0)
+        poolSizes.push_back({VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, denoiserDesc.descriptorSetDesc.textureMaxNum});
+    if (denoiserDesc.descriptorSetDesc.storageTextureMaxNum > 0)
+        poolSizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, denoiserDesc.descriptorSetDesc.storageTextureMaxNum});
+
+    const uint32_t setMaxNum = std::max(1u, denoiserDesc.descriptorSetDesc.setMaxNum);
+
+    VkDescriptorPoolCreateInfo poolInfo = {};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = setMaxNum;
+    poolInfo.poolSizeCount = (uint32_t)poolSizes.size();
+    poolInfo.pPoolSizes = poolSizes.data();
+
+    for (VkDescriptorPool& pool : mVkDescriptorPools)
+    {
+        FALCOR_VK_CALL(vkCreateDescriptorPool(mVkDevice, &poolInfo, nullptr, &pool));
+    }
+}
+#endif
+
+void NRDPass::releaseBackendResources()
+{
+#if FALCOR_HAS_D3D12
+    mpPasses.clear();
+    mpCachedProgramKernels.clear();
+    mpCSOs.clear();
+    mCBVSRVUAVdescriptorSetLayouts.clear();
+    mpSamplersDescriptorSet = nullptr;
+    mpRootSignatures.clear();
+    mpCBV = nullptr;
+#endif
+
+#if FALCOR_HAS_VULKAN
+    bool hasVulkanResources = false;
+    for (const auto& pipeline : mVkPipelines)
+    {
+        hasVulkanResources = hasVulkanResources || pipeline.pipeline || pipeline.shaderModule || pipeline.pipelineLayout ||
+                             pipeline.descriptorSetLayout;
+    }
+    for (VkDescriptorPool pool : mVkDescriptorPools)
+        hasVulkanResources = hasVulkanResources || pool;
+
+    if (hasVulkanResources && mpDevice)
+        mpDevice->wait();
+
+    if (mVkDevice)
+    {
+        for (VkDescriptorPool& pool : mVkDescriptorPools)
+        {
+            if (pool)
+            {
+                vkDestroyDescriptorPool(mVkDevice, pool, nullptr);
+                pool = VK_NULL_HANDLE;
+            }
+        }
+
+        for (VulkanPipeline& pipeline : mVkPipelines)
+        {
+            if (pipeline.pipeline)
+                vkDestroyPipeline(mVkDevice, pipeline.pipeline, nullptr);
+            if (pipeline.shaderModule)
+                vkDestroyShaderModule(mVkDevice, pipeline.shaderModule, nullptr);
+            if (pipeline.pipelineLayout)
+                vkDestroyPipelineLayout(mVkDevice, pipeline.pipelineLayout, nullptr);
+            if (pipeline.descriptorSetLayout)
+                vkDestroyDescriptorSetLayout(mVkDevice, pipeline.descriptorSetLayout, nullptr);
+        }
+    }
+
+    mVkPipelines.clear();
+    mpVkConstantBuffer = nullptr;
+    mVkConstantBufferViewSize = 0;
+    mVkFrameConstantBufferSize = 0;
+    mVkConstantBufferOffset = 0;
+    mVkBufferedFrameIndex = 0;
+    mVkDevice = VK_NULL_HANDLE;
+#endif
+}
 
 void NRDPass::createResources()
 {
@@ -998,6 +1268,29 @@ void NRDPass::createResources()
         else
             mpTransientTextures.push_back(pTexture);
     }
+
+#if FALCOR_HAS_VULKAN
+    if (mpDevice->getType() == Device::Type::Vulkan)
+    {
+        mVkDevice = mpDevice->getNativeHandle(2).as<VkDevice>();
+
+        VkPhysicalDeviceProperties deviceProperties = {};
+        VkPhysicalDevice physicalDevice = mpDevice->getNativeHandle(1).as<VkPhysicalDevice>();
+        vkGetPhysicalDeviceProperties(physicalDevice, &deviceProperties);
+
+        const uint32_t setMaxNum = std::max(1u, denoiserDesc.descriptorSetDesc.setMaxNum);
+        const uint32_t constantBufferMaxDataSize = std::max(1u, denoiserDesc.constantBufferDesc.maxDataSize);
+        mVkConstantBufferViewSize = alignTo(constantBufferMaxDataSize, (uint32_t)deviceProperties.limits.minUniformBufferOffsetAlignment);
+        mVkFrameConstantBufferSize = mVkConstantBufferViewSize * setMaxNum;
+
+        mpVkConstantBuffer = mpDevice->createBuffer(
+            size_t(mVkFrameConstantBufferSize) * kVulkanBufferedFrameCount,
+            ResourceBindFlags::Constant,
+            MemoryType::Upload
+        );
+        mpVkConstantBuffer->setName("NRDPass::VulkanConstantBuffer");
+    }
+#endif
 }
 
 void NRDPass::executeInternal(RenderContext* pRenderContext, const RenderData& renderData)
@@ -1091,6 +1384,7 @@ void NRDPass::executeInternal(RenderContext* pRenderContext, const RenderData& r
     mCommonSettings.denoisingRange = kNRDDepthRange;
     mCommonSettings.disocclusionThreshold = mDisocclusionThreshold * 0.01f;
     mCommonSettings.frameIndex = mFrameIndex;
+    mCommonSettings.accumulationMode = mResetHistory ? nrd::AccumulationMode::RESTART : nrd::AccumulationMode::CONTINUE;
     mCommonSettings.isMotionVectorInWorldSpace = mWorldSpaceMotion;
 
     mPrevViewMatrix = viewMatrix;
@@ -1102,6 +1396,12 @@ void NRDPass::executeInternal(RenderContext* pRenderContext, const RenderData& r
     uint32_t dispatchDescNum = 0;
     nrd::Result result = nrd::GetComputeDispatches(*mpDenoiser, mCommonSettings, dispatchDescs, dispatchDescNum);
     FALCOR_ASSERT(result == nrd::Result::SUCCESS);
+    mResetHistory = false;
+
+#if FALCOR_HAS_VULKAN
+    if (mpDevice->getType() == Device::Type::Vulkan)
+        resetVulkanFrameResources();
+#endif
 
     for (uint32_t i = 0; i < dispatchDescNum; i++)
     {
@@ -1115,6 +1415,32 @@ void NRDPass::executeInternal(RenderContext* pRenderContext, const RenderData& r
 }
 
 void NRDPass::dispatch(RenderContext* pRenderContext, const RenderData& renderData, const nrd::DispatchDesc& dispatchDesc)
+{
+    if (mpDevice->getType() == Device::Type::D3D12)
+    {
+#if FALCOR_HAS_D3D12
+        dispatchD3D12(pRenderContext, renderData, dispatchDesc);
+        return;
+#else
+        FALCOR_THROW("NRDPass: D3D12 support was not compiled in.");
+#endif
+    }
+
+    if (mpDevice->getType() == Device::Type::Vulkan)
+    {
+#if FALCOR_HAS_VULKAN
+        dispatchVulkan(pRenderContext, renderData, dispatchDesc);
+        return;
+#else
+        FALCOR_THROW("NRDPass: Vulkan support was not compiled in.");
+#endif
+    }
+
+    FALCOR_THROW("NRDPass: Unsupported graphics backend.");
+}
+
+#if FALCOR_HAS_D3D12
+void NRDPass::dispatchD3D12(RenderContext* pRenderContext, const RenderData& renderData, const nrd::DispatchDesc& dispatchDesc)
 {
     const nrd::DenoiserDesc& denoiserDesc = nrd::GetDenoiserDesc(*mpDenoiser);
     const nrd::PipelineDesc& pipelineDesc = denoiserDesc.pipelines[dispatchDesc.pipelineIndex];
@@ -1268,6 +1594,184 @@ void NRDPass::dispatch(RenderContext* pRenderContext, const RenderData& renderDa
 
     mpDevice->getUploadHeap()->release(cbAllocation);
 }
+#endif
+
+#if FALCOR_HAS_VULKAN
+void NRDPass::resetVulkanFrameResources()
+{
+    FALCOR_ASSERT(mVkDevice);
+    mVkBufferedFrameIndex = mCommonSettings.frameIndex % kVulkanBufferedFrameCount;
+    mVkConstantBufferOffset = mVkBufferedFrameIndex * mVkFrameConstantBufferSize;
+
+    VkDescriptorPool descriptorPool = mVkDescriptorPools[mVkBufferedFrameIndex];
+    FALCOR_ASSERT(descriptorPool);
+    FALCOR_VK_CALL(vkResetDescriptorPool(mVkDevice, descriptorPool, 0));
+}
+
+void NRDPass::dispatchVulkan(RenderContext* pRenderContext, const RenderData& renderData, const nrd::DispatchDesc& dispatchDesc)
+{
+    const nrd::LibraryDesc& libraryDesc = nrd::GetLibraryDesc();
+    const nrd::DenoiserDesc& denoiserDesc = nrd::GetDenoiserDesc(*mpDenoiser);
+    const nrd::PipelineDesc& pipelineDesc = denoiserDesc.pipelines[dispatchDesc.pipelineIndex];
+    const VulkanPipeline& vkPipeline = mVkPipelines[dispatchDesc.pipelineIndex];
+
+    auto getTexture = [&](const nrd::Resource& resource) -> ref<Texture>
+    {
+        switch (resource.type)
+        {
+        case nrd::ResourceType::IN_MV:
+            return renderData.getTexture(kInputMotionVectors);
+        case nrd::ResourceType::IN_NORMAL_ROUGHNESS:
+            return renderData.getTexture(kInputNormalRoughnessMaterialID);
+        case nrd::ResourceType::IN_VIEWZ:
+            return renderData.getTexture(kInputViewZ);
+        case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST:
+            return renderData.getTexture(kInputDiffuseRadianceHitDist);
+        case nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST:
+            return renderData.getTexture(kInputSpecularRadianceHitDist);
+        case nrd::ResourceType::IN_SPEC_HITDIST:
+            return renderData.getTexture(kInputSpecularHitDist);
+        case nrd::ResourceType::IN_DELTA_PRIMARY_POS:
+            return renderData.getTexture(kInputDeltaPrimaryPosW);
+        case nrd::ResourceType::IN_DELTA_SECONDARY_POS:
+            return renderData.getTexture(kInputDeltaSecondaryPosW);
+        case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST:
+            return renderData.getTexture(kOutputFilteredDiffuseRadianceHitDist);
+        case nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST:
+            return renderData.getTexture(kOutputFilteredSpecularRadianceHitDist);
+        case nrd::ResourceType::OUT_REFLECTION_MV:
+            return renderData.getTexture(kOutputReflectionMotionVectors);
+        case nrd::ResourceType::OUT_DELTA_MV:
+            return renderData.getTexture(kOutputDeltaMotionVectors);
+        case nrd::ResourceType::TRANSIENT_POOL:
+            return mpTransientTextures[resource.indexInPool];
+        case nrd::ResourceType::PERMANENT_POOL:
+            return mpPermanentTextures[resource.indexInPool];
+        default:
+            FALCOR_THROW("NRDPass: Unsupported NRD resource type {}.", (uint32_t)resource.type);
+        }
+    };
+
+    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+    VkDescriptorSetAllocateInfo allocateInfo = {};
+    allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocateInfo.descriptorPool = mVkDescriptorPools[mVkBufferedFrameIndex];
+    allocateInfo.descriptorSetCount = 1;
+    allocateInfo.pSetLayouts = &vkPipeline.descriptorSetLayout;
+    FALCOR_VK_CALL(vkAllocateDescriptorSets(mVkDevice, &allocateInfo, &descriptorSet));
+
+    std::vector<VkWriteDescriptorSet> descriptorWrites;
+    std::vector<VkDescriptorImageInfo> imageInfos;
+    descriptorWrites.reserve(dispatchDesc.resourceNum + 1);
+    imageInfos.reserve(dispatchDesc.resourceNum);
+
+    VkDescriptorBufferInfo constantBufferInfo = {};
+    uint32_t dynamicConstantBufferOffset = 0;
+    if (pipelineDesc.hasConstantData)
+    {
+        FALCOR_CHECK(mpVkConstantBuffer, "NRDPass: Vulkan constant buffer is missing.");
+        FALCOR_CHECK(
+            mVkConstantBufferOffset + mVkConstantBufferViewSize <=
+                size_t(mVkFrameConstantBufferSize) * kVulkanBufferedFrameCount,
+            "NRDPass: Vulkan constant buffer ring overflow."
+        );
+
+        uint8_t* dst = static_cast<uint8_t*>(mpVkConstantBuffer->map()) + mVkConstantBufferOffset;
+        std::memcpy(dst, dispatchDesc.constantBufferData, dispatchDesc.constantBufferDataSize);
+        mpVkConstantBuffer->unmap();
+
+        dynamicConstantBufferOffset = mVkConstantBufferOffset;
+        constantBufferInfo.buffer = mpVkConstantBuffer->getNativeHandle().as<VkBuffer>();
+        constantBufferInfo.offset = 0;
+        constantBufferInfo.range = denoiserDesc.constantBufferDesc.maxDataSize;
+
+        VkWriteDescriptorSet write = {};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = descriptorSet;
+        write.dstBinding =
+            libraryDesc.spirvBindingOffsets.constantBufferOffset + denoiserDesc.constantBufferDesc.registerIndex;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        write.pBufferInfo = &constantBufferInfo;
+        descriptorWrites.push_back(write);
+
+        mVkConstantBufferOffset += mVkConstantBufferViewSize;
+    }
+
+    uint32_t resourceIndex = 0;
+    for (uint32_t descriptorRangeIndex = 0; descriptorRangeIndex < pipelineDesc.descriptorRangeNum; descriptorRangeIndex++)
+    {
+        const nrd::DescriptorRangeDesc& nrdDescriptorRange = pipelineDesc.descriptorRanges[descriptorRangeIndex];
+        const uint32_t baseBinding = (nrdDescriptorRange.descriptorType == nrd::DescriptorType::TEXTURE
+                                          ? libraryDesc.spirvBindingOffsets.textureOffset
+                                          : libraryDesc.spirvBindingOffsets.storageTextureAndBufferOffset) +
+                                     nrdDescriptorRange.baseRegisterIndex;
+
+        for (uint32_t descriptorOffset = 0; descriptorOffset < nrdDescriptorRange.descriptorNum; descriptorOffset++)
+        {
+            FALCOR_ASSERT(resourceIndex < dispatchDesc.resourceNum);
+            const nrd::Resource& resource = dispatchDesc.resources[resourceIndex];
+            FALCOR_ASSERT(resource.stateNeeded == nrdDescriptorRange.descriptorType);
+
+            ref<Texture> texture = getTexture(resource);
+            FALCOR_ASSERT(texture);
+
+            Resource::State newState =
+                resource.stateNeeded == nrd::DescriptorType::TEXTURE ? Resource::State::ShaderResource : Resource::State::UnorderedAccess;
+            bool insertedAnyBarrier = false;
+            for (uint16_t mip = 0; mip < resource.mipNum; mip++)
+            {
+                const ResourceViewInfo viewInfo = ResourceViewInfo(resource.mipOffset + mip, 1, 0, 1);
+                insertedAnyBarrier |= pRenderContext->resourceBarrier(texture.get(), newState, &viewInfo);
+            }
+            if (newState == Resource::State::UnorderedAccess && !insertedAnyBarrier)
+                pRenderContext->uavBarrier(texture.get());
+
+            VkDescriptorImageInfo& imageInfo = imageInfos.emplace_back();
+            imageInfo.imageLayout = getVulkanImageLayout(nrdDescriptorRange.descriptorType);
+            if (nrdDescriptorRange.descriptorType == nrd::DescriptorType::TEXTURE)
+            {
+                imageInfo.imageView = texture->getSRV(resource.mipOffset, resource.mipNum, 0, 1)->getNativeHandle().as<VkImageView>();
+            }
+            else
+            {
+                imageInfo.imageView = texture->getUAV(resource.mipOffset, 0, 1)->getNativeHandle().as<VkImageView>();
+            }
+
+            VkWriteDescriptorSet write = {};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = descriptorSet;
+            write.dstBinding = baseBinding + descriptorOffset;
+            write.descriptorCount = 1;
+            write.descriptorType = getVulkanDescriptorType(nrdDescriptorRange.descriptorType);
+            write.pImageInfo = &imageInfo;
+            descriptorWrites.push_back(write);
+
+            resourceIndex++;
+        }
+    }
+
+    FALCOR_ASSERT(resourceIndex == dispatchDesc.resourceNum);
+    vkUpdateDescriptorSets(mVkDevice, (uint32_t)descriptorWrites.size(), descriptorWrites.data(), 0, nullptr);
+
+    pRenderContext->getLowLevelData()->closeEncoders();
+    VkCommandBuffer commandBuffer = pRenderContext->getLowLevelData()->getCommandBufferNativeHandle().as<VkCommandBuffer>();
+
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, vkPipeline.pipeline);
+    vkCmdBindDescriptorSets(
+        commandBuffer,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        vkPipeline.pipelineLayout,
+        0,
+        1,
+        &descriptorSet,
+        pipelineDesc.hasConstantData ? 1u : 0u,
+        pipelineDesc.hasConstantData ? &dynamicConstantBufferOffset : nullptr
+    );
+    vkCmdDispatch(commandBuffer, dispatchDesc.gridWidth, dispatchDesc.gridHeight, 1);
+    pRenderContext->setPendingCommands(true);
+}
+#endif
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(PluginRegistry& registry)
 {

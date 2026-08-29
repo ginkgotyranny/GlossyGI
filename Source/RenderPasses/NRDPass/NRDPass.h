@@ -29,12 +29,20 @@
 
 #include "Falcor.h"
 #include "Core/Enum.h"
+#if FALCOR_HAS_D3D12
 #include "Core/API/Shared/D3D12DescriptorSet.h"
 #include "Core/API/Shared/D3D12RootSignature.h"
 #include "Core/API/Shared/D3D12ConstantBufferView.h"
+#endif
 #include "RenderGraph/RenderPassHelpers.h"
 
 #include <NRD.h>
+
+#if FALCOR_HAS_VULKAN
+#include <vulkan/vulkan.h>
+#endif
+
+#include <array>
 
 using namespace Falcor;
 
@@ -66,6 +74,7 @@ public:
     static ref<NRDPass> create(ref<Device> pDevice, const Properties& props) { return make_ref<NRDPass>(pDevice, props); }
 
     NRDPass(ref<Device> pDevice, const Properties& props);
+    ~NRDPass();
 
     virtual Properties getProperties() const override;
     virtual RenderPassReflection reflect(const CompileData& compileData) override;
@@ -83,14 +92,17 @@ private:
     void reinit();
     void createPipelines();
     void createResources();
+    void releaseBackendResources();
     void executeInternal(RenderContext* pRenderContext, const RenderData& renderData);
     void dispatch(RenderContext* pRenderContext, const RenderData& renderData, const nrd::DispatchDesc& dispatchDesc);
 
     nrd::Denoiser* mpDenoiser = nullptr;
 
     bool mEnabled = true;
+    bool mWasEnabled = false;
     DenoisingMethod mDenoisingMethod = DenoisingMethod::RelaxDiffuseSpecular;
     bool mRecreateDenoiser = false;
+    bool mResetHistory = true;
     bool mWorldSpaceMotion = true;
     float mMaxIntensity = 1000.f;
     float mDisocclusionThreshold = 2.f;
@@ -100,15 +112,47 @@ private:
     nrd::ReblurSettings mReblurSettings = {};
 
     std::vector<ref<Sampler>> mpSamplers;
+
+#if FALCOR_HAS_D3D12
+    void createD3D12Pipelines();
+    void dispatchD3D12(RenderContext* pRenderContext, const RenderData& renderData, const nrd::DispatchDesc& dispatchDesc);
+
     std::vector<D3D12DescriptorSetLayout> mCBVSRVUAVdescriptorSetLayouts;
     ref<D3D12DescriptorSet> mpSamplersDescriptorSet;
     std::vector<ref<D3D12RootSignature>> mpRootSignatures;
     std::vector<ref<ComputePass>> mpPasses;
     std::vector<ref<const ProgramKernels>> mpCachedProgramKernels;
     std::vector<ref<ComputeStateObject>> mpCSOs;
+    ref<D3D12ConstantBufferView> mpCBV;
+#endif
+
+#if FALCOR_HAS_VULKAN
+    void createVulkanPipelines();
+    void dispatchVulkan(RenderContext* pRenderContext, const RenderData& renderData, const nrd::DispatchDesc& dispatchDesc);
+    void resetVulkanFrameResources();
+
+    struct VulkanPipeline
+    {
+        VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
+        VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+        VkShaderModule shaderModule = VK_NULL_HANDLE;
+        VkPipeline pipeline = VK_NULL_HANDLE;
+    };
+
+    static constexpr uint32_t kVulkanBufferedFrameCount = 16;
+
+    VkDevice mVkDevice = VK_NULL_HANDLE;
+    std::vector<VulkanPipeline> mVkPipelines;
+    std::array<VkDescriptorPool, kVulkanBufferedFrameCount> mVkDescriptorPools = {};
+    ref<Buffer> mpVkConstantBuffer;
+    uint32_t mVkConstantBufferViewSize = 0;
+    uint32_t mVkFrameConstantBufferSize = 0;
+    uint32_t mVkConstantBufferOffset = 0;
+    uint32_t mVkBufferedFrameIndex = 0;
+#endif
+
     std::vector<ref<Texture>> mpPermanentTextures;
     std::vector<ref<Texture>> mpTransientTextures;
-    ref<D3D12ConstantBufferView> mpCBV;
 
     float4x4 mPrevViewMatrix;
     float4x4 mPrevProjMatrix;
