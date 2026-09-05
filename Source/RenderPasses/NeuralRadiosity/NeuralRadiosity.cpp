@@ -65,6 +65,7 @@ namespace
     const char kEnableTemporalSpecReuse[] = "enableTemporalSpecReuse";
     const char kConeTraceReuseMode[] = "coneTraceReuseMode";
     const char kTemporalSpecClusterMode[] = "temporalSpecClusterMode";
+    const char kEnableFXAA[] = "enableFXAA";
 
     float3 parseFloat3(const nlohmann::json& value, std::string_view key)
     {
@@ -95,6 +96,8 @@ NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) :
     {
         if (key == kEnableTemporalSpecReuse)
             mEnableRenderSpecTemporalReuse = value;
+        else if (key == kEnableFXAA)
+            mEnableFXAA = value;
         else if (key == kConeTraceReuseMode || key == kTemporalSpecClusterMode)
             mConeTraceReuseMode = value;
         else
@@ -110,6 +113,7 @@ Properties NeuralRadiosity::getProperties() const
     Properties props;
     props[kEnableTemporalSpecReuse] = mEnableRenderSpecTemporalReuse;
     props[kConeTraceReuseMode] = mConeTraceReuseMode;
+    props[kEnableFXAA] = mEnableFXAA;
     return props;
 }
 
@@ -277,6 +281,10 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
     {
         mVarsChanged = true;
     }
+    if (mEnablePostFilter && widget.checkbox("FXAA", mEnableFXAA))
+    {
+        mVarsChanged = true;
+    }
 }
 
 void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
@@ -285,6 +293,8 @@ void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& 
     mpFirstSmoothPass = nullptr;
     mpConeTrace = nullptr;
     mpResolvePass = nullptr;
+    mpPostFilterPass = nullptr;
+    mpPostFXAAPass = nullptr;
     mpRenderSpecTemporalHistory = nullptr;
     mRenderSpecTemporalHistoryValid = false;
     mHasRenderCameraViewProj = false;
@@ -477,23 +487,38 @@ void NeuralRadiosity::postFilterPass(RenderContext* pRenderContext, const Render
     if (!mEnablePostFilter)
         return;
 
-    ShaderVar var = mpPostFilterPass->getRootVar();
-    const auto name = "gPostFilterPass";
-    bindScreenData(var, renderData, name);
+    {
+        ShaderVar var = mpPostFilterPass->getRootVar();
+        const auto name = "gPostFilterPass";
+        bindScreenData(var, renderData, name);
 
-    var[name]["kernelRadius"] = 3;
-    var[name]["sigmaSpatial"] = 4.0f;
-    var[name]["sigmaNormal"] = 0.05f;
-    var[name]["sigmaAlbedo"] = 0.02f;
-    var[name]["sigmaColor"] = 2.0f;
+        var[name]["kernelRadius"] = 3;
+        var[name]["sigmaSpatial"] = 4.0f;
+        var[name]["sigmaNormal"] = 0.05f;
+        var[name]["sigmaAlbedo"] = 0.02f;
+        var[name]["sigmaColor"] = 2.0f;
 
-    var["diffActive"] = mpRenderBatch->diffActive;
-    var["diffIndex"] = mpRenderBatch->diffIndex;
-    var["specActive"] = mpRenderBatch->specActive;
-    var["specIndex"] = mpRenderBatch->specIndex;
-    var["tempColor"] = mpRenderTempColor;
+        var["diffActive"] = mpRenderBatch->diffActive;
+        var["diffIndex"] = mpRenderBatch->diffIndex;
+        var["specActive"] = mpRenderBatch->specActive;
+        var["specIndex"] = mpRenderBatch->specIndex;
+        var["tempColor"] = mpRenderTempColor;
+        var["gFilteredColor"] = mpPostFilterTempColor;
 
-    mpPostFilterPass->execute(pRenderContext, uint3(mFrameDim, 1));
+        mpPostFilterPass->execute(pRenderContext, uint3(mFrameDim, 1));
+    }
+
+    pRenderContext->uavBarrier(mpPostFilterTempColor.get());
+
+    {
+        ShaderVar var = mpPostFXAAPass->getRootVar();
+        const auto name = "gPostFilterPass";
+        bindScreenData(var, renderData, name);
+        var[name]["enableFXAA"] = mEnableFXAA ? 1u : 0u;
+        var["gFxaaInput"] = mpPostFilterTempColor;
+
+        mpPostFXAAPass->execute(pRenderContext, uint3(mFrameDim, 1));
+    }
 }
 
 void NeuralRadiosity::randomSmooth(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
@@ -765,6 +790,19 @@ void NeuralRadiosity::updatePrograms(RenderContext* pRenderContext, const Render
         mpSampleGenerator->bindShaderData(var);
     }
 
+    if (!mpPostFXAAPass)
+    {
+        ProgramDesc desc = baseDesc;
+        desc.addShaderLibrary(kPostFilterPassFile).csEntry("mainFXAA");
+
+        mpPostFXAAPass = ComputePass::create(mpDevice, desc, defines, true);
+
+        // Bind static resources
+        ShaderVar var = mpPostFXAAPass->getRootVar();
+        mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
+        mpSampleGenerator->bindShaderData(var);
+    }
+
     const auto passEndTime = std::chrono::steady_clock::now();
     const auto passElapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(passEndTime - startTime).count();
     logInfo("Screen passes created: \t{} ms", passElapsedMs);
@@ -907,6 +945,15 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
         mpRenderTempColor->getHeight() != mFrameDim.y)
     {
         mpRenderTempColor = mpDevice->createTexture2D(
+            mFrameDim.x, mFrameDim.y, ResourceFormat::RGBA32Float, 1, 1, nullptr,
+            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess);
+    }
+
+    if (!mpPostFilterTempColor ||
+        mpPostFilterTempColor->getWidth() != mFrameDim.x ||
+        mpPostFilterTempColor->getHeight() != mFrameDim.y)
+    {
+        mpPostFilterTempColor = mpDevice->createTexture2D(
             mFrameDim.x, mFrameDim.y, ResourceFormat::RGBA32Float, 1, 1, nullptr,
             ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess);
     }

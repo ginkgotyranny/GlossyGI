@@ -381,6 +381,8 @@ private:
     ConeTraceReuseMode mConeTraceReuseMode = ConeTraceReuseMode::TemporalToHistory;
     /// Post filter switch
     bool mEnablePostFilter = true;
+    /// FXAA switch for post filter.
+    bool mEnableFXAA = true;
     /// Force cull mode for all geometry, otherwise set it based on the scene.
     bool mForceCullMode = false;
     /// Cull mode to use for when mForceCullMode is true.
@@ -395,6 +397,7 @@ private:
     std::shared_ptr<RayBatchBuffer> mpTrainRHSBatch;
     ref<Buffer> mpRenderSpecTemporalHistory;
     ref<Texture> mpRenderTempColor;
+    ref<Texture> mpPostFilterTempColor;
     bool mRenderSpecTemporalHistoryValid = false;
     bool mHasRenderCameraViewProj = false;
     float4x4 mRenderCameraViewProj = float4x4();
@@ -405,6 +408,7 @@ private:
     ref<ComputePass> mpCompactPass;
     ref<ComputePass> mpResolvePass;
     ref<ComputePass> mpPostFilterPass;
+    ref<ComputePass> mpPostFXAAPass;
     ref<ComputePass> mpRandomSmooth;
     ref<ComputePass> mpSampleRHS;
     ref<ComputePass> mpResolveRHS;

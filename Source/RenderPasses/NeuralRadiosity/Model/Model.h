@@ -86,13 +86,13 @@ private:
     // Hyper parameters
     uint32_t nLevels = 6;
     uint32_t nFeaturesPerLevel = 2;
-    uint32_t log2HashMapSize = 19;
+    uint32_t log2HashMapSize = 18;
     uint32_t baseResolution = 32;
     float perLevelScale = 2.0f;
 
     uint32_t nInterpLevels = 6;
     uint32_t nInterpFeaturesPerLevel = 4;
-    uint32_t log2InterpHashMapSize = 19;
+    uint32_t log2InterpHashMapSize = 18;
     uint32_t baseInterpResolution = 16;
     float perLevelInterpScale = 2.0f;
     float interpRatio = 1.0f;
