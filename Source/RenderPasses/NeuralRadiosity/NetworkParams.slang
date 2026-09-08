@@ -122,7 +122,9 @@ struct SpecNetInput
     static const uint normalOffset = dirOffset + 3;
     static const uint albedoOffset = normalOffset + 3;
     static const uint roughnessOffset = albedoOffset + 3;
-    static const uint clsPosOffset = roughnessOffset + 1;
+    static const uint envColorOffset = roughnessOffset + 1;
+    // static const uint clsPosOffset = roughnessOffset + 1;
+    static const uint clsPosOffset = envColorOffset + 3;
     static const uint clsScaleOffset = clsPosOffset + numClusters * 3;
     static const uint clsWeightOffset = clsScaleOffset + numClusters;
     static const uint totalDim = clsWeightOffset + numClusters;

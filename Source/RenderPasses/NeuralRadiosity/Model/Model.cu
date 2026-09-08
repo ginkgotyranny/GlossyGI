@@ -86,7 +86,7 @@ NRModel::NRModel() {
     CUDA_CHECK_THROW(cudaStreamCreate(&mInferenceStream));
 
     mDiffGBufferDim = 3 * 4 + 1;
-    mSpecGBufferDim = 3 * 4 + 1 + numClusters * (3 + 1 + 1);
+    mSpecGBufferDim = 3 * 5 + 1 + numClusters * (3 + 1 + 1);
     mDiffInputDim = padUp(nFeaturesPerLevel * nLevels + mDiffGBufferDim, 16);
     mSpecInputDim = padUp(nFeaturesPerLevel * nLevels + nInterpFeaturesPerLevel * numClusters + mSpecGBufferDim, 16);
     mOutputDim = 16;

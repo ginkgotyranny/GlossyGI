@@ -67,6 +67,7 @@ groupshared BSDFProperties bsdfProperties;
 
 groupshared float3 pos;
 groupshared float3 dir;
+groupshared float roughness;
 groupshared float tanLobe;
 groupshared float cosLobe;
 
@@ -591,7 +592,7 @@ struct ConeTrace
         {
             pos = specPos[pixIdx].xyz;
             dir = specDir[pixIdx].xyz;
-            float roughness = specRoughness[pixIdx];
+            roughness = specRoughness[pixIdx];
             HitInfo hit = unpackHitInfo(specVBuffer[pixIdx]);
 
             // Load shading data.
@@ -873,7 +874,8 @@ struct ConeTrace
             // Calculate cluster info
             float3 clsPos = pos + mean * dir;
             float clsScale = (std + tanLobe * mean) / 2;
-            float clsWeight = size / max(totalCount, 1.0f);
+            // float clsWeight = size / max(totalCount, 1.0f);
+            float clsWeight = size / numSpecRays;
             writeSpecInputClsBuffer(
                 specInput, pixIdx, threadIdx,
                 (Real3) ((clsPos - bboxMin) / (bboxMax - bboxMin)),
@@ -887,6 +889,12 @@ struct ConeTrace
             specInput[pixIdx].data[SpecNetInput::posOffset + 0] = (Real) pos.x;
             specInput[pixIdx].data[SpecNetInput::posOffset + 1] = (Real) pos.y;
             specInput[pixIdx].data[SpecNetInput::posOffset + 2] = (Real) pos.z;
+
+            // Write prefiltered env map color
+            float3 envColor = gScene.envMap.eval(dir);
+            specInput[pixIdx].data[SpecNetInput::envColorOffset + 0] = (Real) envColor.x;
+            specInput[pixIdx].data[SpecNetInput::envColorOffset + 1] = (Real) envColor.y;
+            specInput[pixIdx].data[SpecNetInput::envColorOffset + 2] = (Real) envColor.z;
         }
     }
 
