@@ -119,7 +119,7 @@ NRModel::NRModel() {
     mSpecPrimEncOffset = 0;
     mSpecClsEncOffset = mSpecPrimEncOffset + mPrimGridConfig.nLevels * mPrimGridConfig.nFeaturesPerLevel;
     mSpecPosOffset = mSpecClsEncOffset + mClsGridConfig.nClusters * mClsGridConfig.nFeaturesPerLevel;
-    mSpecClsPosOffset = mSpecPosOffset + 3 * 4 + 1;
+    mSpecClsPosOffset = mSpecPosOffset + 3 * 5 + 1;
     mSpecClsScaleOffset = mSpecClsPosOffset + mClsGridConfig.nClusters * 3;
     mSpecClsWeightOffset = mSpecClsScaleOffset + mClsGridConfig.nClusters * 1;
 
