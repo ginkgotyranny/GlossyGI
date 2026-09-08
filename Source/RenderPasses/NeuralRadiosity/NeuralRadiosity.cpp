@@ -53,6 +53,7 @@ namespace
     const std::string kResolveBatchFile = "RenderPasses/NeuralRadiosity/ResolveBatch.cs.slang";
     
     const std::string kConeTraceFile = "RenderPasses/NeuralRadiosity/ConeTrace.cs.slang";
+    const std::string kPrefiltEnvCubemapFile = "RenderPasses/NeuralRadiosity/PrefiltEnvCubemap.slang";
 
     const FileDialogFilterVec kCameraJsonFilters = {
         {"json", "JSON Files"},
@@ -75,6 +76,34 @@ namespace
         }
 
         return value.get<float3>();
+    }
+
+    uint32_t floorPowerOfTwo(uint32_t value)
+    {
+        if (value == 0) return 1;
+
+        uint32_t result = 1;
+        while ((result << 1) <= value)
+            result <<= 1;
+        return result;
+    }
+
+    uint32_t computePrefiltEnvFaceSize(const ref<Texture>& pEnvMap)
+    {
+        FALCOR_ASSERT(pEnvMap);
+        const uint32_t angularSize = std::max(1u, std::min(pEnvMap->getWidth() / 4u, pEnvMap->getHeight() / 2u));
+        return floorPowerOfTwo(angularSize);
+    }
+
+    uint32_t computeMipCount(uint32_t faceSize)
+    {
+        uint32_t mipCount = 1;
+        while (faceSize > 1)
+        {
+            faceSize >>= 1;
+            mipCount++;
+        }
+        return mipCount;
     }
 }
 
@@ -149,6 +178,9 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
 
     // Update shader program specialization.
     updatePrograms(pRenderContext, renderData);
+
+    // Prepare the roughness-addressable environment cubemap.
+    // preparePrefiltEnvCubemap(pRenderContext);
 
     // Prepare resources.
     prepareResources(pRenderContext, renderData);
@@ -295,9 +327,13 @@ void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& 
     mpResolvePass = nullptr;
     mpPostFilterPass = nullptr;
     mpPostFXAAPass = nullptr;
+    mpPrefiltEnvInitPass = nullptr;
+    mpPrefiltEnvDownsamplePass = nullptr;
+    mpPrefiltEnvCubemap = nullptr;
     mpRenderSpecTemporalHistory = nullptr;
     mRenderSpecTemporalHistoryValid = false;
     mHasRenderCameraViewProj = false;
+    mPrefiltEnvDirty = true;
     mVarsChanged = true;
 }
 
@@ -309,9 +345,12 @@ void NeuralRadiosity::onSceneUpdates(RenderContext* pRenderContext, IScene::Upda
     }
 
     if (is_set(sceneUpdates, IScene::UpdateFlags::LightIntensityChanged) ||
-        is_set(sceneUpdates, IScene::UpdateFlags::EnvMapChanged))
+        is_set(sceneUpdates, IScene::UpdateFlags::EnvMapChanged) ||
+        is_set(sceneUpdates, IScene::UpdateFlags::EnvMapPropertiesChanged) ||
+        is_set(sceneUpdates, IScene::UpdateFlags::RenderSettingsChanged))
     {
         // Light changed.
+        mPrefiltEnvDirty = true;
     }
 }
 
@@ -676,6 +715,13 @@ void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, std::shared_ptr<R
     var[name]["useTemporalReuse"] = (pRayBatch == mpRenderBatch && mEnableRenderSpecTemporalReuse && mRenderSpecTemporalHistoryValid) ? 1u : 0u;
     var[name]["coneTraceReuseMode"] = (uint32_t)mConeTraceReuseMode;
 
+    var["gPrefiltEnv"]["mipCount"] = mpPrefiltEnvCubemap ? mpPrefiltEnvCubemap->getMipCount() : 0u;
+    var["gPrefiltEnv"]["faceSize"] = mpPrefiltEnvCubemap ? mpPrefiltEnvCubemap->getWidth() : 0u;
+    var["gPrefiltEnv"]["valid"] = mpPrefiltEnvCubemap ? 1u : 0u;
+    var["gPrefiltEnv"]["fallbackValid"] = (mpScene && mpScene->useEnvLight()) ? 1u : 0u;
+    var["gPrefiltEnv"]["cubemap"].setTexture(mpPrefiltEnvCubemap);
+    var["gPrefiltEnv"]["sampler"].setSampler(mpPrefiltEnvSampler);
+
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
     mpConeTrace->execute(pRenderContext, uint3(pRayBatch->specSize * mNumSpecRays, 1, 1));
@@ -737,6 +783,29 @@ void NeuralRadiosity::updatePrograms(RenderContext* pRenderContext, const Render
         defines.add(mpEmissiveSampler->getDefines());
     }
     defines.add(getShaderDefines(renderData));
+
+    if (!mpPrefiltEnvInitPass)
+    {
+        ProgramDesc desc = baseDesc;
+        desc.addShaderLibrary(kPrefiltEnvCubemapFile).csEntry("init");
+
+        DefineList buildDefines = defines;
+        buildDefines.add("PREFILT_ENV_CUBEMAP_BUILD_PASS", "1");
+        mpPrefiltEnvInitPass = ComputePass::create(mpDevice, desc, buildDefines, true);
+
+        ShaderVar var = mpPrefiltEnvInitPass->getRootVar();
+        mpScene->bindShaderData(var["gScene"]);
+    }
+
+    if (!mpPrefiltEnvDownsamplePass)
+    {
+        ProgramDesc desc = baseDesc;
+        desc.addShaderLibrary(kPrefiltEnvCubemapFile).csEntry("downsample");
+
+        DefineList buildDefines = defines;
+        buildDefines.add("PREFILT_ENV_CUBEMAP_BUILD_PASS", "1");
+        mpPrefiltEnvDownsamplePass = ComputePass::create(mpDevice, desc, buildDefines, true);
+    }
 
     if (!mpFirstSmoothPass)
     {
@@ -1017,6 +1086,80 @@ bool NeuralRadiosity::prepareLighting(RenderContext* pRenderContext)
     }
 
     return lightingChanged;
+}
+
+void NeuralRadiosity::preparePrefiltEnvCubemap(RenderContext* pRenderContext)
+{
+    if (!mPrefiltEnvDirty)
+        return;
+
+    if (!mpScene || !mpScene->useEnvLight() || !mpScene->getEnvMap() || !mpScene->getEnvMap()->getEnvMap())
+    {
+        mpPrefiltEnvCubemap = nullptr;
+        mPrefiltEnvDirty = false;
+        return;
+    }
+
+    const auto& pEnvMapTexture = mpScene->getEnvMap()->getEnvMap();
+    const uint32_t faceSize = computePrefiltEnvFaceSize(pEnvMapTexture);
+    const uint32_t mipCount = computeMipCount(faceSize);
+
+    if (!mpPrefiltEnvCubemap ||
+        mpPrefiltEnvCubemap->getWidth() != faceSize ||
+        mpPrefiltEnvCubemap->getHeight() != faceSize ||
+        mpPrefiltEnvCubemap->getMipCount() != mipCount)
+    {
+        mpPrefiltEnvCubemap = mpDevice->createTexture2D(
+            faceSize,
+            faceSize,
+            ResourceFormat::RGBA32Float,
+            6,
+            mipCount,
+            nullptr,
+            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess
+        );
+        mpPrefiltEnvCubemap->setName("NeuralRadiosity.PrefiltEnvCubemap");
+    }
+
+    if (!mpPrefiltEnvSampler)
+    {
+        Sampler::Desc desc;
+        desc.setFilterMode(TextureFilteringMode::Linear, TextureFilteringMode::Linear, TextureFilteringMode::Linear);
+        desc.setAddressingMode(TextureAddressingMode::Clamp, TextureAddressingMode::Clamp, TextureAddressingMode::Clamp);
+        mpPrefiltEnvSampler = mpDevice->createSampler(desc);
+    }
+
+    {
+        ShaderVar var = mpPrefiltEnvInitPass->getRootVar();
+        ShaderVar passVar = var["gPrefiltEnvCubemapPass"];
+
+        passVar["outputDim"] = uint2(faceSize, faceSize);
+        passVar["output"].setUav(mpPrefiltEnvCubemap->getUAV(0, 0, 6));
+        mpScene->bindShaderData(var["gScene"]);
+
+        mpPrefiltEnvInitPass->execute(pRenderContext, uint3(faceSize, faceSize, 6));
+        pRenderContext->uavBarrier(mpPrefiltEnvCubemap.get());
+    }
+
+    for (uint32_t mip = 1; mip < mipCount; ++mip)
+    {
+        const uint32_t mipWidth = mpPrefiltEnvCubemap->getWidth(mip);
+        const uint32_t mipHeight = mpPrefiltEnvCubemap->getHeight(mip);
+
+        ShaderVar var = mpPrefiltEnvDownsamplePass->getRootVar();
+        ShaderVar passVar = var["gPrefiltEnvCubemapPass"];
+
+        passVar["outputDim"] = uint2(mipWidth, mipHeight);
+        passVar["source"].setSrv(mpPrefiltEnvCubemap->getSRV(mip - 1, 1, 0, 6));
+        passVar["sampler"].setSampler(mpPrefiltEnvSampler);
+        passVar["output"].setUav(mpPrefiltEnvCubemap->getUAV(mip, 0, 6));
+
+        mpPrefiltEnvDownsamplePass->execute(pRenderContext, uint3(mipWidth, mipHeight, 6));
+        pRenderContext->uavBarrier(mpPrefiltEnvCubemap.get());
+    }
+
+    logInfo("NeuralRadiosity: prefiltered environment cubemap is {}x{} with {} mip levels.", faceSize, faceSize, mipCount);
+    mPrefiltEnvDirty = false;
 }
 
 void NeuralRadiosity::bindScreenData(ShaderVar& var, const RenderData& renderData, const std::string& name)

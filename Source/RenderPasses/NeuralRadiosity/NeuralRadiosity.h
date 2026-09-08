@@ -339,6 +339,7 @@ private:
     void updatePrograms(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareResources(RenderContext* pRenderContext, const RenderData& renderData);
     bool prepareLighting(RenderContext* pRenderContext);
+    void preparePrefiltEnvCubemap(RenderContext* pRenderContext);
     void updateRenderTemporalHistory(RenderContext* pRenderContext);
     void clearRenderTemporalHistory(RenderContext* pRenderContext);
     void bindScreenData(ShaderVar& var, const RenderData& renderData, const std::string &name);
@@ -398,9 +399,12 @@ private:
     ref<Buffer> mpRenderSpecTemporalHistory;
     ref<Texture> mpRenderTempColor;
     ref<Texture> mpPostFilterTempColor;
+    ref<Texture> mpPrefiltEnvCubemap;
+    ref<Sampler> mpPrefiltEnvSampler;
     bool mRenderSpecTemporalHistoryValid = false;
     bool mHasRenderCameraViewProj = false;
     float4x4 mRenderCameraViewProj = float4x4();
+    bool mPrefiltEnvDirty = true;
 
     // Scene & Compute Passes
     ref<Scene> mpScene;
@@ -415,6 +419,8 @@ private:
     ref<ComputePass> mpCompactBatch;
     ref<ComputePass> mpResolveBatch;
     ref<ComputePass> mpConeTrace;
+    ref<ComputePass> mpPrefiltEnvInitPass;
+    ref<ComputePass> mpPrefiltEnvDownsamplePass;
     ref<SampleGenerator> mpSampleGenerator;
     std::unique_ptr<PrefixSum> mpPrefixSum;
     std::unique_ptr<EmissiveLightSampler> mpEmissiveSampler;    ///< Emissive light sampler or nullptr if not used.

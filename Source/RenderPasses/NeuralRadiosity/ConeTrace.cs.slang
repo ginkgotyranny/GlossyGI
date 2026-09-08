@@ -4,6 +4,7 @@ import Rendering.Materials.IsotropicGGX;
 import PathState;
 import RayTraceHelper;
 import NetworkParams;
+import PrefiltEnvCubemap;
 
 #include "Utils/Math/MathConstants.slangh"
 
@@ -613,8 +614,8 @@ struct ConeTrace
             // Calculate lobe info.
             dir = reflect(dir, sd.frame.N);
             float lutPos = roughness * kLutSize;
-            uint lutIdx = (uint) lutPos;
-            float frac = lutPos - lutIdx;
+            uint lutIdx = min((uint) lutPos, kLutSize - 2);
+            float frac = saturate(lutPos - lutIdx);
             tanLobe = lerp(gTanLobeLUT[lutIdx], gTanLobeLUT[lutIdx + 1], frac);
             cosLobe = lerp(gCosLobeLUT[lutIdx], gCosLobeLUT[lutIdx + 1], frac);
         }
@@ -891,7 +892,9 @@ struct ConeTrace
             specInput[pixIdx].data[SpecNetInput::posOffset + 2] = (Real) pos.z;
 
             // Write prefiltered env map color
-            float3 envColor = gScene.envMap.eval(dir);
+            float3 envColor = gPrefiltEnv.valid != 0 ? gPrefiltEnv.eval(dir, roughness) :
+                (gPrefiltEnv.fallbackValid != 0 ? gScene.envMap.eval(dir) : float3(0.f));
+            // float3 envColor = float3(0.f);
             specInput[pixIdx].data[SpecNetInput::envColorOffset + 0] = (Real) envColor.x;
             specInput[pixIdx].data[SpecNetInput::envColorOffset + 1] = (Real) envColor.y;
             specInput[pixIdx].data[SpecNetInput::envColorOffset + 2] = (Real) envColor.z;
