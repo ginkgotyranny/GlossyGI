@@ -92,11 +92,16 @@ elseif(FALCOR_LINUX)
 endif()
 
 # Pull dependencies at configure time.
-message(STATUS "Updating packman dependencies ...")
-execute_process(
-    COMMAND ${PACKMAN} pull ${CMAKE_SOURCE_DIR}/dependencies.xml --platform ${PACKMAN_PLATFORM}
-    COMMAND_ERROR_IS_FATAL ANY
-)
+option(FALCOR_SKIP_PACKMAN_PULL "Skip packman pull at configure time (deps already present)" OFF)
+if(NOT FALCOR_SKIP_PACKMAN_PULL)
+    message(STATUS "Updating packman dependencies ...")
+    execute_process(
+        COMMAND ${PACKMAN} pull ${CMAKE_SOURCE_DIR}/dependencies.xml --platform ${PACKMAN_PLATFORM}
+        COMMAND_ERROR_IS_FATAL ANY
+    )
+else()
+    message(STATUS "Skipping packman pull (FALCOR_SKIP_PACKMAN_PULL=ON)")
+endif()
 
 # -----------------------------------------------------------------------------
 # Misc
@@ -117,7 +122,11 @@ if(FALCOR_LINUX)
     set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
     set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0)
     # Keep CUDA host code ABI-compatible with prebuilt dependencies, same as C++.
-    set(CMAKE_CUDA_FLAGS ${CMAKE_CUDA_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0)
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0")
+    # Workaround: nvcc 12.0's bundled GCC frontend predates glibc 2.34+'s use of
+    # __builtin_dynamic_object_size in fortified headers (bits/wchar2.h, bits/stdio2.h, etc.).
+    # Disable _FORTIFY_SOURCE in CUDA compilations to avoid the undefined builtin error.
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -U_FORTIFY_SOURCE")
 endif()
 
 
@@ -226,13 +235,22 @@ message(STATUS "FALCOR_ENABLE_USD: ${FALCOR_ENABLE_USD}")
 
 add_custom_target(packman_dependencies DEPENDS packman_dependencies_stamp)
 set_target_properties(packman_dependencies PROPERTIES FOLDER "Misc")
-add_custom_command(
-    OUTPUT packman_dependencies_stamp
-    COMMAND ${PACKMAN} pull ${CMAKE_SOURCE_DIR}/dependencies.xml --platform ${PACKMAN_PLATFORM}
-    COMMAND ${CMAKE_COMMAND} -E touch packman_dependencies_stamp
-    MAIN_DEPENDENCY ${CMAKE_SOURCE_DIR}/dependencies.xml
-    COMMENT "Updating packman dependencies"
-)
+if(FALCOR_SKIP_PACKMAN_PULL)
+    add_custom_command(
+        OUTPUT packman_dependencies_stamp
+        COMMAND ${CMAKE_COMMAND} -E touch packman_dependencies_stamp
+        MAIN_DEPENDENCY ${CMAKE_SOURCE_DIR}/dependencies.xml
+        COMMENT "Skipping packman pull (FALCOR_SKIP_PACKMAN_PULL=ON)"
+    )
+else()
+    add_custom_command(
+        OUTPUT packman_dependencies_stamp
+        COMMAND ${PACKMAN} pull ${CMAKE_SOURCE_DIR}/dependencies.xml --platform ${PACKMAN_PLATFORM}
+        COMMAND ${CMAKE_COMMAND} -E touch packman_dependencies_stamp
+        MAIN_DEPENDENCY ${CMAKE_SOURCE_DIR}/dependencies.xml
+        COMMENT "Updating packman dependencies"
+    )
+endif()
 
 # -----------------------------------------------------------------------------
 # Shader file handling

@@ -12,10 +12,11 @@
     <dependency name="tools_clang-format" linkPath="tools/.packman/clang-format">
         <package name="clang-format" version="15.0.6-windows-x86_64" platforms="windows-x86_64"/>
     </dependency>
-    <!-- Media -->
+    <!-- Media (disabled: local media/scenes directory already populated)
     <dependency name="media" linkPath="media">
         <package name="falcor_media" version="7acdf8b0" />
     </dependency>
+    -->
     <!-- Libraries -->
     <dependency name="falcor_dependencies" linkPath="external/packman/deps">
         <package name="falcor_dependencies" version="f80dd590-${platform}" platforms="windows-x86_64 linux-x86_64" />

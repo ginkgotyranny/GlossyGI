@@ -57,6 +57,16 @@ if [ -d ${RTXDI_DIR} ]; then
     cp ${RTXDI_DIR}/RtxdiTypes.h ${RTXDI_TARGET_DIR}
 fi
 
+# Copy NRD SDK shaders
+NRD_DIR=${EXT_DIR}/nrd
+NRD_TARGET_DIR=${OUT_DIR}/shaders/nrd
+if [ -d ${NRD_DIR}/Shaders ]; then
+    mkdir -p ${NRD_TARGET_DIR}
+    cp -frp ${NRD_DIR}/Shaders ${NRD_TARGET_DIR}
+    cp -frp ${NRD_DIR}/Include ${NRD_TARGET_DIR}
+    cp -frp ${NRD_DIR}/Integration ${NRD_TARGET_DIR}
+fi
+
 # Copy NanoVDB
 NANOVDB_DIR=${EXT_DIR}/nanovdb
 NANOVDB_TARGET_DIR=${OUT_DIR}/shaders/nanovdb

@@ -1,0 +1,282 @@
+--- a/Source/RenderPasses/NeuralRadiosity/Model/Model.h
++++ b/Source/RenderPasses/NeuralRadiosity/Model/Model.h
+@@ -68,6 +68,11 @@
+     void inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
+     void train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
+ 
++    // [hashstat patch] Runtime hash-collision statistics (implementation at end of Model.cu).
++    // Counts collisions among the lattice points actually queried in this call, per grid and per level.
++    void debugHashCollisionStats(const char* tag, const precision_t* diffInput, uint32_t diffCount,
++                                 const precision_t* specInput, uint32_t specCount);
++
+     cudaStream_t stream(bool isTraining) const { return isTraining ? mTrainStream : mInferenceStream; }
+ 
+ private:
+--- a/Source/RenderPasses/NeuralRadiosity/Model/Model.cu
++++ b/Source/RenderPasses/NeuralRadiosity/Model/Model.cu
+@@ -375,6 +375,11 @@
+         );
+         mpSpecNet->inference(mInferenceStream, specInput, specOutput);
+     }
++
++    // [hashstat patch] runtime hash-collision stats (implementation at end of file)
++    debugHashCollisionStats("inference",
++                            diffBatchSize > 0 ? diffPtrs.inputPtr : nullptr, diffPtrs.size,
++                            specBatchSize > 0 ? specPtrs.inputPtr : nullptr, specPtrs.size);
+ }
+ 
+ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
+@@ -500,4 +505,253 @@
+     if (diffBatchSize > 0 || specBatchSize > 0) {
+         mpPrimGridOpt->step(mTrainStream, lossScale, mpPrimGridsFull->data(), mpPrimGrids->data(), mpPrimGridsGradient->data());
+     }
++
++    // [hashstat patch] runtime hash-collision stats (implementation at end of file)
++    debugHashCollisionStats("train",
++                            diffBatchSize > 0 ? diffPtrs.inputPtr : nullptr, diffPtrs.size,
++                            specBatchSize > 0 ? specPtrs.inputPtr : nullptr, specPtrs.size);
++}
++
++// ============================================================================
++// [hashstat patch] Runtime hash-collision statistics (debug feature).
++//
++// Reports, for each call of inference()/train(), the collisions among the
++// lattice points ACTUALLY queried in that call:
++//   points    = number of distinct lattice points queried
++//   entries   = number of distinct hash entries occupied
++//   colliding = points sharing an entry with another point
++//   pairs     = collision pairs (sum of C(cnt,2) over entries)
++// Dense levels ((res+1)^3 <= 2^log2HashMapSize) use bijective indexing and
++// never collide; only their point counts are reported.
++//
++// Environment variables (set before launching Mogwai):
++//   NCR_HASHSTAT_INTERVAL    analyze once every N calls of inference()/train().
++//                            Default 60 (about once per second at 60 fps).
++//                            Set 1 to print on every call (costly: analysis
++//                            runs on the CPU and will drop the frame rate).
++//   NCR_HASHSTAT_MAX_SAMPLES max samples analyzed per call (stride sampling).
++//                            Default 65536; set 0 to analyze all samples.
++// ============================================================================
++
++#include <cuda_fp16.h>
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <unordered_map>
++#include <unordered_set>
++#include <vector>
++
++namespace {
++
++struct HashstatLevel {
++    bool dense = false;
++    uint32_t resolution = 0;
++    uint64_t points = 0;
++    uint64_t entries = 0;
++    uint64_t colliding = 0;
++    uint64_t pairs = 0;
++};
++
++inline uint64_t hashstat_pack(uint32_t x, uint32_t y, uint32_t z) {
++    return (uint64_t(x) << 44) | (uint64_t(y) << 22) | uint64_t(z);
++}
++
++// Replicates the GPU uint32 arithmetic:
++//   (x*1 + y*19349663 + z*83492791) mod 2^32, then low log2Table bits.
++inline uint32_t hashstat_hash(uint32_t x, uint32_t y, uint32_t z, uint32_t log2Table) {
++    const uint64_t s = uint64_t(x) + uint64_t(y) * 19349663ull + uint64_t(z) * 83492791ull;
++    return uint32_t(s & 0xFFFFFFFFull) & ((1u << log2Table) - 1u);
++}
++
++inline void hashstat_add_corners(std::unordered_set<uint64_t>& pts, float px, float py, float pz, uint32_t res) {
++    const uint32_t bx = uint32_t(px * res);
++    const uint32_t by = uint32_t(py * res);
++    const uint32_t bz = uint32_t(pz * res);
++    for (int c = 0; c < 8; ++c) {
++        pts.insert(hashstat_pack(bx + uint32_t(c & 1), by + uint32_t((c >> 1) & 1), bz + uint32_t((c >> 2) & 1)));
++    }
++}
++
++inline void hashstat_finish(HashstatLevel& s, std::unordered_set<uint64_t>& pts, uint32_t res, uint32_t log2Table) {
++    s.resolution = res;
++    s.points = pts.size();
++    const uint64_t denseMax = (uint64_t(res) + 1) * (uint64_t(res) + 1) * (uint64_t(res) + 1);
++    if (denseMax <= (1ull << log2Table)) {
++        s.dense = true; // bijective indexing, no collisions by construction
++    } else {
++        std::unordered_map<uint32_t, uint32_t> cnt;
++        cnt.reserve(pts.size() * 2);
++        for (const uint64_t p : pts) {
++            const uint32_t x = uint32_t(p >> 44);
++            const uint32_t y = uint32_t((p >> 22) & 0x3FFFFF);
++            const uint32_t z = uint32_t(p & 0x3FFFFF);
++            ++cnt[hashstat_hash(x, y, z, log2Table)];
++        }
++        s.entries = cnt.size();
++        for (const auto& kv : cnt) {
++            if (kv.second > 1) {
++                s.colliding += kv.second - 1;
++                s.pairs += uint64_t(kv.second) * (kv.second - 1) / 2;
++            }
++        }
++    }
++}
++
++inline void hashstat_report(const char* grid, const char* tag, const std::vector<HashstatLevel>& levels, double ms) {
++    uint64_t tPoints = 0, tColliding = 0, tPairs = 0;
++    for (const auto& s : levels) {
++        if (!s.dense) {
++            tPoints += s.points;
++            tColliding += s.colliding;
++            tPairs += s.pairs;
++        }
++    }
++    std::printf("[hashstat] ===== %s (%s), analysis %.1f ms =====\n", grid, tag, ms);
++    for (const auto& s : levels) {
++        if (s.dense) {
++            std::printf("[hashstat]   res=%4u [dense] points=%8llu  collisions=0\n",
++                        s.resolution, (unsigned long long)s.points);
++        } else {
++            std::printf("[hashstat]   res=%4u [hash ] points=%8llu entries=%8llu colliding=%8llu pairs=%8llu\n",
++                        s.resolution, (unsigned long long)s.points, (unsigned long long)s.entries,
++                        (unsigned long long)s.colliding, (unsigned long long)s.pairs);
++        }
++    }
++    std::printf("[hashstat]   TOTAL (hash levels only): points=%llu colliding=%llu pairs=%llu\n",
++                (unsigned long long)tPoints, (unsigned long long)tColliding, (unsigned long long)tPairs);
++}
++
++} // namespace
++
++void NRModel::debugHashCollisionStats(const char* tag, const precision_t* diffInput, uint32_t diffCount,
++                                      const precision_t* specInput, uint32_t specCount) {
++    static uint32_t sCall = 0;
++    static int sInterval = -1;
++    static uint32_t sMaxSamples = 65536;
++    if (sInterval < 0) {
++        sInterval = 60;
++        if (const char* e = std::getenv("NCR_HASHSTAT_INTERVAL")) sInterval = std::atoi(e);
++        if (const char* e = std::getenv("NCR_HASHSTAT_MAX_SAMPLES")) sMaxSamples = uint32_t(std::atoi(e));
++        std::printf("[hashstat] enabled: interval=%d calls, max samples=%u "
++                    "(env NCR_HASHSTAT_INTERVAL / NCR_HASHSTAT_MAX_SAMPLES)\n", sInterval, sMaxSamples);
++    }
++    ++sCall;
++    if (sInterval <= 0 || ((sCall - 1) % uint32_t(sInterval)) != 0) return;
++    if ((!diffInput || diffCount == 0) && (!specInput || specCount == 0)) return;
++
++    const auto t0 = std::chrono::steady_clock::now();
++
++    // Copy the relevant input rows back to host:
++    //   diff/spec main position (3 halfs per sample) and the spec cluster block
++    //   ([clsPos(3) | clsScale(1) | clsWeight(1)] x nClusters = 20 halfs per sample).
++    auto copyRows = [](const precision_t* src, uint32_t rowElems, uint32_t offsetElems, uint32_t count,
++                       uint32_t widthElems, std::vector<precision_t>& dst) {
++        dst.clear();
++        if (!src || count == 0) return;
++        dst.resize(size_t(count) * widthElems);
++        if (cudaMemcpy2D(dst.data(), size_t(widthElems) * sizeof(precision_t),
++                         src + offsetElems, size_t(rowElems) * sizeof(precision_t),
++                         size_t(widthElems) * sizeof(precision_t), count,
++                         cudaMemcpyDeviceToHost) != cudaSuccess) {
++            dst.clear();
++        }
++    };
++
++    std::vector<precision_t> hDiffPos, hSpecPos, hSpecCls;
++    if (diffInput && diffCount) copyRows(diffInput, mDiffInputDim, mDiffPosOffset, diffCount, 3, hDiffPos);
++    if (specInput && specCount) {
++        copyRows(specInput, mSpecInputDim, mSpecPosOffset, specCount, 3, hSpecPos);
++        const uint32_t clsWidth = mClsGridConfig.nClusters * 5;
++        copyRows(specInput, mSpecInputDim, mSpecClsPosOffset, specCount, clsWidth, hSpecCls);
++    }
++
++    const uint32_t diffStride = (sMaxSamples && diffCount > sMaxSamples) ? (diffCount + sMaxSamples - 1) / sMaxSamples : 1;
++    const uint32_t specStride = (sMaxSamples && specCount > sMaxSamples) ? (specCount + sMaxSamples - 1) / sMaxSamples : 1;
++    const uint32_t nDiff = diffCount ? (diffCount + diffStride - 1) / diffStride : 0;
++    const uint32_t nSpec = specCount ? (specCount + specStride - 1) / specStride : 0;
++
++    // ---------- HashGrid (primary grid): union of diff + spec main positions ----------
++    if (nDiff || nSpec) {
++        const uint32_t L = mPrimGridConfig.nLevels;
++        std::vector<HashstatLevel> levels(L);
++        std::unordered_set<uint64_t> pts;
++        uint32_t res = mPrimGridConfig.baseResolution;
++        for (uint32_t l = 0; l < L; ++l) {
++            pts.clear();
++            pts.reserve(size_t(nDiff + nSpec) * 8);
++            for (uint32_t i = 0; i < nDiff; ++i) {
++                const uint32_t j = i * diffStride;
++                hashstat_add_corners(pts, __half2float(hDiffPos[size_t(j) * 3 + 0]),
++                                            __half2float(hDiffPos[size_t(j) * 3 + 1]),
++                                            __half2float(hDiffPos[size_t(j) * 3 + 2]), res);
++            }
++            for (uint32_t i = 0; i < nSpec; ++i) {
++                const uint32_t j = i * specStride;
++                hashstat_add_corners(pts, __half2float(hSpecPos[size_t(j) * 3 + 0]),
++                                            __half2float(hSpecPos[size_t(j) * 3 + 1]),
++                                            __half2float(hSpecPos[size_t(j) * 3 + 2]), res);
++            }
++            hashstat_finish(levels[l], pts, res, mPrimGridConfig.log2HashMapSize);
++            res = uint32_t(float(res) * mPrimGridConfig.perLevelScale);
++        }
++        hashstat_report("HashGrid(primary)", tag, levels,
++                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
++    }
++
++    // ---------- HashGridInterp (cluster grid): per cluster, the two levels
++    // actually selected by its clsScale (both levels are always read by the kernel). ----------
++    if (!hSpecCls.empty()) {
++        const uint32_t L = mClsGridConfig.nLevels;
++        const uint32_t K = mClsGridConfig.nClusters;
++        std::vector<float> gridScales(L);
++        std::vector<uint32_t> resolutions(L);
++        {
++            float r = float(mClsGridConfig.baseResolution);
++            for (uint32_t i = 0; i < L; ++i) {
++                resolutions[i] = uint32_t(r);
++                gridScales[i] = mClsGridConfig.interpRatio / r;
++                r *= mClsGridConfig.perLevelScale;
++            }
++        }
++        std::vector<std::unordered_set<uint64_t>> ptsPerLevel(L);
++        for (uint32_t i = 0; i < nSpec; ++i) {
++            const uint32_t j = i * specStride;
++            const precision_t* cls = &hSpecCls[size_t(j) * (K * 5)];
++            for (uint32_t k = 0; k < K; ++k) {
++                const float px = __half2float(cls[k * 3 + 0]);
++                const float py = __half2float(cls[k * 3 + 1]);
++                const float pz = __half2float(cls[k * 3 + 2]);
++                const float scaleVal = __half2float(cls[K * 3 + k]);
++                // Replicate the kernel's upper/lower level search. Both levels
++                // are queried regardless of the inter-layer weights.
++                int upperLevel, lowerLevel;
++                {
++                    int level = int(L);
++                    for (int ii = 0; ii < int(L); ++ii) {
++                        if (scaleVal > gridScales[ii]) { level = ii; break; }
++                    }
++                    upperLevel = (level == 0) ? 0 : (level == int(L) ? int(L) - 1 : level);
++                }
++                {
++                    int level = -1;
++                    for (int ii = int(L) - 1; ii >= 0; --ii) {
++                        if (scaleVal < gridScales[ii]) { level = ii; break; }
++                    }
++                    lowerLevel = (level == -1) ? 0 : (level == int(L) - 1 ? int(L) - 1 : level);
++                }
++                hashstat_add_corners(ptsPerLevel[uint32_t(upperLevel)], px, py, pz, resolutions[uint32_t(upperLevel)]);
++                hashstat_add_corners(ptsPerLevel[uint32_t(lowerLevel)], px, py, pz, resolutions[uint32_t(lowerLevel)]);
++            }
++        }
++        std::vector<HashstatLevel> levels(L);
++        for (uint32_t l = 0; l < L; ++l) {
++            hashstat_finish(levels[l], ptsPerLevel[l], resolutions[l], mClsGridConfig.log2HashMapSize);
++        }
++        hashstat_report("HashGridInterp(cluster)", tag, levels,
++                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
++    }
++
++    std::printf("[hashstat] samples: diff %u/%u, spec %u/%u (stride-sampled)\n",
++                nDiff, diffCount, nSpec, specCount);
+ }

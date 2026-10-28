@@ -4,7 +4,7 @@ from falcor import *
 def render_graph_PathTracerNRD():
     g = RenderGraph("PathTracerNRD_VK")
 
-    GBufferRT = createPass("GBufferRT", {"samplePattern": "Halton", "sampleCount": 32, "useAlphaTest": True})
+    GBufferRT = createPass("GBufferRT", {"samplePattern": "Center", "sampleCount": 32, "useAlphaTest": True})
     g.addPass(GBufferRT, "GBufferRT")
 
     PathTracer = createPass("PathTracer", {"samplesPerPixel": 1, "maxSurfaceBounces": 16, "useRTXDI": True})

@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NCR (Neural Radiosity) 管线交互流程图 — Online Train 模式</title>
+<style>
+:root{
+  --c-boot:#64748b; --c-common:#7c3aed; --c-train:#d97706; --c-render:#2563eb; --c-out:#059669; --c-nn:#0891b2;
+  --bg:#f6f7f9; --panel:#ffffff; --ink:#1e293b; --muted:#64748b; --line:#e2e8f0;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+body{font-family:"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif; background:var(--bg); color:var(--ink); font-size:14px;}
+
+header{padding:18px 24px 10px; border-bottom:1px solid var(--line); background:var(--panel);}
+header h1{font-size:20px; font-weight:700;}
+header .sub{color:var(--muted); margin-top:4px; font-size:13px;}
+.toolbar{display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; align-items:center;}
+.toolbar .btn{border:1px solid var(--line); background:#fff; padding:5px 14px; border-radius:16px; cursor:pointer; font-size:13px; color:var(--ink);}
+.toolbar .btn.active{color:#fff; border-color:transparent;}
+.toolbar .btn.f-all.active{background:#334155;}
+.toolbar .btn.f-train.active{background:var(--c-train);}
+.toolbar .btn.f-render.active{background:var(--c-render);}
+.toolbar .btn.f-nn.active{background:var(--c-nn);}
+.legend{display:flex; gap:14px; margin-top:10px; flex-wrap:wrap; font-size:12px; color:var(--muted);}
+.legend span{display:inline-flex; align-items:center; gap:5px;}
+.legend i{width:12px; height:12px; border-radius:3px; display:inline-block;}
+
+.wrap{display:flex; align-items:flex-start;}
+.diagram-wrap{flex:1 1 auto; min-width:0; padding:20px; overflow:auto;}
+.detail{flex:0 0 420px; height:100vh; position:sticky; top:0; overflow-y:auto; background:var(--panel); border-left:1px solid var(--line); padding:20px;}
+@media (max-width:1100px){ .wrap{flex-direction:column;} .detail{flex:none; height:auto; width:100%; border-left:none; border-top:1px solid var(--line);} }
+
+.diagram{position:relative; min-width:1180px;}
+svg.overlay{position:absolute; left:0; top:0; pointer-events:none; z-index:5;}
+
+.lanes{display:flex; gap:26px; align-items:flex-start; position:relative; z-index:2;}
+.lane{display:flex; flex-direction:column; gap:14px; min-width:225px; flex:0 0 auto;}
+.lane-title{font-size:12px; font-weight:700; letter-spacing:.5px; color:#fff; padding:5px 10px; border-radius:6px; text-align:center;}
+.frame-box{border:2px dashed #94a3b8; border-radius:12px; padding:14px 16px 16px; display:flex; gap:26px; position:relative; background:rgba(255,255,255,.45);}
+.frame-box>.frame-label{position:absolute; top:-11px; left:14px; background:var(--bg); padding:0 8px; font-size:12px; font-weight:700; color:var(--muted);}
+.nnband{margin-top:34px; border:2px solid var(--c-nn); border-radius:12px; padding:16px 18px 18px; position:relative; background:rgba(255,255,255,.6); z-index:2;}
+.nnband>.frame-label{position:absolute; top:-11px; left:14px; background:#ecfeff; padding:0 8px; font-size:12px; font-weight:700; color:var(--c-nn);}
+.nngrid{display:grid; grid-template-columns:repeat(6, minmax(190px,1fr)); gap:18px 16px; align-items:start;}
+
+.node{background:var(--panel); border:1.5px solid var(--line); border-left-width:5px; border-radius:8px; padding:9px 11px; cursor:pointer; transition:box-shadow .15s, transform .15s; position:relative;}
+.node:hover{transform:translateY(-2px); box-shadow:0 6px 16px rgba(15,23,42,.14); z-index:6;}
+.node.selected{box-shadow:0 0 0 3px rgba(30,41,59,.25); z-index:7;}
+.node .num{position:absolute; top:-9px; left:-9px; width:22px; height:22px; border-radius:50%; color:#fff; font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center;}
+.node .t{font-weight:700; font-size:13.5px; margin-right:4px;}
+.node .zh{display:block; font-size:12px; color:var(--ink); margin-top:3px; font-weight:600;}
+.node .file{display:block; font-size:11px; color:var(--muted); margin-top:4px; font-family:Consolas,monospace; word-break:break-all;}
+.cat-boot  {border-left-color:var(--c-boot);}  .cat-boot .num{background:var(--c-boot);}
+.cat-common{border-left-color:var(--c-common);} .cat-common .num{background:var(--c-common);}
+.cat-train {border-left-color:var(--c-train);}  .cat-train .num{background:var(--c-train);}
+.cat-render{border-left-color:var(--c-render);} .cat-render .num{background:var(--c-render);}
+.cat-out   {border-left-color:var(--c-out);}    .cat-out .num{background:var(--c-out);}
+.cat-nn    {border-left-color:var(--c-nn);}     .cat-nn .num{background:var(--c-nn);}
+
+body.f-train .node:not(.cat-train), body.f-render .node:not(.cat-render), body.f-nn .node:not(.cat-nn){opacity:.16;}
+body.f-train svg .edge:not(.e-train), body.f-render svg .edge:not(.e-render), body.f-nn svg .edge:not(.e-nn){opacity:.08;}
+body.f-train .lane-title:not(.lt-train), body.f-render .lane-title:not(.lt-render){opacity:.3;}
+
+.detail h2{font-size:17px; margin-bottom:2px;}
+.detail .chip{display:inline-block; font-size:11px; color:#fff; padding:2px 9px; border-radius:10px; margin:8px 0 4px;}
+.detail .meta{margin:10px 0; border:1px solid var(--line); border-radius:8px; overflow:hidden;}
+.detail .meta div{display:flex; border-bottom:1px solid var(--line); font-size:12.5px;}
+.detail .meta div:last-child{border-bottom:none;}
+.detail .meta b{flex:0 0 76px; background:#f8fafc; padding:6px 10px; color:var(--muted); font-weight:600;}
+.detail .meta span{padding:6px 10px; flex:1;}
+.detail h3{font-size:13px; margin:16px 0 6px; padding-bottom:4px; border-bottom:2px solid var(--line);}
+.detail ul{padding-left:18px;}
+.detail li{margin:4px 0; font-size:13px; line-height:1.55;}
+.detail p{font-size:13px; line-height:1.7; margin:6px 0;}
+.detail code{background:#f1f5f9; padding:1px 5px; border-radius:4px; font-size:12px; font-family:Consolas,monospace;}
+.detail a{color:#2563eb; text-decoration:none;}
+.detail a:hover{text-decoration:underline;}
+.detail .hint{color:var(--muted); font-size:13px; line-height:1.8;}
+.in-list li::marker{color:#2563eb;}
+.out-list li::marker{color:#059669;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>NCR（Neural Radiosity）每帧完整管线 — Online Train 模式</h1>
+  <div class="sub">操作路径：<code>./run.sh</code> → 选择 <code>ncr</code>（scripts/NeuralRadiosity.py）→ 选择场景 → 编辑器 UI 中 NeuralRadiosity → Render Mode = <b>Online Train</b>。此模式下每帧依次执行 <b>训练管线（train）</b> + <b>渲染管线（render）</b>，二者共享同一套 CUDA 神经网络。<b>点击任意节点查看该管线的输入 / 输出 / 作用 / 调度等详细信息。</b></div>
+  <div class="toolbar">
+    <button class="btn f-all active" data-f="all">全部</button>
+    <button class="btn f-train" data-f="train">高亮：训练管线</button>
+    <button class="btn f-render" data-f="render">高亮：渲染管线</button>
+    <button class="btn f-nn" data-f="nn">高亮：神经网络</button>
+  </div>
+  <div class="legend">
+    <span><i style="background:var(--c-boot)"></i>启动 / 设置</span>
+    <span><i style="background:var(--c-common)"></i>每帧公共准备</span>
+    <span><i style="background:var(--c-train)"></i>训练管线 train()</span>
+    <span><i style="background:var(--c-render)"></i>渲染管线 render()</span>
+    <span><i style="background:var(--c-out)"></i>输出</span>
+    <span><i style="background:var(--c-nn)"></i>CUDA 神经网络</span>
+    <span>—— 实线 = 主数据流&nbsp;&nbsp;┄┄ 虚线 = 跨管线 / 权重更新</span>
+  </div>
+</header>
+
+<div class="wrap">
+<div class="diagram-wrap">
+<div class="diagram" id="diagram">
+  <svg class="overlay" id="overlay"></svg>
+
+  <div class="lanes">
+
+    <div class="lane" id="lane-boot">
+      <div class="lane-title lt-boot" style="background:var(--c-boot)">① 启动与设置</div>
+    </div>
+
+    <div class="lane" id="lane-common">
+      <div class="lane-title lt-common" style="background:var(--c-common)">② 每帧公共准备</div>
+    </div>
+
+    <div class="frame-box">
+      <div class="frame-label">每帧 execute()（Render Mode = Online Train）</div>
+
+      <div class="lane" id="lane-trainA">
+        <div class="lane-title lt-train" style="background:var(--c-train)">③ 训练管线 · 采样与 RHS 网络引导</div>
+      </div>
+
+      <div class="lane" id="lane-trainB">
+        <div class="lane-title lt-train" style="background:var(--c-train)">④ 训练管线 · LHS 目标合成与更新</div>
+      </div>
+
+      <div class="lane" id="lane-render">
+        <div class="lane-title lt-render" style="background:var(--c-render)">⑤ 渲染管线 render()</div>
+      </div>
+
+      <div class="lane" id="lane-out">
+        <div class="lane-title lt-out" style="background:var(--c-out)">⑥ 输出</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="nnband">
+    <div class="frame-label">CUDA / tiny-cuda-nn 神经网络（推理与训练共享；三个调用方见虚线）</div>
+    <div class="nngrid" id="nngrid"></div>
+  </div>
+
+</div>
+</div>
+
+<aside class="detail" id="detail">
+  <h2>NCR 管线详情面板</h2>
+  <div class="chip" style="background:#334155">使用说明</div>
+  <p class="hint">
+    点击左侧流程图中的<b>任意节点</b>，此处将显示该管线的：<br>
+    · 源码文件与线程组 / 调度维度<br>
+    · 输入（来自哪些缓冲 / 数据）<br>
+    · 输出（写出哪些缓冲 / 纹理）<br>
+    · 作用与算法细节<br>
+    · 关键参数<br><br>
+    顶部按钮可按「训练 / 渲染 / 神经网络」高亮过滤管线。完整文字版说明见同目录《NCR管线说明文档.md》。
+  </p>
+</aside>
+</div>
+
+<script>
+"use strict";
+const P = "../Falcor-stage3/Source/RenderPasses/NeuralRadiosity/"; // 源码相对路径
+
+// ---------------- 节点数据 ----------------
+// lane: boot/common/trainA/trainB/render/out/nn1..nn6(网格列)
+const NODES = [
+// ============ 启动 ============
+{ id:"b1", lane:"boot", cat:"boot", num:"启动", t:"run.sh", zh:"启动器", file:"run.sh",
+  meta:{调度:"bash 交互选择",模式:"启动一次"},
+  inputs:["用户选择：脚本 ncr = scripts/NeuralRadiosity.py","用户选择：场景（bathroom / living-room / …，可加 anim 选动画版 scene-animation.pyscene）"],
+  outputs:["Mogwai 进程：build/linux-gcc/bin/Release/Mogwai --script … --scene …（LD_PRELOAD libpng16）"],
+  purpose:[
+    "统一启动入口。注册了脚本快捷名（ncr / ptnrd / ptdn / pt / mpt / gbuffer / rtxdi / bsdf / debug / ward），扫描 media/scenes/ 下的场景目录，静态版对应 scene-v4.pyscene，动画版对应 scene-animation.pyscene，默认窗口 1280×720。",
+    "注意必须带 LD_PRELOAD=/lib/x86_64-linux-gnu/libpng16.so.16（系统 libpng 版本冲突的 workaround）。"
+  ],
+  params:["--width/--height 可调分辨率"] },
+
+{ id:"b2", lane:"boot", cat:"boot", num:"加载", t:"RenderGraph 构建", zh:"NeuralRadiosity.py", file:"scripts/NeuralRadiosity.py",
+  meta:{调度:"Python 脚本",模式:"启动一次"},
+  inputs:["Falcor Python API（falcor 模块）"],
+  outputs:["RenderGraph：NeuralRadiosity.color → ToneMapper.src，ToneMapper.dst 标记为输出"],
+  purpose:[
+    "创建两个 pass：createPass(\"NeuralRadiosity\")（本算法插件，C++ 侧通过 FALCOR_PLUGIN_CLASS 注册）和 ToneMapper（色调映射，autoExposure=False）。",
+    "图的唯一被消费输出是 NeuralRadiosity 的 color 通道；pass 声明的其余 7 个输出通道（vbuffer/active/pos/dir/normal/albedo/roughness）只作为调试信息存在。pass 没有任何输入通道——它自己做全部光线追踪。"
+  ],
+  params:[] },
+
+{ id:"b3", lane:"boot", cat:"boot", num:"设置", t:"Render Mode = Online Train", zh:"UI 设置（renderUI）", file:"NeuralRadiosity.cpp · renderUI()",
+  meta:{调度:"ImGui 下拉框",模式:"用户切换时触发"},
+  inputs:["用户在编辑器 NeuralRadiosity 面板中的选择"],
+  outputs:["setConeParameters(false)：NUM_SPEC_RAYS 128→32、KMeans 迭代 10→3（重建 ConeTrace 着色器）","mpNRModel->setOnline(true)：网络进入在线（EMA）模式","mVarsChanged = true → 下一帧重建/重分配资源"],
+  purpose:[
+    "四种模式：Idle（什么都不做）/ Render（纯推理）/ Train（离线训练，可加载训练相机 json，每 1000 步存 ckpt，20000 步自动结束）/ Online Train（每帧训练 + 渲染，适合动态场景，LHS 从当前相机采样）。",
+    "Online Train 与 Train 的完整参数差异（详见《NCR管线说明文档.md》§2 对比表）：锥采光线 32 vs 128、KMeans 迭代 3 vs 10（一份 ConeTrace 着色器三批共用，档位由模式决定，切换触发重编译）；numRHS 恒 8 vs 自适应 8→64；batchSize 恒 32768 vs 32768→4096；LHS 用当前相机 vs 随机训练相机；Online Train 额外每帧 render() 且不存 ckpt。⚠ 从 Train 中途切 Online Train 不重置 numRHS/batchSize。"
+  ],
+  params:["同面板可选：Use NEE / Temporal Spec Reuse（当前无效，见说明）/ Cone Trace Reuse Mode（当前无效）/ Post Filter / FXAA","Load/Save model state：加载或保存 .ckpt；Resume training from ckpt：从断点继续训练"] },
+
+// ============ 公共准备 ============
+{ id:"c0", lane:"common", cat:"common", num:"入口", t:"execute()", zh:"每帧入口与模式分发", file:"NeuralRadiosity.cpp:160",
+  meta:{调度:"由 RenderGraph 每帧调用",模式:"全部模式"},
+  inputs:["RenderData（输出纹理句柄）、场景、相机"],
+  outputs:["按模式调用 train() 和/或 render()；mFrameCount++"],
+  purpose:[
+    "顺序：updateFrameDim（帧尺寸）→ prepareLighting → updatePrograms → prepareResources →（时序历史更新，当前禁用）→ train()（Train/OnlineTrain）→ render()（Render/OnlineTrain）。",
+    "Online Train 模式下两条管线都执行：先训练、后渲染——渲染时使用的已经是本帧更新过 EMA 权重的网络。"
+  ],
+  params:[] },
+
+{ id:"c1", lane:"common", cat:"common", num:"灯光", t:"prepareLighting()", zh:"自发光光源采样器", file:"NeuralRadiosity.cpp:1060",
+  meta:{调度:"每帧（CPU 侧）",模式:"全部模式"},
+  inputs:["场景的 ILightCollection（自发光三角形集合）"],
+  outputs:["EmissiveUniformSampler（供 SampleRHS 的 NEE 使用），灯光变化时每帧更新"],
+  purpose:["为 NEE（下一事件估计）准备自发光光源的均匀采样器；没有自发光光的场景为空。解析光（ analytic lights）由场景直接提供，环境光不参与 NEE（由 BSDF 采样 miss 时求值）。"],
+  params:[] },
+
+{ id:"c2", lane:"common", cat:"common", num:"编译", t:"updatePrograms / prepareResources", zh:"着色器编译 + 资源分配", file:"NeuralRadiosity.cpp:764 / 972",
+  meta:{调度:"首帧或 mVarsChanged 时",模式:"全部模式"},
+  inputs:["Slang 着色器文件（9 个 .cs.slang + PrefiltEnvCubemap）、场景 defines、帧尺寸/批量参数"],
+  outputs:["10 个 ComputePass（Slang 编译）","NRModel（CUDA 神经网络，首帧创建）","3 个 RayBatchBuffer + mpRenderTempColor / mpPostFilterTempColor 中间纹理"],
+  purpose:[
+    "编译所有计算着色器并绑定静态资源（场景加速结构、SampleGenerator）。头一次创建约需数百毫秒（日志会打印 Screen passes / Batch passes / NRModel 创建耗时）。",
+    "屏幕 pass 的 defines 携带关键常量：SPECULAR_ROUGHNESS_THRESHOLD=0.5、NUM_SPEC_RAYS、NUM_KMEANS_ITERS、NUM_CLUSTERS=4、NUM_RHS、RS_RR_PROB=0.4 等——切换渲染/训练档会重建 ConeTrace。"
+  ],
+  params:[] },
+
+{ id:"c3", lane:"common", cat:"common", num:"缓冲", t:"RayBatchBuffer ×3", zh:"共享互操缓冲 + CUDA 同步", file:"NeuralRadiosity.h:42",
+  meta:{调度:"—",模式:"全部模式"},
+  inputs:["Graphics 与 CUDA 双侧读写"],
+  outputs:["RenderBatch（W×H）/ LHSBatch（32768）/ RHSBatch（32768×8）"],
+  purpose:[
+    "每份批次包含：全量 G-Buffer（pos/dir/normal/albedo/roughness/vbuffer/color/emission，仅 needAll 批次）+ 漫反射紧凑列表（diffActive→PrefixSum→diffIndex/diffSize，diffInput，diffColor）+ 光泽紧凑列表（specActive/specIndex/specSize，specInput/specColor，specVBuffer/specPixel/specPos/specDir/specRoughness）。",
+    "<b>字段分类（哪些是「样本点的信息」）：</b>pos / normal / albedo / roughness / vbuffer 是样本点自身的属性；dir 不是点的属性——它是独立随机采样的查询方向 wi，属于网络查询对 (x, wi) 的方向分量；color（吞吐量）也不是点的属性，而是「路径」的属性（到达该点沿途累积的 BSDF 权重）。",
+    "<b>vbuffer：</b>hit.pack() 得到的 PackedHitInfo（uint2/uint4），打包「命中类型 + instanceID + primitiveIndex + 重心坐标」= 打中了哪个实例的哪个三角形的哪个位置。它是几何「句柄」而非属性快照：下游用 unpackHitInfo → loadShadingData 不重新发射光线即可重建该点全部着色数据（材质、GGX alpha、纹理求值…）。SampleRHS 用 lhsVBuffer 还原 LHS 材质；ConeTrace 用 specVBuffer 还原光泽样本材质。与缓存的 normal/albedo/roughness 构成「廉价快照 vs 权威重建」的冗余。",
+    "<b>allColor 语义变迁（RHS 批上会被覆写）：</b>① RandomSmooth/LHS 批写入吞吐量 thp（遗留，无人消费）→ ② SampleRHS/RHS 批写入路径段吞吐量（终点为自发光面/环境时直接写终值 thp×emission 并标记 inactive）→ ⑥ ResolveBatch 覆写为完整单样本辐射度估计 allColor = thp × netColor + allEmission(NEE)（inactive 保持原值）→ ⑨ ResolveRHS 将每 LHS 的 8 条平均成训练目标。",
+    "所有缓冲带 ResourceBindFlags::Shared，通过 getCudaMemory()->getMappedData() 被 CUDA 零拷贝映射。GPU API 与 CUDA 用外部信号量互等：waitForFalcor(stream) / waitForCuda(stream)。",
+    "注意区分：批式稀疏 G-Buffer（all* 前缀，按样本编号索引，点随机分布在场景表面）与 FirstSmoothPass 的屏幕 G-Buffer（g* 前缀，按像素索引）同名字段、不同域。"
+  ],
+  params:["RenderBatch 只建 diff/spec 紧凑缓冲（needAll=false）","批量随模式/尺寸变化时按需扩容（resize 只增不减）"] },
+
+// ============ 训练管线 A ============
+{ id:"t1", lane:"trainA", cat:"train", num:"①", t:"RandomSmooth", zh:"LHS 训练点采样", file:"RandomSmooth.cs.slang",
+  meta:{调度:"总线程 = batchSize = 32768（[numthreads(256,1,1)] 仅为打包粒度：128 组 × 256 线程；execute 传入的是总线程数，Falcor 自动换算组数）",模式:"Train / OnlineTrain"},
+  inputs:["相机（OnlineTrain=当前视图相机；Train=每帧随机切换训练相机）","场景加速结构 + 材质（gScene）"],
+  outputs:["样本点属性：pos（沿法线偏移 epsilon）/ normal / albedo（金属用镜面反照率）/ roughness / vbuffer（命中句柄：instanceID+三角形+重心坐标）","查询方向：dir = 独立随机采的 wi（不是点的属性，属查询对 (x, wi)）","路径属性：allColor = 吞吐量 thp（LHS 批此值后续无人消费）","diffActive/specActive 掩码（粗糙度阈值 0.5 分流）"],
+  purpose:[
+    "<b>① 随机初始光线：</b>每线程从相机成像平面<b>全域均匀</b>随机取 uv（[0,1]²，与屏幕像素不对齐，数量也与像素数无关——32768 条「探针」光线，而非每像素一条），映射为 pinhole 光线发射。等价于在「相机可见表面」上做重要性采样：训练样本自然集中在当前视图看得见的区域（OnlineTrain 用当前相机；离线 Train 每帧先随机切换训练相机再采样）。",
+    "<b>② 每步追踪分支：</b>命中 <b>delta 纯镜面/理想玻璃</b> → 无条件继续传播（不参与轮盘赌；注意粗糙玻璃不是 delta，走下一分支）；命中<b>光滑表面（非 delta）</b> → 俄罗斯轮盘：u≥0.4（60%）<b>跳过该点</b>继续按 BSDF 传播，u&lt;0.4（40%）<b>★停在此处、选中为训练样本</b>——「停止」是采样成功而非失败，轮盘让训练点沿路径随机分布在不同深度，而不是全挤在第一个可见表面；<b>miss / 自发光面 / 背面 / BSDF 采样失败</b>（四种情况）→ 整条作废，换种子<b>重投一条全新的随机光线</b>。",
+    "<b>③ 步数预算：</b>传播与重投<b>合计</b>最多 16 步（kMaxRecursionDepth 为共享预算，不是「重投最多 16 次」），超限则该样本作废（terminate → inactive，后续被 PrefixSum 紧凑化剔除）。",
+    "<b>④ 查询方向 wi：</b>选中样本点后，按 cosine 半球<b>重新独立随机</b>采一个入射方向 wi 作为网络查询方向——与光线的入射方向完全解耦，网络学习的是 L(x, wi)。",
+    "本质：在场景所有从相机可达的光滑表面上随机分布训练查询点 (x, wi)。",
+    "<b>吞吐量 thp 的计算：</b>thp 初始化 (1,1,1)，每次弹射在 generateScatterRay 中执行 <code>path.thp *= bs.weight</code>（bs.weight = f(V,ωo)·|cosθ|/pdf），选中样本时 allColor = thp。直觉：「终点发回 1 单位辐射度，传回起点还剩多少」——纯镜面恒 (1,1,1)，染色玻璃使其变色；被轮盘跳过的光滑面同样乘权重，轮盘概率本身不进 thp（选点策略，无需补偿）。RHS 批的 allColor 走「吞吐量 → ResolveBatch 覆写为 thp×netColor+NEE → 平均成训练目标」的完整旅程。完整推导见《NCR管线说明文档.md》§9.1。"
+  ],
+  params:["RS_RR_PROB=0.4（选中为样本的概率，即每步采样率）","kMaxRecursionDepth=16（传播+重投共享总预算）","kRandomWi=true（wi 独立于入射方向重新采样）","alpha test / 法线修正可配"] },
+
+{ id:"t2", lane:"trainA", cat:"train", num:"②", t:"SampleRHS", zh:"RHS 路径采样 + NEE(MIS)", file:"SampleRHS.cs.slang",
+  meta:{调度:"[numthreads(NUM_RHS,1,1)]：组=LHS 样本，线程=RHS 编号；dispatch batchSize",模式:"Train / OnlineTrain"},
+  inputs:["LHS 的 pos/dir/vbuffer/active（反解材质）","emissiveSampler + 解析光源","gScene"],
+  outputs:["RHSBatch（32768×8）G-Buffer + rhsColor（BSDF 路径贡献×misBSDF）+ rhsEmission（NEE 贡献×misNEE）+ 掩码"],
+  purpose:[
+    "每个 LHS 采样 mNumRHS（初始 8）条右手项路径：① NEE——按光源类型选择（自发光/解析），采样光源并做阴影光线遮挡测试，MIS 权重：解析光=1.0，自发光=幂启发式 pdf/(pdf+bsdfPdf)；② BSDF 采样一条散射光线，追踪到下一个光滑交互点 / 自发光面 / 环境（中途 delta 面继续传播），首个光滑点记为 RHS 交互，其颜色=吞吐量×misBSDF（BSDF 命中自发光三角时同样做 MIS）。",
+    "RHS 交互点将在后续步骤用当前网络做自举（bootstrap）估计，再经 ResolveRHS 平均，构成 LHS 的单步路径追踪监督目标。",
+    "<b>采样权重 bs.weight：</b><code>mi.sample</code> 返回 <code>bs.weight = f(V,ωo)·|cosθ|/pdf(ωo)</code>——渲染方程蒙特卡洛估计的「已知部分 ÷ 采样概率」。pdf 补偿保证无偏：每个样本代表 1/p 大小的域，采得勤的方向权重压低、采得稀的抬高。Lambert+cosine 采样时 weight 恰好约成 albedo（方差最小）；GGX 用 NDF 采样抵消不干净 → weight 方差大 → 光泽路径噪声的根源。f 即 BSDF（反射+透射统一接口，BRDF 是其不透明特例），详见《NCR管线说明文档.md》§9.2–9.3。",
+    "<b>每 LHS 光线账单（×8 线程，各带独立随机数）：</b>NEE 阴影光线 0/8 条（只测通视、不找点，每线程至多一条）+ BSDF 散射光线 8 条（★找 RHS 点的光线，按材质重要性采样）+ delta 续接 0–120 条（穿镜面/玻璃，与首条共享 16 次循环预算）。典型场景每 LHS ≈ 16 条；每帧 32768×8 = 262144 条 RHS 路径。",
+    "<b>first smooth 循环（无轮盘赌、无重投——与 RandomSmooth 的本质区别）：</b>五种结局：命中光滑面 = ★成功（break 且保持 active → 进网络自举）；miss → thp×env；命中自发光面 → thp×emission×misBSDF；背面 → 0；delta 面 BSDF 采样失败 → 0（后四种 inactive 但保留终值计入平均）。⚠ 16 次全撞 delta 面时循环耗尽仍 active，会产生「原点伪样本」（概率极低的边界情况）。",
+    "<b>NEE 细节：</b>只在 LHS 点做（RHS 端点的直接光已含在网络预测内；delta 顶点数学上不可光源采样——delta 瓣是针状分布）；光源选择两级随机——等概率抽类别（env 恒不启用 → 自发光/解析 50/50）→ EmissiveUniformSampler 等概率抽自发光三角形（1/三角形数，不按亮度加权）→ 两级概率均需补偿（ls.pdf *= selectionPdf）。亮度悬殊场景可换 EmissivePowerSampler 降方差（构造处 NeuralRadiosity.cpp:1077）。完整概念见《NCR管线说明文档.md》§9.4。"
+  ],
+  params:["NUM_RHS 初始 8（batchSize 32768）；自适应调度【仅 Train 模式】每 1/4 进度 numRHS ×2（8→16→32→64）且 batchSize ÷2，RHS 总射线数恒为 2^18；Online Train 不执行该调度、恒为 8×32768（⚠ 例外：从训练中途的 Train 切到 Online Train 会沿用当时的 numRHS/batchSize，切换时不重置）","useNEE 需场景存在自发光或解析光"] },
+
+{ id:"t3", lane:"trainA", cat:"train", num:"③", t:"CompactBatch (RHS)", zh:"PrefixSum + 批次紧凑化", file:"CompactBatch.cs.slang",
+  meta:{调度:"PrefixSum×2 + [numthreads(256,1,1)] × batchSize×numRHS",模式:"Train / OnlineTrain"},
+  inputs:["RHSBatch 的 diffActive/specActive 掩码与 G-Buffer","场景 AABB"],
+  outputs:["rhsDiffSize / rhsSpecSize","紧凑 diffInput（位置归一化到 AABB）","紧凑 specInput + specPos/specDir/specRoughness/specVBuffer/specPixel（伪像素坐标=随机种子）"],
+  purpose:[
+    "流式紧凑化（stream compaction）两阶段：<b>① PrefixSum×2</b>——对 Index 缓冲做 in-place exclusive 扫描（y[i]=x[0]+…+x[i-1]），把掩码变成紧凑下标，同时回读 diffSize/specSize 到 CPU（每次带一次 GPU 同步，每帧共 6 个此类同步点）；<b>② 着色器 gather</b>——每线程一个稀疏槽，active 则把 G-Buffer 搬到紧凑槽。只为有效样本花网络算力；DiffNet(32维)/SpecNet(64维) 各排各的稠密数组；归一化预处理集中在此。",
+    "<b>双缓冲约定：</b>写入时 Active=Index（同一掩码写两遍）；PrefixSum 后 Active 永不改动（回答「槽 i 是否有效」——③搬不搬、⑥/⑨合不合并的开关），Index 变成映射表（回答「槽 i 在紧凑数组第几位」——寻址；inactive 槽的值无意义但永不被读）。此约定贯穿 spec 侧、屏幕 ⑫、所有 scatter 回 pass。",
+    "<b>diff 与 spec 的不对称：</b>diff 的 pos 在此归一化到 AABB；spec 的 pos 保持<b>世界坐标</b>——还要经过 ④ ConeTrace，锥采必须在世界系做光线追踪与簇位置计算（clsPos = pos + mean×dir），归一化推迟到 ConeTrace 的 writeOutput。specInput 此时只有 GBuffer 段，编码段[0..11]（CUDA HashGrid 填）与簇特征段（ConeTrace 填）留空。specPixel 写伪像素坐标 uint2(idx&0xFFF, idx>>12)（batch idx 编码的随机种子）。"
+  ],
+  params:["输入布局与 32/64 维含义见《NCR管线说明文档.md》§6.1（输入维度=每样本特征向量长度，padUp(…,16) 为 tcnn 半精度对齐要求）"] },
+
+{ id:"t4", lane:"trainA", cat:"train", num:"④", t:"ConeTrace (RHS)", zh:"锥体采样 + KMeans 聚类", file:"ConeTrace.cs.slang",
+  meta:{调度:"[numthreads(NUM_SPEC_RAYS,1,1)] × specSize 组：一组=一个光泽样本（NUM_SPEC_RAYS：Train 128 / Render·OnlineTrain 32——一份着色器三个批共用，档位只由模式决定）",模式:"Train / OnlineTrain / Render"},
+  inputs:["specPos/specDir/specRoughness/specVBuffer/specPixel","场景 AABB、gScene","预滤波环境立方图（当前禁用→回退 envMap.eval）"],
+  outputs:["specInput 的簇特征：4×clsPos（归一化）+ 4×clsScale + 4×clsWeight + 主位置 + envColor"],
+  purpose:[
+    "每个光泽样本一个线程组（NUM_SPEC_RAYS 条光线：Train 模式 128 / Render·OnlineTrain 模式 32——⚠ Online Train 下训练批也是 32）：① loadGroupData——线程0加载交互（禁用漫反射瓣），dir=reflect(dir,N)，按粗糙度查 32 项 LUT 得镜面瓣半径 tanLobe/cosLobe；② 每线程采样一条 GGX BSDF 方向（最多重试10次）并追踪得到命中距离 rayT；③ kMeansInt——wave 归约 + groupshared 协同的定点整数 KMeans（尺度 1e5，min-max 初始化，Train 10 次 / Render·OnlineTrain 3 次迭代），把 rayT 聚成 4 簇（mean/std/count）；④ writeOutput——clsPos=pos+mean×dir，clsScale=(std+tanLobe×mean)/2（统计方差∪锥角张开），clsWeight=count/numSpecRays。",
+    "直观理解：4 个簇 = 光泽反射「可能照到」的 4 团表面；clsScale 表征该团的空间不确定性（簇越散/锥越大→尺度越大→查更粗的网络层级）。",
+    "<b>机制细节（详见《NCR管线说明文档.md》§9.5–9.6）：</b>②的 GGX 方向聚在反射锚周围（h=N 时 wo=锚方向，反射使偏差加倍 2δ）；<b>miss 不重试</b>——重试只覆盖采样失败，miss 在 KMeans 三处 valid 掩码中剔除，逃逸能量由 envColor 补偿（每样本沿锚方向采一次环境：预滤波版按 90% 能量锥选 mip【当前禁用】→ 回退未模糊 envMap.eval → 无环境光则 0）；③的统计量：count=最后一轮原子计数、mean=最后一轮簇心（整数除法）、std=循环后按最终分配补算 √(ΣΔt²/count)，空簇 clsWeight=0 无害，clsWeight 分母固定为光线总数；④线程0另写主位置（specPos 归一化 AABB，<b>覆写</b>③的世界坐标版）——它是主 HashGrid 的查询坐标。<b>specInput 三位写入者：</b>③⑫写 GBuffer 段[31..40]、④写主位置/envColor/簇段[28..30,41..63]、⑤⑭CUDA in-place 写编码段[0..27]；padUp(256) 对齐尾部为陈旧条目（无害）。",
+    "<b>Train vs Online Train 参数对比</b>（详见《NCR管线说明文档.md》§2）：锥采光线 128/32、KMeans 迭代 10/3（档位由 Render Mode 决定，一份着色器三批共用，切换模式触发重编译卡顿）；numRHS 自适应 8→64 / 恒 8；batchSize 32768→4096 / 恒 32768；LHS 相机 随机训练相机 / 当前视图；render() ✗/✓；存 ckpt ✓/✗。⚠ 从 Train 中途切 Online Train 不重置 numRHS/batchSize。"
+  ],
+  params:["NUM_CLUSTERS=4","WAVE_SIZE=32（128 线程=4 个 wave，归约需跨 wave 二级汇总）","时序复用三种模式的代码当前被注释禁用，每帧独立聚类"] },
+
+{ id:"t5", lane:"trainA", cat:"train", num:"⑤", t:"ModelInference (RHS)", zh:"网络推理 · 自举", file:"Model/Model.cu · inference()",
+  meta:{调度:"CUDA 推理流；批 = padUp(size,256)",模式:"Train / OnlineTrain / Render"},
+  inputs:["rhsDiffPtrs：diffInput(diffSize) → diffColor","rhsSpecPtrs：specInput(specSize) → specColor"],
+  outputs:["RHS 的 diffColor / specColor（16 维输出的 RGB）"],
+  purpose:[
+    "对每条 RHS 路径的终点（下一光滑顶点）用当前网络（EMA 半精度权重）估计其出射辐射度——即用网络自身来「闭合」单步路径追踪，这就是 NCR 的自举（bootstrap）训练方式，不需要跑完整路径。",
+    "<b>跨 API 调用（C++ 函数而非 Slang pass）：</b>waitForFalcor → NRModel::inference → waitForCuda，图形/CUDA 队列用外部信号量互等。「调网络」= 编码（HashGrid+HashGridInterp，in-place 写 specInput[0..27]）+ FullyFusedMLP 前向的完整链条，纯前向、无梯度无参数更新。用 <b>EMA 半精度副本</b>（每帧 2 次推理+1 次训练共用同一套权重，仅批量不同）。自举用 EMA（滞后）而非工作权重 = target network 思想：避免「追自己正在移动的靶子」的 bootstrapped 回归发散。详见《NCR管线说明文档.md》§9.7。"
+  ],
+  params:[] },
+
+{ id:"t6", lane:"trainA", cat:"train", num:"⑥", t:"ResolveBatch (RHS)", zh:"RHS 辐射度合成", file:"ResolveBatch.cs.slang",
+  meta:{调度:"[numthreads(256,1,1)] × batchSize×numRHS",模式:"Train / OnlineTrain"},
+  inputs:["RHS allColor（吞吐量）、diffColor/specColor（网络输出）、allEmission（NEE 颜色）","diffIndex/specIndex"],
+  outputs:["RHSBatch.allColor = 吞吐量 × netColor + NEE 直射（每条 RHS 的单样本辐射度估计）"],
+  purpose:["把网络估计的间接辐射度与 NEE 直射光合并成该 RHS 路径的完整贡献。"],
+  params:[] },
+
+// ============ 训练管线 B ============
+{ id:"t7", lane:"trainB", cat:"train", num:"⑦", t:"CompactBatch (LHS)", zh:"PrefixSum + 批次紧凑化", file:"CompactBatch.cs.slang",
+  meta:{调度:"同 ③，作用于 LHSBatch(32768)",模式:"Train / OnlineTrain"},
+  inputs:["LHS 的 active 掩码与 G-Buffer（① 的输出）","场景 AABB"],
+  outputs:["lhsDiffSize/lhsSpecSize、紧凑 diffInput / specInput + specPos/specDir/…"],
+  purpose:["与 ③ 相同的紧凑化，为 LHS 查询准备网络输入。"],
+  params:[] },
+
+{ id:"t8", lane:"trainB", cat:"train", num:"⑧", t:"ConeTrace (LHS)", zh:"锥体采样 + KMeans 聚类", file:"ConeTrace.cs.slang",
+  meta:{调度:"同 ④",模式:"Train / OnlineTrain"},
+  inputs:["LHS spec 紧凑缓冲"],
+  outputs:["LHS specInput 完整特征"],
+  purpose:["与 ④ 相同：为每个 LHS 光泽样本生成簇特征。注意 LHS 与 RHS 使用同一套网络权重。"],
+  params:[] },
+
+{ id:"t9", lane:"trainB", cat:"train", num:"⑨", t:"ResolveRHS", zh:"多 RHS 平均 → 训练目标", file:"ResolveRHS.cs.slang",
+  meta:{调度:"[numthreads(256,1,1)] × batchSize",模式:"Train / OnlineTrain"},
+  inputs:["RHSBatch.allColor（每 LHS 8 条，⑥ 的输出）","LHS diffIndex/specIndex"],
+  outputs:["LHS diffColor / specColor = 8 条 RHS 的平均颜色（NaN/Inf→0）——训练监督目标"],
+  purpose:["把多条 RHS 的单样本估计平均成对 LHS 交互点辐射度的蒙特卡洛估计，作为损失函数的 target 写入 LHS 的 diffColor/specColor 缓冲（与网络输出共用同一缓冲布局）。"],
+  params:["numRHS=8（OnlineTrain 恒定）"] },
+
+{ id:"t10", lane:"trainB", cat:"train", num:"⑩", t:"ModelTrain", zh:"前向 / 损失 / 反向 / 优化器更新", file:"Model/Model.cu · train()",
+  meta:{调度:"CUDA 训练流；批 = padUp(size,256)",模式:"Train / OnlineTrain"},
+  inputs:["lhsDiffPtrs：diffInput → target=diffColor","lhsSpecPtrs：specInput → target=specColor"],
+  outputs:["一步参数更新：HashGrid / HashGridInterp / DiffNet / SpecNet（EMA 滑动更新推理权重）"],
+  purpose:[
+    "每帧一步训练：清零网格梯度 → HashGrid 前向（工作权重）→（spec 再加 HashGridInterp 前向）→ MLP forward → RelativeL2Luminance 损失（对 target）→ backward（MLP + 两个网格编码）→ 4 组 EMA(0.95) 嵌套 Adam(5e-3) 依次 step。",
+    "训练用 float 主权重 + fp16 工作副本；推理用的 fp16 EMA 权重随每步滑动更新——渲染管线立即受益（在线学习）。",
+    "<b>执行顺序（每帧）：</b>train() 内先整条 RHS 链再 LHS 链，依赖 ⑤→⑥→⑨→⑩；train() 整体先于 render() → 相对顺序 <b>⑥ → ⑨ → ⑩ → ⑭</b>（本帧渲染用刚更新过的 EMA 权重）。",
+    "<b>权重六份拷贝（每参数 18 字节，全网络 ≈127MB，详见《NCR管线说明文档.md》§9.7）：</b>f32 主权重（<b>唯一被梯度下降更新的账本</b>）｜f16 工作副本（每步被主权重覆写的快照，非独立参数）｜f16 EMA 副本（推理用）｜f16 梯度缓冲（backward→step 的交接 + 哈希网格跨样本原子累加，每步清零）｜f32 Adam 矩 m/v（每参数一份）。混合精度原则：<b>一次性量可粗（f16 算），累积量必须精（f32 记）</b>——fp16 在 1.0 附近 ULP≈0.001 会吞掉小步长增量，f32 记账保证两万步积分不丢。"
+  ],
+  params:["Train 模式额外：每 1000 步存 ckpt；updateAdaptiveRHSState 调整批量；20000 步后自动转 Idle"] },
+
+// ============ 渲染管线 ============
+{ id:"r1", lane:"render", cat:"render", num:"⑪", t:"FirstSmoothPass", zh:"相机光线 + G-Buffer", file:"FirstSmoothPass.cs.slang",
+  meta:{调度:"[numthreads(16,16,1)] × W×H",模式:"Render / OnlineTrain"},
+  inputs:["主相机（gScene.camera）、场景加速结构、材质、环境贴图"],
+  outputs:["屏幕 G-Buffer：gPos/gDir/gNormal/gAlbedo/gRoughness/gVBuffer/gActive（同时是 pass 输出通道）","gColor = 直射辐射度（环境/自发光命中）或吞吐量（光滑命中）","RenderBatch 的 diffActive/specActive 掩码 + diffIndex/specIndex"],
+  purpose:[
+    "每像素一条 pinhole 主光线；最多 16 次循环：未命中→环境光×thp；自发光→emission×thp；背面→终止；delta 纯镜面/玻璃→按 BSDF 继续传播（镜面穿透）；命中首个光滑表面→记录 G-Buffer 并结束。",
+    "粗糙度>0.5→diff 瓣像素，≤0.5→spec 瓣像素。漫反射反照率<0.01 时用镜面反照率（金属）。"
+  ],
+  params:["SPECULAR_ROUGHNESS_THRESHOLD=0.5","kMaxRecursionDepth=16"] },
+
+{ id:"r2", lane:"render", cat:"render", num:"⑫", t:"CompactPass", zh:"PrefixSum + 屏幕紧凑化", file:"CompactPass.cs.slang",
+  meta:{调度:"PrefixSum×2 + [numthreads(16,16,1)] × W×H",模式:"Render / OnlineTrain"},
+  inputs:["diffActive/specActive、屏幕 G-Buffer、场景 AABB"],
+  outputs:["diffSize/specSize、紧凑 diffInput（pos 归一化 AABB）、specInput + specPos/specDir/specRoughness/specVBuffer/specPixel"],
+  purpose:["与训练侧 CompactBatch 相同的流式紧凑化：只为激活像素准备网络输入，推理批大小 = 激活数（对齐 256）。"],
+  params:[] },
+
+{ id:"r3", lane:"render", cat:"render", num:"⑬", t:"ConeTrace (Render)", zh:"锥体采样 + KMeans 聚类", file:"ConeTrace.cs.slang",
+  meta:{调度:"[numthreads(32,1,1)] × specSize（渲染档：32 光线、3 次 KMeans）",模式:"Render / OnlineTrain"},
+  inputs:["RenderBatch spec 紧凑缓冲、场景 AABB、gScene、环境"],
+  outputs:["RenderBatch specInput 完整特征（4 簇 + 主位置 + envColor）"],
+  purpose:["与 ④ 完全相同的算法，仅参数为渲染档（更快、更糙）。是每帧渲染中最重的光线追踪步骤：spec 像素数 × 32 条光线。"],
+  params:[] },
+
+{ id:"r4", lane:"render", cat:"render", num:"⑭", t:"ModelInference (Render)", zh:"CUDA 网络推理", file:"Model/Model.cu · inference()",
+  meta:{调度:"CUDA 推理流；批 = padUp(size,256)",模式:"Render / OnlineTrain"},
+  inputs:["renderDiffPtrs / renderSpecPtrs（紧凑输入）"],
+  outputs:["RenderBatch diffColor / specColor（每像素 RGB 辐射度）"],
+  purpose:["用 EMA 半精度权重做一次批量推理（在线模式下用的是本帧刚更新过的权重）。每帧网络推理共 2 次：此处 + RHS 自举（⑤）。"],
+  params:[] },
+
+{ id:"r5", lane:"render", cat:"render", num:"⑮", t:"ResolvePass", zh:"屏幕合成", file:"ResolvePass.cs.slang",
+  meta:{调度:"[numthreads(16,16,1)] × W×H",模式:"Render / OnlineTrain"},
+  inputs:["gColor（thp/直射）、diffColor/specColor、diffIndex/specIndex"],
+  outputs:["gColor = thp × netColor（spec 优先于 diff；直射像素保持不变）","tempColor（供后滤波）"],
+  purpose:["把网络查询结果乘以路径吞吐量写回屏幕；这是「神经辐射度 → 像素颜色」的合成点。训练模式下还绑定 debug 缓冲可用于可视化 RHS emission。"],
+  params:[] },
+
+{ id:"r6", lane:"render", cat:"render", num:"⑯", t:"PostFilterPass", zh:"联合双边滤波 + FXAA", file:"PostFilterPass.cs.slang",
+  meta:{调度:"main + mainFXAA 两个入口，[numthreads(16,16,1)] × W×H",模式:"Render / OnlineTrain"},
+  inputs:["tempColor、gNormal/gAlbedo（滤波导向）、diff/specIndex","mpPostFilterTempColor（FXAA 输入）"],
+  outputs:["最终 gColor（pass 的 color 输出通道）"],
+  purpose:[
+    "① spec 像素做 7×7（半径 3）联合双边滤波：权重 = 高斯(空间σ=4)×高斯(法线差σ=0.05)×高斯(反照率差σ=0.02)×高斯(颜色差σ=2)，压制网络查询噪声；非 spec 像素直通；② FXAA（可关）沿亮度梯度抗锯齿后写回 gColor。"
+  ],
+  params:["UI：Post Filter 开关、FXAA 开关（kernelRadius=3 等硬编码）"] },
+
+{ id:"o1", lane:"out", cat:"out", num:"输出", t:"ToneMapper", zh:"色调映射", file:"上游 RenderPass：ToneMapper",
+  meta:{调度:"RenderGraph 自动",模式:"全部"},
+  inputs:["NeuralRadiosity.color（线性 HDR）"],
+  outputs:["ToneMapper.dst（sRGB，曝光补偿 0）"],
+  purpose:["由 NeuralRadiosity.py 图连接：NeuralRadiosity.color → ToneMapper.src。"],
+  params:[] },
+
+{ id:"o2", lane:"out", cat:"out", num:"屏幕", t:"屏幕显示 / 截图", zh:"Mogwai 输出", file:"Source/Mogwai",
+  meta:{调度:"—",模式:"全部"},
+  inputs:["ToneMapper.dst（图输出）"],
+  outputs:["窗口显示；可用 Mogwai 截图/离屏渲染导出"],
+  purpose:["Mogwai 主循环呈现；RenderGraph Editor 里可实时调 pass 参数（本图的 Render Mode 就在这里切换）。"],
+  params:[] },
+
+// ============ 神经网络 ============
+{ id:"m1", lane:"nn1", cat:"nn", num:"入口", t:"NRModel", zh:"推理/训练入口 + 双流同步", file:"Model/Model.h · Model.cu",
+  meta:{调度:"inference() / train()；mInferenceStream / mTrainStream",模式:"全部"},
+  inputs:["ModelIOPtrs（diff/spec 的 CUDA 映射输入+输出指针）","调用方：⑤ / ⑩ / ⑭（waitForFalcor/waitForCuda 同步）"],
+  outputs:["推理：写入 diffColor/specColor；训练：更新全部权重"],
+  purpose:["NRModel 是网络的总持有者：两个哈希网格 + 两个 MLP + 4 组优化器 + 损失。推理用 EMA 半精度权重（custom_weights），训练用 float 主权重；两条 CUDA 流与图形队列用外部信号量互等。"],
+  params:[] },
+
+{ id:"m2", lane:"nn2", cat:"nn", num:"编码A", t:"HashGrid", zh:"主位置多分辨率哈希网格", file:"Model/HashGrid.cu",
+  meta:{调度:"launchForward / launchBackward kernel",模式:"全部"},
+  inputs:["输入向量的主位置（diff：AABB 归一化 pos；spec：同）"],
+  outputs:["写入输入向量偏移 0–11：6 级 × 2 特征"],
+  purpose:[
+    "Instant-NGP 式多分辨率哈希编码：6 级（基础分辨率 32，每级 ×2），每级 2 个 fp16 特征，每级哈希表 2^18 条目（约 135 万元素）。diff 与 spec 网络共用同一个主网格。三份存储：fp16 工作副本 / fp16 梯度 / float 主权重（各约 5–10 MB）。",
+    "<b>kernel 机制（详见《NCR管线说明文档.md》§9.9）：</b>threadIdx.y = 层级（一个样本 6 层 6 线程并行）；pos×res → 体素 base+offset → 8 角三线性插值（权重=三轴系数连乘，和恒为1，跨体素连续）；输出写 encOffset+level×2 的 2 格窗口。哈希 h=(x·1+y·19349663+z·83492791)&(2¹⁸−1)，PRIMES 为 NGP 官方质数表——相邻格点永不碰撞，碰撞只发生在远处无关位置。",
+    "<b>碰撞为何无害（五重保护）：</b>①共享的是编码特征而非颜色（albedo 直通输入）②碰撞只在远处（局部结构完整）③场景稀疏（表面 2D，实用条目≪26万）④多层冗余（这层撞别层不撞）⑤raw pos 兜底。L0 稠密零碰撞，L1-5 哈希（L1 超编 274625>262144，鸽笼至少 12481 次碰撞）。"
+  ],
+  params:["nLevels=6, nFeaturesPerLevel=2, baseResolution=32, perLevelScale=2.0, log2HashMapSize=18","反向：dL/dentry×三线性权重 原子累加（权重由 input 留存的 pos 现场重算，与前向一字不差）"] },
+
+{ id:"m3", lane:"nn2", cat:"nn", num:"编码B", t:"HashGridInterp", zh:"簇位置尺度感知网格（本工程创新点）", file:"Model/HashGridInterp.cu",
+  meta:{调度:"launchForward / launchBackward kernel",模式:"仅 spec 路径"},
+  inputs:["SpecNet 输入向量的 4 个簇位置 clsPos、簇尺度 clsScale、簇权重 clsWeight"],
+  outputs:["写入输入向量偏移 12–27：4 簇 × 4 特征"],
+  purpose:[
+    "以簇位置查询的哈希网格（6 级 × 4 特征/簇，基础分辨率 16）。关键设计：clsScale 决定查询落在相邻两级之间的插值权重——小簇（远处小光斑/清晰反射）偏向细层级，大簇（模糊反射/大光斑）偏向粗层级；输出再乘以簇权重 clsWeight。",
+    "这使得同一网络能自适应表达从近清晰到远模糊的整个光泽反射谱系。",
+    "<b>机制细节（详见《NCR管线说明文档.md》§9.9.3/§9.10）：</b>threadIdx.y = 簇编号（4 簇并行）；尺度阶梯 gridScales = interpRatio/resolution = [1/16…1/512]，每级减半；双层搜索选相邻两层，层间权重 upperWeight=(coarserScale−scaleVal)/(coarserScale−finerScale)（coarser/finerScale=相邻两级体素边长）——与三线性的单轴权重同构，完整查询 =「3+1 维插值」（空间 8 角 × 尺度 2 层）。输出 = (细层×uW + 粗层×lW)×clsWeight，写 encOffset+clusterIdx×4 的 4 格窗口。",
+    "<b>interpRatio 单位校准（实测）：</b>阶梯是归一化单位而 clsScale 是世界单位，隐含假设 AABB 跨度≈1。实测 7 场景：cornell-box 2.0 / bathroom 3.55 / bathroom2 5.2 / living-room 4.25 / kitchen 6.3 / veach-ajar 9.7（teapot 23，无 pyscene）——<b>无一满足 ≈1，当前值下所有簇偏粗 3.5~10 倍</b>。建议 interpRatio=场景均值跨度（改 Model.h 后需重新训练）；更干净的修法是在 ConeTrace 里给 clsScale 除以 AABB 跨度。"
+  ],
+  params:["nInterpLevels=6, nInterpFeaturesPerLevel=4, baseInterpResolution=16, interpRatio=1.0（硬编码，未按场景自适应）, numClusters=4","AABB 实测脚本：media/scenes/calc_aabb.py"] },
+
+{ id:"m4", lane:"nn3", cat:"nn", num:"输入A", t:"DiffNetInput", zh:"漫反射网络输入（32 维 fp16）", file:"NetworkParams.slang",
+  meta:{调度:"—",模式:"全部"},
+  inputs:["Slang 写入：pos(归一化)/dir/normal/albedo/roughness（偏移 12–24）","CUDA 写入：哈希编码（偏移 0–11）"],
+  outputs:["32 = padUp(12+13,16) 维输入向量（25–31 为对齐填充 0）"],
+  purpose:["布局见详情：[0..11] 主哈希编码 | [12..24] GBuffer | [25..31] 填充。Slang 侧 Real=float16_t，与 CUDA 的 precision_t=__half 逐位对应。"],
+  params:[] },
+
+{ id:"m5", lane:"nn3", cat:"nn", num:"输入B", t:"SpecNetInput", zh:"光泽网络输入（64 维 fp16）", file:"NetworkParams.slang",
+  meta:{调度:"—",模式:"全部"},
+  inputs:["Slang 写入：pos/dir/normal/albedo/roughness/envColor + 4×(clsPos/clsScale/clsWeight)","CUDA 写入：主哈希编码 + 簇哈希编码"],
+  outputs:["64 维输入向量"],
+  purpose:["布局：[0..11] 主哈希 | [12..27] 簇哈希 | [28..43] pos/dir/normal/albedo/roughness/envColor | [44..55] 4×clsPos | [56..59] clsScale | [60..63] clsWeight。envColor = 反射方向的环境光颜色（当前未预滤波）。"],
+  params:["OUTPUT_DIM=16（输出只用前 3 维 RGB）"] },
+
+{ id:"m6", lane:"nn4", cat:"nn", num:"MLP A", t:"DiffNet", zh:"漫反射 MLP", file:"Model/Model.cu:175",
+  meta:{调度:"tcnn FullyFusedMLP",模式:"全部"},
+  inputs:["DiffNetInput 32 维"],
+  outputs:["16 维输出（SquarePlus 激活），取前 3 维为 RGB 辐射度"],
+  purpose:["FullyFusedMLP：32 → 64 → 64 → 64 → 16，隐层 ReLU，输出 SquarePlus，全半精度、单 kernel 融合实现（约 1.1 万参数）。"],
+  params:[] },
+
+{ id:"m7", lane:"nn4", cat:"nn", num:"MLP B", t:"SpecNet", zh:"光泽 MLP", file:"Model/Model.cu:185",
+  meta:{调度:"tcnn FullyFusedMLP",模式:"全部"},
+  inputs:["SpecNetInput 64 维"],
+  outputs:["16 维输出（SquarePlus），取前 3 维"],
+  purpose:["FullyFusedMLP：64 → 64 → 64 → 64 → 64 → 16（4 个隐层），ReLU + SquarePlus，半精度（约 1.7 万参数）。比 DiffNet 深一层以处理更复杂的簇特征。"],
+  params:[] },
+
+{ id:"m8", lane:"nn5", cat:"nn", num:"损失", t:"RelativeL2Luminance", zh:"相对 L2 亮度加权损失", file:"Model/Model.cu:215",
+  meta:{调度:"tcnn Loss（仅训练路径）",模式:"Train / OnlineTrain"},
+  inputs:["网络输出（fp16）","target = ResolveRHS 写入的平均 RHS 颜色"],
+  outputs:["逐元素损失 + dL_d输出（反向传播起点）"],
+  purpose:["按亮度加权的相对 L2：对暗处的相对误差给予与亮处同等的权重，符合人眼感知，有利于间接光收敛。"],
+  params:[] },
+
+{ id:"m9", lane:"nn6", cat:"nn", num:"优化器", t:"EMA(0.95) ⊃ Adam(5e-3) ×4", zh:"四组参数各自独立优化器", file:"Model/Model.cu:206",
+  meta:{调度:"optimizer->step（仅训练路径）",模式:"Train / OnlineTrain"},
+  inputs:["四组参数梯度：主网格 / 簇网格 / DiffNet / SpecNet"],
+  outputs:["更新 float 主权重（Adam）→ 滑动平均进 fp16 EMA 推理权重"],
+  purpose:[
+    "tcnn 的嵌套优化器：外层 EMA（decay=0.95）维护推理用的滑动平均权重（custom_weights()，渲染管线读取的就是它），内层 Adam（lr=5e-3）更新训练权重。",
+    "这是「在线训练」稳定渲染的关键：训练侧噪声更新被 EMA 平滑后再用于显示。注意：早期版本的梯度钳制（clampGradients，阈值 1.0）在当前代码路径中未启用。",
+    "<b>Adam 内部（每参数一套 m/v，f32，每帧更新）：</b>m←0.9m+0.1g（梯度滑动平均≈10步记忆，惯性方向）；v←0.999v+0.001g²（梯度均方≈1000步记忆，抖动尺度）；更新 θ←θ−lr·m̂/(√v̂+ε) = 步长×<b>信噪比</b>——梯度一致迈大步、纯噪声几乎不动、不同量级参数自动归一。不对称记忆是刻意的：方向要灵、尺规要稳。<b>β₁/β₂/ε 是论文经验默认全行业沿用；本工程真正调过的是 lr=5e-3 和 EMA decay=0.95。</b>",
+    "<b>ε=1e-8 不是步长</b>，是分母护栏（防除零/防爆炸，健康时形同虚设）——哈希网格每帧靠它保命：539 万格子大多未被样本碰到（g=v=0），有 ε 则 0/1e-8=0 安静不动，没 ε 则 0/0=NaN 毒化全网。数值安全三件套：ε、loss scale（f16 梯度下溢）、gradient clamp（遗迹未启用）。"
+  ],
+  params:["每帧 OnlineTrain 恰好一步更新"] },
+];
+
+// ---------------- 边 ----------------
+// type: v=同列垂直, h=跨列贝塞尔, arc=回边(下弧线), band=进入NN带
+const EDGES = [
+ ["b1","b2","v"], ["b2","b3","v"], ["b3","c0","h"],
+ ["c0","c1","v"], ["c1","c2","v"], ["c2","c3","v"],
+ ["c2","t1","h","train()"], ["c2","r1","h","render()"],
+ ["t1","t2","v","LHS G-Buffer"], ["t2","t3","v"], ["t3","t4","v"], ["t4","t5","v"], ["t5","t6","v"],
+ ["t1","t7","h","LHS 缓冲",true], ["t6","t9","h","RHS 颜色",true],
+ ["t7","t8","v"], ["t8","t9","v"], ["t9","t10","v","训练 target"],
+ ["r1","r2","v"], ["r2","r3","v"], ["r3","r4","v"], ["r4","r5","v","netColor"], ["r5","r6","v"],
+ ["r6","o1","h"], ["o1","o2","v"],
+ ["r4","m1","band","推理",true], ["t5","m1","band","推理(自举)",true], ["t10","m1","band","训练",true],
+ ["m1","m2","h"], ["m1","m3","h"],
+ ["m2","m4","h"], ["m3","m5","h"],
+ ["m4","m6","h"], ["m5","m7","h"],
+ ["m6","m8","h"], ["m7","m8","h"],
+ ["m8","m9","h"],
+ ["m9","m2","arc","EMA 权重更新",true], ["m9","m6","arc","EMA 权重更新",true],
+];
+
+const COLORS = {boot:"#64748b", common:"#7c3aed", train:"#d97706", render:"#2563eb", out:"#059669", nn:"#0891b2"};
+const LANE_OF = {boot:"lane-boot", common:"lane-common", trainA:"lane-trainA", trainB:"lane-trainB", render:"lane-render", out:"lane-out"};
+const NUMOF = {"nn1":0,"nn2":1,"nn3":2,"nn4":3,"nn5":4,"nn6":5};
+
+const el = id => document.getElementById(id);
+const nodeById = Object.fromEntries(NODES.map(n=>[n.id,n]));
+
+// 节点 → 源码相对链接（相对于本 HTML 所在的 ncr-doc 目录）
+const SRC = {
+  b2:"../Falcor-stage3/scripts/NeuralRadiosity.py",
+  b3:P+"NeuralRadiosity.cpp", c0:P+"NeuralRadiosity.cpp", c1:P+"NeuralRadiosity.cpp",
+  c2:P+"NeuralRadiosity.cpp", c3:P+"NeuralRadiosity.h",
+  t1:P+"RandomSmooth.cs.slang", t2:P+"SampleRHS.cs.slang", t3:P+"CompactBatch.cs.slang",
+  t4:P+"ConeTrace.cs.slang", t5:P+"Model/Model.cu", t6:P+"ResolveBatch.cs.slang",
+  t7:P+"CompactBatch.cs.slang", t8:P+"ConeTrace.cs.slang", t9:P+"ResolveRHS.cs.slang", t10:P+"Model/Model.cu",
+  r1:P+"FirstSmoothPass.cs.slang", r2:P+"CompactPass.cs.slang", r3:P+"ConeTrace.cs.slang",
+  r4:P+"Model/Model.cu", r5:P+"ResolvePass.cs.slang", r6:P+"PostFilterPass.cs.slang",
+  m1:P+"Model/Model.h", m2:P+"Model/HashGrid.cu", m3:P+"Model/HashGridInterp.cu",
+  m4:P+"NetworkParams.slang", m5:P+"NetworkParams.slang", m6:P+"Model/Model.cu",
+  m7:P+"Model/Model.cu", m8:P+"Model/Model.cu", m9:P+"Model/Model.cu",
+};
+
+// ---------------- 渲染节点 ----------------
+function buildNodes(){
+  for(const n of NODES){
+    let host;
+    if(n.lane.startsWith("nn")){ host = el("nngrid"); }
+    else host = el(LANE_OF[n.lane]);
+    const d = document.createElement("div");
+    d.className = "node cat-"+n.cat;
+    d.id = "nd-"+n.id;
+    d.innerHTML = '<div class="num">'+n.num+'</div><span class="t">'+n.t+'</span><span class="zh">'+n.zh+'</span><span class="file">'+n.file+'</span>';
+    if(n.lane.startsWith("nn")){ d.style.gridColumn = (NUMOF[n.lane]+1); d.style.gridRow = (n.id==="m3"||n.id==="m5"||n.id==="m7") ? 2 : 1; }
+    d.addEventListener("click", ()=>selectNode(n.id));
+    host.appendChild(d);
+  }
+}
+
+// ---------------- 详情面板 ----------------
+function metaRow(k,v){ return "<div><b>"+k+"</b><span>"+v+"</span></div>"; }
+function selectNode(id){
+  const n = nodeById[id];
+  document.querySelectorAll(".node.selected").forEach(e=>e.classList.remove("selected"));
+  el("nd-"+id).classList.add("selected");
+  let h = "<h2>"+n.t+" <small style='color:var(--muted);font-weight:400'>· "+n.zh+"</small></h2>";
+  h += '<div class="chip" style="background:'+COLORS[n.cat]+'">'+({boot:"启动/设置",common:"公共准备",train:"训练管线",render:"渲染管线",out:"输出",nn:"神经网络"})[n.cat]+'</div>';
+  h += '<div class="meta">';
+  h += metaRow("源码", SRC[id] ? '<a href="'+SRC[id]+'" target="_blank">'+n.file+' ↗</a>' : n.file);
+  h += metaRow("调度", n.meta.调度);
+  h += metaRow("运行模式", n.meta.模式);
+  h += "</div>";
+  h += "<h3>输入</h3><ul class='in-list'>"+n.inputs.map(x=>"<li>"+x+"</li>").join("")+"</ul>";
+  h += "<h3>作用与算法</h3>"+n.purpose.map(x=>"<p>"+x+"</p>").join("");
+  h += "<h3>输出</h3><ul class='out-list'>"+n.outputs.map(x=>"<li>"+x+"</li>").join("")+"</ul>";
+  if(n.params.length) h += "<h3>关键参数 / 备注</h3><ul>"+n.params.map(x=>"<li>"+x+"</li>").join("")+"</ul>";
+  el("detail").innerHTML = h;
+  el("detail").scrollTop = 0;
+}
+
+// ---------------- 画箭头 ----------------
+function drawEdges(){
+  const svg = el("overlay"), diagram = el("diagram");
+  const dr = diagram.getBoundingClientRect();
+  svg.setAttribute("width", diagram.scrollWidth);
+  svg.setAttribute("height", diagram.scrollHeight);
+  svg.style.width = diagram.scrollWidth+"px"; svg.style.height = diagram.scrollHeight+"px";
+  let defs = '<defs>';
+  for(const [k,c] of Object.entries(COLORS))
+    defs += '<marker id="arr-'+k+'" markerWidth="9" markerHeight="8" refX="7.5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="'+c+'"/></marker>';
+  defs += '</defs>';
+  let body = "";
+  const rect = id => { const r = el("nd-"+id).getBoundingClientRect(); return {l:r.left-dr.left, t:r.top-dr.top, r:r.right-dr.left, b:r.bottom-dr.top, cx:r.left-dr.left+r.width/2, cy:r.top-dr.top+r.height/2}; };
+  const cat = id => nodeById[id].cat;
+
+  for(const e of EDGES){
+    const [a,b,type,label,dashed] = e;
+    const A = rect(a), B = rect(b), c = COLORS[cat(a)];
+    let d = "", lx=null, ly=null;
+    if(type==="v"){
+      d = "M"+A.cx+","+A.b+" L"+A.cx+","+(B.t-8); lx=A.cx; ly=(A.b+B.t)/2;
+    } else if(type==="h"){
+      const x1=A.r+2, y1=A.cy, x2=B.l-9, y2=B.cy, mx=(x1+x2)/2;
+      d = "M"+x1+","+y1+" C"+mx+","+y1+" "+mx+","+y2+" "+x2+","+y2;
+      lx=mx; ly=(y1+y2)/2;
+    } else if(type==="band"){
+      const x1=A.cx, y1=A.b+2, x2=B.cx, y2=B.t-9;
+      const my = (y1+y2)/2;
+      d = "M"+x1+","+y1+" C"+x1+","+my+" "+x2+","+my+" "+x2+","+y2;
+      lx=(x1+x2)/2; ly=my;
+    } else { // arc 回边：绕到神经网络带整体底部，避免穿过卡片
+      let nnMaxBottom = 0;
+      for(const nd of NODES) if(nd.cat==="nn") nnMaxBottom = Math.max(nnMaxBottom, rect(nd.id).b);
+      const x1=A.cx, y1=A.b+2, x2=B.cx;
+      const dip = nnMaxBottom + 26;
+      d = "M"+x1+","+y1+" C"+x1+","+dip+" "+x2+","+dip+" "+x2+","+(B.b+3);
+      lx=(x1+x2)/2; ly=dip;
+    }
+    body += '<g class="edge e-'+cat(a)+'">';
+    body += '<path d="'+d+'" fill="none" stroke="'+c+'" stroke-width="1.8" '+(dashed?'stroke-dasharray="6 4" ':'')+'marker-end="url(#arr-'+cat(a)+')" opacity="0.85"/>';
+    if(label){
+      body += '<text x="'+lx+'" y="'+(ly-4)+'" text-anchor="middle" font-size="11" fill="'+c+'" font-weight="600" stroke="#f6f7f9" stroke-width="4" paint-order="stroke">'+label+'</text>';
+    }
+    body += '</g>';
+  }
+  svg.innerHTML = defs + body;
+}
+
+// ---------------- 过滤按钮 ----------------
+document.querySelectorAll(".toolbar .btn").forEach(b=>{
+  b.addEventListener("click", ()=>{
+    document.querySelectorAll(".toolbar .btn").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active");
+    const f = b.dataset.f;
+    document.body.classList.remove("f-train","f-render","f-nn");
+    if(f!=="all") document.body.classList.add("f-"+f);
+    requestAnimationFrame(drawEdges);
+  });
+});
+
+buildNodes();
+requestAnimationFrame(drawEdges);
+window.addEventListener("resize", drawEdges);
+window.addEventListener("load", ()=>setTimeout(drawEdges,60));
+</script>
+</body>
+</html>
