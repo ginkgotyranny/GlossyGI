@@ -36,6 +36,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <cstdlib>
 
 using namespace Falcor;
 
@@ -304,6 +305,13 @@ public:
         return make_ref<NeuralRadiosity>(pDevice, props);
     }
 
+    // Returns true if env var NCR_DEBUG_LOG=1 is set (used by NCR_LOG macro).
+    static bool debugLogEnvEnabled()
+    {
+        const char* v = std::getenv("NCR_DEBUG_LOG");
+        return v != nullptr && v[0] == '1';
+    }
+
     NeuralRadiosity(ref<Device> pDevice, const Properties& props);
 
     virtual Properties getProperties() const override;
@@ -344,6 +352,14 @@ private:
     void clearRenderTemporalHistory(RenderContext* pRenderContext);
     void bindScreenData(ShaderVar& var, const RenderData& renderData, const std::string &name);
     void bindRayBatchData(ShaderVar& var, std::shared_ptr<RayBatchBuffer> pRayBatch, const std::string &name);
+
+    /// Debug image dump: runs DebugDumpPass to copy per-spec-pixel debug
+    /// buffers into textures, then saves all debug images (spec level,
+    /// material ID, normal, albedo, tanLobe, cluster mean) to disk under
+    /// the given directory. Returns the directory path used.
+    void dumpDebugImages(RenderContext* pRenderContext, const RenderData& renderData);
+    /// Create / resize the debug dump textures and buffers to match frameDim.
+    void prepareDebugDumpResources();
     DefineList getShaderDefines(const RenderData& renderData) const;
     bool loadTrainCamerasFromFile(const std::filesystem::path& path);
     void setCamera(uint32_t cameraIdx);
@@ -384,6 +400,35 @@ private:
     bool mEnablePostFilter = true;
     /// FXAA switch for post filter.
     bool mEnableFXAA = true;
+    /// Debug switches: render only diffuse or specular component (isolate flickering source).
+    bool mDebugRenderDiffuseOnly = false;
+    bool mDebugRenderSpecularOnly = false;
+    /// Debug switches: freeze training updates for one network (still inferred, params not updated).
+    bool mDisableDiffUpdate = false;
+    bool mDisableSpecUpdate = false;
+    /// Debug switches: freeze individual optimizer step() (forward/backward still run).
+    bool mFreezePrimGridOpt = false;
+    bool mFreezeClsGridOpt  = false;
+    bool mFreezeDiffNetOpt  = false;
+    bool mFreezeSpecNetOpt  = false;
+    /// Training parameter UI mirrors (synced to NRModel on change).
+    float mParamPrimGridLr = 5e-3f;
+    float mParamClsGridLr  = 5e-3f;
+    float mParamDiffNetLr  = 5e-3f;
+    float mParamSpecNetLr  = 5e-3f;
+    float mParamPrimGridEmaDecay = 0.95f;
+    float mParamClsGridEmaDecay  = 0.95f;
+    float mParamDiffNetEmaDecay  = 0.95f;
+    float mParamSpecNetEmaDecay  = 0.95f;
+    float mParamInterpRatio = 1.0f;
+    /// Verbose scene-related parameter logging (AABB / envMap / emissive / camera / batches).
+    bool mEnableDebugLog = false;
+    /// Debug: count hash grid collisions per frame (unique slots vs total queries).
+    bool mEnableHashCollisionStats = false;
+    /// Debug: visualize per-spec-pixel grid level as color (red=coarse, blue=fine).
+    bool mDebugShowSpecLevel = false;
+    /// Debug: one-shot flag to dump all debug images to disk on next frame.
+    bool mDebugDumpRequested = false;
     /// Force cull mode for all geometry, otherwise set it based on the scene.
     bool mForceCullMode = false;
     /// Cull mode to use for when mForceCullMode is true.
@@ -400,6 +445,29 @@ private:
     ref<Texture> mpRenderTempColor;
     ref<Texture> mpPostFilterTempColor;
     ref<Texture> mpPrefiltEnvCubemap;
+    /// Debug: per-spec-pixel dominant grid level (one float per screen pixel).
+    ref<Buffer> mpSpecLevelBuffer;
+    /// Debug dump: per-spec-pixel buffers written by ConeTrace when DEBUG_DUMP is on.
+    ref<Buffer> mpSpecTanLobeBuffer;        // float per spec pixel
+    ref<Buffer> mpSpecClusterMeanBuffer;    // float4 per spec pixel (4 cluster means)
+    ref<Buffer> mpSpecClusterScaleBuffer;   // float4 per spec pixel (4 cluster scales)
+    ref<Buffer> mpSpecClusterWeightBuffer;  // float4 per spec pixel (4 cluster weights)
+    ref<Buffer> mpSpecClusterPosXBuffer;    // float4 per spec pixel (4 cluster pos.x)
+    ref<Buffer> mpSpecClusterPosYBuffer;    // float4 per spec pixel (4 cluster pos.y)
+    ref<Buffer> mpSpecClusterPosZBuffer;    // float4 per spec pixel (4 cluster pos.z)
+    ref<Buffer> mpSpecMaterialDataBuffer;   // float2 per spec pixel (materialID, roughness)
+    /// Debug dump: output textures for CPU readback (DebugDumpPass writes these).
+    ref<Texture> mpDumpSpecLevelTex;        // RGBA32Float
+    ref<Texture> mpDumpTanLobeTex;          // RGBA32Float
+    ref<Texture> mpDumpClusterMeanTex;      // RGBA32Float
+    ref<Texture> mpDumpClusterScaleTex;     // RGBA32Float
+    ref<Texture> mpDumpClusterWeightTex;    // RGBA32Float
+    ref<Texture> mpDumpClusterPosXTex;      // RGBA32Float
+    ref<Texture> mpDumpClusterPosYTex;      // RGBA32Float
+    ref<Texture> mpDumpClusterPosZTex;      // RGBA32Float
+    ref<Texture> mpDumpMaterialDataTex;     // RGBA32Float (r=materialID, g=roughness)
+    /// Debug dump compute pass.
+    ref<ComputePass> mpDebugDumpPass;
     ref<Sampler> mpPrefiltEnvSampler;
     bool mRenderSpecTemporalHistoryValid = false;
     bool mHasRenderCameraViewProj = false;
@@ -444,4 +512,15 @@ private:
     uint32_t mSaveCKPTInterval = 1000;
     bool mAdaptiveRHS = true;
     uint32_t mAdaptiveRHSStage = 0;
+    std::string mLoadModelPath;
 };
+
+// Debug-log macro: emits only when NeuralRadiosity::mEnableDebugLog is true,
+// OR the NCR_DEBUG_LOG environment variable is set to "1" (allows scripted
+// tests to dump scene parameters without GUI interaction).
+// Usage: NCR_LOG(pSelf, "fmt {}", arg);  pSelf must point to a NeuralRadiosity.
+#define NCR_LOG(pSelf, ...) \
+    do { \
+        if ((pSelf) && ((pSelf)->mEnableDebugLog || ::NeuralRadiosity::debugLogEnvEnabled())) \
+            ::Falcor::logInfo(__VA_ARGS__); \
+    } while (0)

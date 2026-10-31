@@ -1,0 +1,195 @@
+=============================================
+Subset benchmark round: rtxdi_on
+  Scenes     : cornell-box veach-ajar
+  Algorithms : ptdn ptnrd ncr
+=============================================
+
+---------------------------------------------
+[14:27:35] scene=cornell-box  algo=ptdn  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0395s
+(Info) Importing scene: media/scenes/cornell-box/scene-animation.pyscene
+(Info) Found 7 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 3 dynamic non-instanced meshes, arranged in 3 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 3 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) Removing duplicate material 'ShortBox' (duplicate of 'Ceiling').
+(Info) Removing duplicate material 'TallBox' (duplicate of 'Ceiling').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 4 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.003383 s
+(Info) Optimizing materials:     0.081044 s
+(Info) Creating resources:       0.904997 s
+(Info) Loading scene (total):    1.355530 s
+(Info) Created CUDA device 'NVIDIA GeForce RTX 3090' (architecture 8.6).
+(Info) Initiating BLAS build for 4 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 10.41 MB
+(Info) BLAS build scratch buffer size: 2.30 MB
+(Info) BLAS group 0 final size: 4.64 MB
+(Info) LightCollection::build preparation: 0.000482 s
+(Info) LightCollection::build integrate emissive: 1.074266 s
+(Info) LightCollection::build finalize: 0.002998 s
+  -> benchmark_results/bench_cornell-box_ptdn_rtxdi_on.csv (1287 lines)
+
+---------------------------------------------
+[14:29:08] scene=cornell-box  algo=ptnrd  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0396s
+(Info) Importing scene: media/scenes/cornell-box/scene-animation.pyscene
+(Info) Found 7 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 3 dynamic non-instanced meshes, arranged in 3 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 3 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) Removing duplicate material 'ShortBox' (duplicate of 'Ceiling').
+(Info) Removing duplicate material 'TallBox' (duplicate of 'Ceiling').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 4 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.003277 s
+(Info) Optimizing materials:     0.078712 s
+(Info) Creating resources:       0.998342 s
+(Info) Loading scene (total):    1.421591 s
+(Info) Initiating BLAS build for 4 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 10.41 MB
+(Info) BLAS build scratch buffer size: 2.30 MB
+(Info) BLAS group 0 final size: 4.64 MB
+(Info) LightCollection::build preparation: 0.000655 s
+(Info) LightCollection::build integrate emissive: 1.058492 s
+(Info) LightCollection::build finalize: 0.001424 s
+  -> benchmark_results/bench_cornell-box_ptnrd_rtxdi_on.csv (1221 lines)
+
+---------------------------------------------
+[14:30:41] scene=cornell-box  algo=ncr  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0354s
+(Info) Importing scene: media/scenes/cornell-box/scene-animation.pyscene
+(Info) Found 7 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 3 dynamic non-instanced meshes, arranged in 3 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 3 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) Removing duplicate material 'ShortBox' (duplicate of 'Ceiling').
+(Info) Removing duplicate material 'TallBox' (duplicate of 'Ceiling').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 4 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.002646 s
+(Info) Optimizing materials:     0.061526 s
+(Info) Creating resources:       0.765769 s
+(Info) Loading scene (total):    1.105315 s
+(Info) LightCollection::build preparation: 0.000447 s
+(Info) LightCollection::build integrate emissive: 1.072983 s
+(Info) LightCollection::build finalize: 0.002676 s
+(Info) Initiating BLAS build for 4 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 10.41 MB
+(Info) BLAS build scratch buffer size: 2.30 MB
+(Info) BLAS group 0 final size: 4.64 MB
+(Info) Screen passes created: 	5373 ms
+(Info) Batch passes created: 	4820 ms
+(Info) NRModel created: 	141 ms
+(Info) NeuralRadiosity::updatePrograms() took 10334 ms
+(Info) NeuralRadiosity::prepareResources() took 10 ms
+  -> benchmark_results/bench_cornell-box_ncr_rtxdi_on.csv (1248 lines)
+
+---------------------------------------------
+[14:32:13] scene=veach-ajar  algo=ptdn  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0284s
+(Info) Importing scene: media/scenes/veach-ajar/scene-animation.pyscene
+(Info) Found 14 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 8 dynamic non-instanced meshes, arranged in 8 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 4 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 5 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.041727 s
+(Info) Optimizing materials:     0.052757 s
+(Info) Creating resources:       0.741503 s
+(Info) Loading scene (total):    1.860583 s
+(Info) Created CUDA device 'NVIDIA GeForce RTX 3090' (architecture 8.6).
+(Info) Initiating BLAS build for 9 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 23.83 MB
+(Info) BLAS build scratch buffer size: 5.31 MB
+(Info) BLAS group 0 final size: 8.96 MB
+(Info) LightCollection::build preparation: 0.000491 s
+(Info) LightCollection::build integrate emissive: 0.991430 s
+(Info) LightCollection::build finalize: 0.001483 s
+  -> benchmark_results/bench_veach-ajar_ptdn_rtxdi_on.csv (1498 lines)
+
+---------------------------------------------
+[14:33:47] scene=veach-ajar  algo=ptnrd  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0419s
+(Info) Importing scene: media/scenes/veach-ajar/scene-animation.pyscene
+(Info) Found 14 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 8 dynamic non-instanced meshes, arranged in 8 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 4 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 5 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.053660 s
+(Info) Optimizing materials:     0.064702 s
+(Info) Creating resources:       0.828204 s
+(Info) Loading scene (total):    2.188149 s
+(Info) Initiating BLAS build for 9 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 23.83 MB
+(Info) BLAS build scratch buffer size: 5.31 MB
+(Info) BLAS group 0 final size: 8.96 MB
+(Info) LightCollection::build preparation: 0.000599 s
+(Info) LightCollection::build integrate emissive: 1.181349 s
+(Info) LightCollection::build finalize: 0.001416 s
+  -> benchmark_results/bench_veach-ajar_ptnrd_rtxdi_on.csv (1492 lines)
+
+---------------------------------------------
+[14:35:21] scene=veach-ajar  algo=ncr  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.036s
+(Info) Importing scene: media/scenes/veach-ajar/scene-animation.pyscene
+(Info) Found 14 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 8 dynamic non-instanced meshes, arranged in 8 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 4 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 5 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.051694 s
+(Info) Optimizing materials:     0.059498 s
+(Info) Creating resources:       0.818626 s
+(Info) Loading scene (total):    1.918924 s
+(Info) LightCollection::build preparation: 0.000537 s
+(Info) LightCollection::build integrate emissive: 1.103556 s
+(Info) LightCollection::build finalize: 0.002012 s
+(Info) Initiating BLAS build for 9 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 23.83 MB
+(Info) BLAS build scratch buffer size: 5.31 MB
+(Info) BLAS group 0 final size: 8.96 MB
+(Info) Screen passes created: 	5765 ms
+(Info) Batch passes created: 	5014 ms
+(Info) NRModel created: 	107 ms
+(Info) NeuralRadiosity::updatePrograms() took 10886 ms
+(Info) NeuralRadiosity::prepareResources() took 7 ms
+  -> benchmark_results/bench_veach-ajar_ncr_rtxdi_on.csv (1575 lines)
+
+=============================================
+Round rtxdi_on complete. Elapsed: 559s
+=============================================

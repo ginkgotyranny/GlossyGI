@@ -52,7 +52,7 @@ __global__ void forwardKernel(
     uint32_t pixIdx = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t level = threadIdx.y;
     if (pixIdx >= count) return;
-    
+
     precision_t* levelOut = input + pixIdx * fullDim + encOffset + level * N_FEATURES_PER_LEVEL;
     const precision_t* posPtr = input + pixIdx * fullDim + posOffset;
 
@@ -63,12 +63,16 @@ __global__ void forwardKernel(
     for (int i = 0; i < N_FEATURES_PER_LEVEL; i++) { entry[i] = 0.0f; }
 
     const precision_t* grid = grids + cGridOffsets[level] * N_FEATURES_PER_LEVEL;
-    
+
     uint32_t res = cResolutions[level];
-    
+
     float3 posGrid = make_float3(pos3.x * res, pos3.y * res, pos3.z * res);
     uint3 base = make_uint3(posGrid.x, posGrid.y, posGrid.z);
     float3 offset = make_float3(posGrid.x - base.x, posGrid.y - base.y, posGrid.z - base.z);
+
+    const bool collectStats = (config.counters != nullptr && config.slotMarker != nullptr);
+    const uint32_t maxHash = 1u << config.log2HashMapSize;
+    const bool levelUsesHash = (cGridSizes[level] > maxHash);
 
     #pragma unroll
     for (int corner = 0; corner < 8; corner++) {
@@ -77,11 +81,23 @@ __global__ void forwardKernel(
         uint3 index3 = make_uint3(base.x + corner3.x, base.y + corner3.y, base.z + corner3.z);
         uint32_t index = _hash_index(index3, level, config.log2HashMapSize);
 
+        // Debug: count unique hash slots and total hash-mode queries.
+        // Only hash-mode levels (denseMax > maxHash) can collide; dense levels
+        // never collide by construction, so we skip stats for them.
+        if (collectStats && levelUsesHash) {
+            uint32_t slotGlobalIdx = level * maxHash + index;
+            uint32_t old = atomicExch(&config.slotMarker[slotGlobalIdx], 1u);
+            if (old == 0u) {
+                atomicAdd(&config.counters[0], 1u);  // unique slot
+            }
+            atomicAdd(&config.counters[1], 1u);  // total query
+        }
+
         // Calculate interpolation weight
         float weight = (corner3.x ? offset.x : (1 - offset.x)) *
                         (corner3.y ? offset.y : (1 - offset.y)) *
                         (corner3.z ? offset.z : (1 - offset.z));
-        
+
         const precision_t* features = grid + index * N_FEATURES_PER_LEVEL;
         #pragma unroll
         for (int i = 0; i < N_FEATURES_PER_LEVEL; i++) {
@@ -223,6 +239,14 @@ void launchBackward(
         case 8: backwardKernel<8><<<grid, block, 0, stream>>>(grids, input, dL_dinput, dL_dgrids, count, fullDim, encOffset, posOffset, config); break;
         default: assert(false);
     }
+}
+
+void resetCollisionStats(cudaStream_t stream, const Config& config) {
+    if (config.counters == nullptr || config.slotMarker == nullptr) return;
+    const uint32_t maxHash = 1u << config.log2HashMapSize;
+    const uint32_t markerSize = maxHash * config.nLevels;
+    cudaMemsetAsync(config.counters, 0, sizeof(uint32_t) * 2, stream);
+    cudaMemsetAsync(config.slotMarker, 0, sizeof(uint32_t) * markerSize, stream);
 }
 
 }  // namespace HashGrid

@@ -44,6 +44,15 @@ if [ -d ${AFTERMATH_DIR} ]; then
     cp -fp ${AFTERMATH_DIR}/lib/x64/libGFSDK_Aftermath_Lib.x64.so ${OUT_DIR}
 fi
 
+# Copy NRD shaders. Slang resolves #include "nrd/Shaders/Include/NRD.hlsli"
+# against the runtime shader directory, same layout as deploycommon.bat.
+NRD_DIR=${EXT_DIR}/nrd
+NRD_TARGET_DIR=${OUT_DIR}/shaders/nrd/Shaders
+if [ -d ${NRD_DIR}/Shaders ]; then
+    mkdir -p ${NRD_TARGET_DIR}
+    cp -frp ${NRD_DIR}/Shaders/. ${NRD_TARGET_DIR}/
+fi
+
 # Copy RTXDI SDK shaders
 RTXDI_DIR=${EXT_DIR}/rtxdi/rtxdi-sdk/include/rtxdi
 RTXDI_TARGET_DIR=${OUT_DIR}/shaders/rtxdi
@@ -55,16 +64,6 @@ if [ -d ${RTXDI_DIR} ]; then
     cp ${RTXDI_DIR}/RtxdiMath.hlsli ${RTXDI_TARGET_DIR}
     cp ${RTXDI_DIR}/RtxdiParameters.h ${RTXDI_TARGET_DIR}
     cp ${RTXDI_DIR}/RtxdiTypes.h ${RTXDI_TARGET_DIR}
-fi
-
-# Copy NRD SDK shaders
-NRD_DIR=${EXT_DIR}/nrd
-NRD_TARGET_DIR=${OUT_DIR}/shaders/nrd
-if [ -d ${NRD_DIR}/Shaders ]; then
-    mkdir -p ${NRD_TARGET_DIR}
-    cp -frp ${NRD_DIR}/Shaders ${NRD_TARGET_DIR}
-    cp -frp ${NRD_DIR}/Include ${NRD_TARGET_DIR}
-    cp -frp ${NRD_DIR}/Integration ${NRD_TARGET_DIR}
 fi
 
 # Copy NanoVDB

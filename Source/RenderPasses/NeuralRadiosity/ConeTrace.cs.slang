@@ -44,6 +44,18 @@ import PrefiltEnvCubemap;
 #define WAVE_SIZE 32
 #endif
 
+#ifndef N_GRID_LEVELS
+#define N_GRID_LEVELS 6
+#endif
+
+#ifndef DEBUG_SHOW_SPEC_LEVEL
+#define DEBUG_SHOW_SPEC_LEVEL 0
+#endif
+
+#ifndef DEBUG_DUMP
+#define DEBUG_DUMP 0
+#endif
+
 
 struct TemporalSpecHistory
 {
@@ -60,6 +72,22 @@ RWStructuredBuffer<float> specRoughness;
 RWStructuredBuffer<PackedHitInfo> specVBuffer;
 RWStructuredBuffer<SpecNetInput> specInput;
 // RWStructuredBuffer<TemporalSpecHistory> temporalHistory;
+
+// Debug: per-spec-pixel dominant grid level (weighted avg of cluster levels).
+// Written by ConeTrace when DEBUG_SHOW_SPEC_LEVEL is enabled; read by ResolvePass.
+RWStructuredBuffer<float> gSpecLevel;
+
+// Debug: per-spec-pixel debug dump buffers. Always written by ConeTrace's
+// writeOutput when DEBUG_DUMP is enabled, later copied to textures by
+// DebugDumpPass and saved to disk from C++.
+RWStructuredBuffer<float>  gSpecTanLobe;       // tanLobe value per spec pixel
+RWStructuredBuffer<float4> gSpecClusterMean;   // 4 cluster means per spec pixel (xyzw = clusters 0..3)
+RWStructuredBuffer<float4> gSpecClusterScale;  // 4 cluster scales per spec pixel (xyzw = clusters 0..3)
+RWStructuredBuffer<float4> gSpecClusterWeight; // 4 cluster weights per spec pixel (xyzw = clusters 0..3)
+RWStructuredBuffer<float4> gSpecClusterPosX;   // 4 cluster pos.x per spec pixel (xyzw = clusters 0..3)
+RWStructuredBuffer<float4> gSpecClusterPosY;   // 4 cluster pos.y per spec pixel
+RWStructuredBuffer<float4> gSpecClusterPosZ;   // 4 cluster pos.z per spec pixel
+RWStructuredBuffer<float2> gSpecMaterialData;  // (materialID, roughness) per spec pixel
 
 
 groupshared ShadingData sd;
@@ -92,6 +120,14 @@ groupshared int gsWaveSumInt[NUM_SPEC_RAYS / 32];
 groupshared int gsCentersInt[NUM_CLUSTERS];
 groupshared int gsVarsInt[NUM_CLUSTERS];
 groupshared int gsNewCentersInt[NUM_CLUSTERS];
+
+// Debug dump: per-cluster computed values (scale/pos/weight), accumulated
+// in the threadIdx < numClusters branch of writeOutput, read by threadIdx==0.
+groupshared float4 gsDumpClusterScale;
+groupshared float4 gsDumpClusterWeight;
+groupshared float4 gsDumpClusterPosX;
+groupshared float4 gsDumpClusterPosY;
+groupshared float4 gsDumpClusterPosZ;
 
 
 float GroupActiveSum(float value, uint threadID, uint groupSize)
@@ -168,6 +204,11 @@ struct ConeTrace
 
     float3 bboxMin;
     float3 bboxMax;
+
+    // Per-level voxel scales for the cluster (specular) grid.
+    // gridScales[i] = interpRatio / (baseResolution * perLevelScale^i).
+    // Level 0 = coarsest (largest voxel), level N-1 = finest (smallest voxel).
+    float gridScales[N_GRID_LEVELS];
 
     static const uint kConeTraceReuseModeTemporalMerge = 0;
     static const uint kConeTraceReuseModeTemporalToHistory = 1;
@@ -618,8 +659,15 @@ struct ConeTrace
             float frac = saturate(lutPos - lutIdx);
             tanLobe = lerp(gTanLobeLUT[lutIdx], gTanLobeLUT[lutIdx + 1], frac);
             cosLobe = lerp(gCosLobeLUT[lutIdx], gCosLobeLUT[lutIdx + 1], frac);
+
+            // Debug dump: write per-spec-pixel material ID and roughness.
+            if (DEBUG_DUMP != 0)
+            {
+                const uint matID = gScene.getMaterialID(hit.getInstanceID());
+                gSpecMaterialData[pixIdx] = float2((float)matID, roughness);
+            }
         }
-        
+
         GroupMemoryBarrierWithGroupSync();
     }
 
@@ -882,7 +930,48 @@ struct ConeTrace
                 (Real3) ((clsPos - bboxMin) / (bboxMax - bboxMin)),
                 (Real) clsScale, (Real) clsWeight
             );
+
+            // Debug dump: stash per-cluster scale/pos/weight into groupshared
+            // float4 slots (one component per cluster). Read by threadIdx==0
+            // below to write into per-spec-pixel debug buffers.
+            if (DEBUG_DUMP != 0)
+            {
+                switch (threadIdx)
+                {
+                case 0:
+                    gsDumpClusterScale.x  = clsScale;
+                    gsDumpClusterWeight.x = clsWeight;
+                    gsDumpClusterPosX.x   = clsPos.x;
+                    gsDumpClusterPosY.x   = clsPos.y;
+                    gsDumpClusterPosZ.x   = clsPos.z;
+                    break;
+                case 1:
+                    gsDumpClusterScale.y  = clsScale;
+                    gsDumpClusterWeight.y = clsWeight;
+                    gsDumpClusterPosX.y   = clsPos.x;
+                    gsDumpClusterPosY.y   = clsPos.y;
+                    gsDumpClusterPosZ.y   = clsPos.z;
+                    break;
+                case 2:
+                    gsDumpClusterScale.z  = clsScale;
+                    gsDumpClusterWeight.z = clsWeight;
+                    gsDumpClusterPosX.z   = clsPos.x;
+                    gsDumpClusterPosY.z   = clsPos.y;
+                    gsDumpClusterPosZ.z   = clsPos.z;
+                    break;
+                case 3:
+                    gsDumpClusterScale.w  = clsScale;
+                    gsDumpClusterWeight.w = clsWeight;
+                    gsDumpClusterPosX.w   = clsPos.x;
+                    gsDumpClusterPosY.w   = clsPos.y;
+                    gsDumpClusterPosZ.w   = clsPos.z;
+                    break;
+                }
+            }
         }
+        // Ensure per-cluster groupshared dump data (written by threads 0..3)
+        // is visible to thread 0 before it reads them.
+        if (DEBUG_DUMP != 0) GroupMemoryBarrierWithGroupSync();
         if (threadIdx == 0)
         {
             // Normalize to [0, 1]
@@ -898,6 +987,72 @@ struct ConeTrace
             specInput[pixIdx].data[SpecNetInput::envColorOffset + 0] = (Real) envColor.x;
             specInput[pixIdx].data[SpecNetInput::envColorOffset + 1] = (Real) envColor.y;
             specInput[pixIdx].data[SpecNetInput::envColorOffset + 2] = (Real) envColor.z;
+
+            // Debug: compute weighted-average grid level across clusters and
+            // store in gSpecLevel. Level selection mirrors HashGridInterp:
+            //   find upperLevel = first i where scaleVal > gridScales[i]
+            //   find lowerLevel = first i (from top) where scaleVal < gridScales[i]
+            //   avg level = lerp(lowerLevel, upperLevel, upperLayerWeight)
+            // Here we collapse to a single scalar per pixel for visualization.
+            // Written for both live visualization (DEBUG_SHOW_SPEC_LEVEL) and
+            // one-shot dump (DEBUG_DUMP) so the buffer is always populated.
+            if (DEBUG_SHOW_SPEC_LEVEL != 0 || DEBUG_DUMP != 0)
+            {
+                float weightedLevel = 0.0f;
+                float totalWeight = 0.0f;
+                [unroll]
+                for (uint c = 0; c < numClusters; ++c)
+                {
+                    float cMean = gsCenters[c];
+                    float cSize = gsCounts[c];
+                    float cStd = sqrt(gsVars[c] / max(cSize, 1.0f));
+                    float cScale = (cStd + tanLobe * cMean) / 2.0f;
+                    float cWeight = cSize / numSpecRays;
+                    if (cWeight <= 0.0f) continue;
+
+                    // Upper level: first i where cScale > gridScales[i]
+                    int upperL = N_GRID_LEVELS;
+                    [unroll]
+                    for (int i = 0; i < N_GRID_LEVELS; ++i)
+                    {
+                        if (cScale > gridScales[i]) { upperL = i; break; }
+                    }
+                    float upperLvlF;
+                    if (upperL == 0) upperLvlF = 0.0f;
+                    else if (upperL == N_GRID_LEVELS) upperLvlF = float(N_GRID_LEVELS - 1);
+                    else
+                    {
+                        float coarserS = gridScales[upperL - 1];
+                        float finerS   = gridScales[upperL];
+                        float w = (coarserS - cScale) / max(coarserS - finerS, 1e-8f);
+                        upperLvlF = float(upperL - 1) + w;
+                    }
+
+                    weightedLevel += upperLvlF * cWeight;
+                    totalWeight   += cWeight;
+                }
+                gSpecLevel[pixIdx] = (totalWeight > 0.0f) ? (weightedLevel / totalWeight) : -1.0f;
+            }
+
+            // Debug dump: write per-spec-pixel debug data to dedicated buffers.
+            // Read back by DebugDumpPass which copies to textures for CPU readback.
+            // Cluster data (scale/pos/weight) is computed per-cluster in the
+            // threadIdx < numClusters branch above; we stash them into
+            // groupshared arrays there, then read them back here in threadIdx==0.
+            if (DEBUG_DUMP != 0)
+            {
+                gSpecTanLobe[pixIdx] = tanLobe;
+                gSpecClusterMean[pixIdx] = float4(
+                    gsCenters[0], gsCenters[1], gsCenters[2], gsCenters[3]
+                );
+                // Per-cluster scale/pos/weight are written to gsDump* arrays
+                // in the threadIdx < numClusters branch below.
+                gSpecClusterScale[pixIdx]  = gsDumpClusterScale;
+                gSpecClusterWeight[pixIdx] = gsDumpClusterWeight;
+                gSpecClusterPosX[pixIdx]   = gsDumpClusterPosX;
+                gSpecClusterPosY[pixIdx]   = gsDumpClusterPosY;
+                gSpecClusterPosZ[pixIdx]   = gsDumpClusterPosZ;
+            }
         }
     }
 

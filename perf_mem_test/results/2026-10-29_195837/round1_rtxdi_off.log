@@ -1,0 +1,261 @@
+=============================================
+7-Scene Benchmark — Round: rtxdi_off
+  Repo root  : /data/wy/Falcor_part3_ver3/Falcor
+  Results dir: /data/wy/Falcor_part3_ver3/Falcor/perf_mem_test/results/2026-10-29_195837
+  RTXDI      : 0
+  Warmup     : 30s (static camera)
+  Measure    : 60s (moving camera)
+  Scenes     : bathroom bathroom2 cornell-box kitchen living-room teapot veach-ajar
+  Algorithms : ptdn ptnrd ncr
+=============================================
+
+---------------------------------------------
+[19:58:37] scene=bathroom  algo=ptdn  rtxdi=rtxdi_off
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0404s
+(Info) Importing scene: media/scenes/bathroom/scene-animation.pyscene
+(Info) Found 851 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 1 dynamic non-instanced meshes, arranged in 1 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 9 material textures.
+(Info) Removing duplicate material 'BlindsString' (duplicate of 'Paper').
+(Info) Removing duplicate material 'GreyWall' (duplicate of 'Blinds').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 10 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.018918 s
+(Info) Optimizing materials:     0.059103 s
+(Info) Creating resources:       0.813464 s
+(Info) Loading scene (total):    1.948453 s
+(Info) Created CUDA device 'NVIDIA GeForce RTX 3090' (architecture 8.6).
+(Info) Initiating BLAS build for 2 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 41.29 MB
+(Info) BLAS build scratch buffer size: 28.51 MB
+(Info) BLAS group 0 final size: 20.26 MB
+(Info) LightCollection::build preparation: 0.000502 s
+(Info) LightCollection::build integrate emissive: 1.074229 s
+(Info) LightCollection::build finalize: 0.001316 s
+Warning: Skipping mesh 'Mesh063' because 'models/Mesh063.ply' failed to load.
+Warning: Skipping mesh 'Mesh558' because 'models/Mesh558.ply' failed to load.
+Warning: Skipping mesh 'Mesh749' because 'models/Mesh749.ply' failed to load.
+Warning: Skipping mesh 'Mesh286' because 'models/Mesh286.ply' failed to load.
+[bench] scene=bathroom  waypoints=10
+[bench] loading graph: /data/wy/Falcor_part3_ver3/Falcor/scripts/OptixDenoiser.py
+[bench] algo=ptdn  scene=bathroom  duration=60.0s  warmup=30s (static)  fps_interval=30ms  mem_interval=2s  segment_time=2.0s  one_loop=23.0s
+[bench] running...
+[bench] holding camera still for 30.0s warmup (shader compile / first-frame)...
+[bench] warmup done (30s, 1049 frames). Measuring for 60.0s with camera trajectory...
+  [bench] sample 500  fps=50.3  elapsed=19.9/60.0s  cpu=2443MB  gpu=1013MB
+  [bench] sample 500  fps=50.3  elapsed=19.9/60.0s  cpu=2443MB  gpu=1013MB
+(Error) Caught an exception:
+
+KeyboardInterrupt: 
+
+At:
+  <string>(313): _bench_callback
+
+terminate called without an active exception
+/data/wy/Falcor_part3_ver3/Falcor/perf_mem_test/run_benchmark_round.sh: line 97: 938932 Aborted                 LD_PRELOAD="$LD_PRELOAD" "$MOGWAI" --width 1280 --height 720 --deferred --script "$BENCH_SCRIPT" --scene "$spath"
+  -> WARNING: no CSV produced for bathroom/ptdn
+
+---------------------------------------------
+[19:59:48] scene=bathroom  algo=ptnrd  rtxdi=rtxdi_off
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.028s
+(Info) Importing scene: media/scenes/bathroom/scene-animation.pyscene
+(Info) Found 851 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 1 dynamic non-instanced meshes, arranged in 1 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 9 material textures.
+(Info) Removing duplicate material 'BlindsString' (duplicate of 'Paper').
+(Info) Removing duplicate material 'GreyWall' (duplicate of 'Blinds').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 10 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.018109 s
+(Info) Optimizing materials:     0.057967 s
+(Info) Creating resources:       0.795279 s
+(Info) Loading scene (total):    1.916535 s
+(Info) Initiating BLAS build for 2 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 41.29 MB
+(Info) BLAS build scratch buffer size: 28.51 MB
+(Info) BLAS group 0 final size: 20.26 MB
+(Info) LightCollection::build preparation: 0.000514 s
+(Info) LightCollection::build integrate emissive: 1.117703 s
+(Info) LightCollection::build finalize: 0.008915 s
+Exception ignored in: <module 'threading' from '/data/wy/Falcor_part3_ver3/Falcor/build/linux-gcc/bin/Release/pythondist/lib/python3.10/threading.py'>
+Traceback (most recent call last):
+  File "/data/wy/Falcor_part3_ver3/Falcor/build/linux-gcc/bin/Release/pythondist/lib/python3.10/threading.py", line 1518, in _shutdown
+    def _shutdown():
+KeyboardInterrupt: 
+Warning: Skipping mesh 'Mesh063' because 'models/Mesh063.ply' failed to load.
+Warning: Skipping mesh 'Mesh558' because 'models/Mesh558.ply' failed to load.
+Warning: Skipping mesh 'Mesh749' because 'models/Mesh749.ply' failed to load.
+Warning: Skipping mesh 'Mesh286' because 'models/Mesh286.ply' failed to load.
+[bench] scene=bathroom  waypoints=10
+[bench] loading graph: /data/wy/Falcor_part3_ver3/Falcor/scripts/PathTracerNRD_VK.py
+[bench] algo=ptnrd  scene=bathroom  duration=60.0s  warmup=30s (static)  fps_interval=30ms  mem_interval=2s  segment_time=2.0s  one_loop=23.0s
+[bench] running...
+[bench] holding camera still for 30.0s warmup (shader compile / first-frame)...
+  -> WARNING: no CSV produced for bathroom/ptnrd
+
+---------------------------------------------
+[20:00:06] scene=bathroom  algo=ncr  rtxdi=rtxdi_off
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0307s
+(Info) Importing scene: media/scenes/bathroom/scene-animation.pyscene
+(Info) Found 851 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 1 dynamic non-instanced meshes, arranged in 1 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 9 material textures.
+(Info) Removing duplicate material 'BlindsString' (duplicate of 'Paper').
+(Info) Removing duplicate material 'GreyWall' (duplicate of 'Blinds').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 10 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.018921 s
+(Info) Optimizing materials:     0.057273 s
+(Info) Creating resources:       0.798150 s
+(Info) Loading scene (total):    1.933775 s
+(Info) LightCollection::build preparation: 0.000522 s
+(Info) LightCollection::build integrate emissive: 1.142031 s
+(Info) LightCollection::build finalize: 0.000984 s
+(Info) Initiating BLAS build for 2 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 41.29 MB
+(Info) BLAS build scratch buffer size: 28.51 MB
+(Info) BLAS group 0 final size: 20.26 MB
+(Info) Screen passes created: 	5731 ms
+(Info) Batch passes created: 	4933 ms
+(Info) NRModel created: 	104 ms
+(Info) NeuralRadiosity::updatePrograms() took 10768 ms
+(Info) NeuralRadiosity::prepareResources() took 7 ms
+Warning: Skipping mesh 'Mesh063' because 'models/Mesh063.ply' failed to load.
+Warning: Skipping mesh 'Mesh558' because 'models/Mesh558.ply' failed to load.
+Warning: Skipping mesh 'Mesh749' because 'models/Mesh749.ply' failed to load.
+Warning: Skipping mesh 'Mesh286' because 'models/Mesh286.ply' failed to load.
+[bench] scene=bathroom  waypoints=10
+[bench] loading graph: /data/wy/Falcor_part3_ver3/Falcor/scripts/NeuralRadiosity.py
+[bench] algo=ncr  scene=bathroom  duration=60.0s  warmup=30s (static)  fps_interval=30ms  mem_interval=2s  segment_time=2.0s  one_loop=23.0s
+[bench] running...
+[bench] holding camera still for 30.0s warmup (shader compile / first-frame)...
+  -> WARNING: no CSV produced for bathroom/ncr
+
+---------------------------------------------
+[20:00:23] scene=bathroom2  algo=ptdn  rtxdi=rtxdi_off
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.041s
+(Info) Importing scene: media/scenes/bathroom2/scene-animation.pyscene
+(Info) Found 72 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 dynamic non-instanced meshes, arranged in 0 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 3 material textures.
+(Info) Removing duplicate material 'Wall' (duplicate of 'Towel').
+(Info) Removing duplicate material 'Bin' (duplicate of 'Mirror').
+(Info) Removing duplicate material 'Ceramic' (duplicate of 'Plastic').
+(Info) Removing duplicate material 'DarkBorder' (duplicate of 'DarkPlastic').
+(Info) Removing duplicate material 'WallRight' (duplicate of 'Towel').
+(Info) Removing duplicate material 'Trims' (duplicate of 'Towel').
+(Info) Removing duplicate material '__inline_material_18' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_19' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_20' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_21' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_22' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_23' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_24' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_25' (duplicate of '__inline_material_16').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 7 bits, primitiveIndex: 18 bits)
+(Info) Post processing geometry: 0.022399 s
+(Info) Optimizing materials:     0.071295 s
+(Info) Creating resources:       0.827909 s
+(Info) Loading scene (total):    5.730117 s
+(Info) Created CUDA device 'NVIDIA GeForce RTX 3090' (architecture 8.6).
+/data/wy/Falcor_part3_ver3/Falcor/perf_mem_test/run_benchmark_round.sh: line 97: 940490 Killed                  LD_PRELOAD="$LD_PRELOAD" "$MOGWAI" --width 1280 --height 720 --deferred --script "$BENCH_SCRIPT" --scene "$spath"
+  -> WARNING: no CSV produced for bathroom2/ptdn
+
+---------------------------------------------
+[20:00:30] scene=bathroom2  algo=ptnrd  rtxdi=rtxdi_off
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0346s
+(Info) Importing scene: media/scenes/bathroom2/scene-animation.pyscene
+(Info) Found 72 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 dynamic non-instanced meshes, arranged in 0 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 3 material textures.
+(Info) Removing duplicate material 'Wall' (duplicate of 'Towel').
+(Info) Removing duplicate material 'Bin' (duplicate of 'Mirror').
+(Info) Removing duplicate material 'Ceramic' (duplicate of 'Plastic').
+(Info) Removing duplicate material 'DarkBorder' (duplicate of 'DarkPlastic').
+(Info) Removing duplicate material 'WallRight' (duplicate of 'Towel').
+(Info) Removing duplicate material 'Trims' (duplicate of 'Towel').
+(Info) Removing duplicate material '__inline_material_18' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_19' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_20' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_21' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_22' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_23' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_24' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_25' (duplicate of '__inline_material_16').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 7 bits, primitiveIndex: 18 bits)
+(Info) Post processing geometry: 0.024276 s
+(Info) Optimizing materials:     0.073697 s
+(Info) Creating resources:       0.810491 s
+(Info) Loading scene (total):    5.783252 s
+/data/wy/Falcor_part3_ver3/Falcor/perf_mem_test/run_benchmark_round.sh: line 97: 940628 Killed                  LD_PRELOAD="$LD_PRELOAD" "$MOGWAI" --width 1280 --height 720 --deferred --script "$BENCH_SCRIPT" --scene "$spath"
+  -> WARNING: no CSV produced for bathroom2/ptnrd
+
+---------------------------------------------
+[20:00:37] scene=bathroom2  algo=ncr  rtxdi=rtxdi_off
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0304s
+(Info) Importing scene: media/scenes/bathroom2/scene-animation.pyscene
+(Error) Failed to load scene.
+
+Error in /home/wy/.cache/packman/chk/falcor_media/7acdf8b0/scenes/bathroom2/scene-animation.pyscene
+
+Failed to run python scene script: KeyboardInterrupt: 
+
+At:
+  <string>(600): <module>
+
+(Info) Importing scene: media/scenes/bathroom2/scene-animation.pyscene
+(Info) Found 72 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 dynamic non-instanced meshes, arranged in 0 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 3 material textures.
+(Info) Removing duplicate material 'Wall' (duplicate of 'Towel').
+(Info) Removing duplicate material 'Bin' (duplicate of 'Mirror').
+(Info) Removing duplicate material 'Ceramic' (duplicate of 'Plastic').
+(Info) Removing duplicate material 'DarkBorder' (duplicate of 'DarkPlastic').
+(Info) Removing duplicate material 'WallRight' (duplicate of 'Towel').
+(Info) Removing duplicate material 'Trims' (duplicate of 'Towel').
+(Info) Removing duplicate material '__inline_material_18' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_19' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_20' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_21' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_22' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_23' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_24' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_25' (duplicate of '__inline_material_16').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 7 bits, primitiveIndex: 18 bits)
+(Info) Post processing geometry: 0.022748 s
+(Info) Optimizing materials:     0.062436 s
+(Info) Creating resources:       0.807462 s
+(Info) Loading scene (total):    5.605272 s
+(Info) LightCollection::build preparation: 0.000499 s
+(Info) LightCollection::build integrate emissive: 1.100336 s
+(Info) LightCollection::build finalize: 0.000975 s

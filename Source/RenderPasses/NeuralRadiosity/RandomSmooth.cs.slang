@@ -140,6 +140,7 @@ struct RandomSmooth
         IMaterialInstance mi;
         PathState path = {};
         generatePath(idx, 0, path);
+        bool pathActive = true;  // Local tracking to work around Slang bitfield bug
 
         // Compute primary ray.
         Ray ray = computeRandomRayPinhole(sampleNext2D(path.sg));
@@ -181,10 +182,10 @@ struct RandomSmooth
                     BSDFSample result = {};
                     bool valid = mi.sample(sd, path.sg, result);
                     if (valid) valid = generateScatterRay(result, sd, mi, path, kSpecularRoughnessThreshold);
-    
+
                     // Resample ray if the BSDF sample is invalid.
                     resample = resample || !valid;
-    
+
                     // Update ray.
                     ray = path.getScatterRay();
                 }
@@ -208,7 +209,7 @@ struct RandomSmooth
                     }
                     normal = sd.frame.N;
                     roughness = bsdfProperties.roughness;
-                    albedo = all(bsdfProperties.diffuseReflectionAlbedo < 0.01f) ? 
+                    albedo = all(bsdfProperties.diffuseReflectionAlbedo < 0.01f) ?
                         bsdfProperties.specularReflectionAlbedo : bsdfProperties.diffuseReflectionAlbedo;
                     color = path.thp;
                     break;
@@ -224,17 +225,19 @@ struct RandomSmooth
                 roughness = 1.f;
                 path = {};
                 generatePath(idx, i + 1, path);
+                pathActive = true;  // reset for new path
                 ray = computeRandomRayPinhole(sampleNext2D(path.sg));
             }
         }
         if (resample)
         {
             path.terminate();
+            pathActive = false;
         }
 
         // Active mask
-        uint diffAct = (path.isActive() && (roughness > kSpecularRoughnessThreshold)) ? 1 : 0;
-        uint specAct = (path.isActive() && (roughness <= kSpecularRoughnessThreshold)) ? 1 : 0;
+        uint diffAct = (pathActive && (roughness > kSpecularRoughnessThreshold)) ? 1 : 0;
+        uint specAct = (pathActive && (roughness <= kSpecularRoughnessThreshold)) ? 1 : 0;
 
         // Write outputs
         allColor[idx] = float4(color, 0.f);

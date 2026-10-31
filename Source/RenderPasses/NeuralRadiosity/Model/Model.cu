@@ -11,6 +11,7 @@
 #include "tiny-cuda-nn/loss.h"
 #include "tiny-cuda-nn/optimizer.h"
 #include "tiny-cuda-nn/trainer.h"
+#include <nlohmann/json.hpp>
 
 
 // Model code
@@ -288,6 +289,12 @@ NRModel::~NRModel() {
     mpSpecNetOpt.reset();
     mpLoss.reset();
 
+    if (mpPrimCollisionCounters) { cudaFree(mpPrimCollisionCounters); mpPrimCollisionCounters = nullptr; }
+    if (mpPrimCollisionMarker)   { cudaFree(mpPrimCollisionMarker);   mpPrimCollisionMarker   = nullptr; }
+    if (mpClsCollisionCounters)  { cudaFree(mpClsCollisionCounters);  mpClsCollisionCounters  = nullptr; }
+    if (mpClsCollisionMarker)    { cudaFree(mpClsCollisionMarker);    mpClsCollisionMarker    = nullptr; }
+    if (mpClsLevelHistogram)     { cudaFree(mpClsLevelHistogram);     mpClsLevelHistogram     = nullptr; }
+
     if (mTrainStream) {
         CUDA_CHECK_THROW(cudaStreamDestroy(mTrainStream));
     }
@@ -295,6 +302,151 @@ NRModel::~NRModel() {
         CUDA_CHECK_THROW(cudaStreamDestroy(mInferenceStream));
     }
 }
+
+void NRModel::resetCollisionStats() {
+    if (!mCollisionStatsEnabled) return;
+    HashGrid::resetCollisionStats(mInferenceStream, mPrimGridConfig);
+    HashGridInterp::resetCollisionStats(mInferenceStream, mClsGridConfig);
+    HashGridInterp::resetLevelHistogram(mInferenceStream, mClsGridConfig);
+    HashGrid::resetCollisionStats(mTrainStream, mPrimGridConfig);
+    HashGridInterp::resetCollisionStats(mTrainStream, mClsGridConfig);
+    HashGridInterp::resetLevelHistogram(mTrainStream, mClsGridConfig);
+}
+
+void NRModel::setCollisionStatsEnabled(bool enabled) {
+    if (enabled == mCollisionStatsEnabled) return;
+    mCollisionStatsEnabled = enabled;
+
+    if (enabled) {
+        // Allocate counters (2 uint32) + marker buffer (per level).
+        const uint32_t primMaxHash = 1u << mPrimGridConfig.log2HashMapSize;
+        mPrimMarkerSize = primMaxHash * mPrimGridConfig.nLevels;
+        cudaMalloc(&mpPrimCollisionCounters, sizeof(uint32_t) * 2);
+        cudaMalloc(&mpPrimCollisionMarker,   sizeof(uint32_t) * mPrimMarkerSize);
+        cudaMemset(mpPrimCollisionCounters, 0, sizeof(uint32_t) * 2);
+        cudaMemset(mpPrimCollisionMarker,   0, sizeof(uint32_t) * mPrimMarkerSize);
+
+        const uint32_t clsMaxHash = 1u << mClsGridConfig.log2HashMapSize;
+        mClsMarkerSize = clsMaxHash * mClsGridConfig.nLevels;
+        cudaMalloc(&mpClsCollisionCounters, sizeof(uint32_t) * 2);
+        cudaMalloc(&mpClsCollisionMarker,   sizeof(uint32_t) * mClsMarkerSize);
+        cudaMemset(mpClsCollisionCounters, 0, sizeof(uint32_t) * 2);
+        cudaMemset(mpClsCollisionMarker,   0, sizeof(uint32_t) * mClsMarkerSize);
+
+        // Specular level-usage histogram: nLevels * nLevels uint32_t.
+        const uint32_t histSize = mClsGridConfig.nLevels * mClsGridConfig.nLevels;
+        cudaMalloc(&mpClsLevelHistogram, sizeof(uint32_t) * histSize);
+        cudaMemset(mpClsLevelHistogram, 0, sizeof(uint32_t) * histSize);
+        mClsGridConfig.levelHistogram = mpClsLevelHistogram;
+
+        mPrimGridConfig.counters = mpPrimCollisionCounters;
+        mPrimGridConfig.slotMarker = mpPrimCollisionMarker;
+        mClsGridConfig.counters = mpClsCollisionCounters;
+        mClsGridConfig.slotMarker = mpClsCollisionMarker;
+    } else {
+        mPrimGridConfig.counters = nullptr;
+        mPrimGridConfig.slotMarker = nullptr;
+        mClsGridConfig.counters = nullptr;
+        mClsGridConfig.slotMarker = nullptr;
+        mClsGridConfig.levelHistogram = nullptr;
+
+        if (mpPrimCollisionCounters) { cudaFree(mpPrimCollisionCounters); mpPrimCollisionCounters = nullptr; }
+        if (mpPrimCollisionMarker)   { cudaFree(mpPrimCollisionMarker);   mpPrimCollisionMarker   = nullptr; }
+        if (mpClsCollisionCounters)  { cudaFree(mpClsCollisionCounters);  mpClsCollisionCounters  = nullptr; }
+        if (mpClsCollisionMarker)    { cudaFree(mpClsCollisionMarker);    mpClsCollisionMarker    = nullptr; }
+        if (mpClsLevelHistogram)     { cudaFree(mpClsLevelHistogram);     mpClsLevelHistogram     = nullptr; }
+        mPrimMarkerSize = 0;
+        mClsMarkerSize = 0;
+    }
+}
+
+NRModel::CollisionStats NRModel::getCollisionStats() const {
+    if (!mCollisionStatsEnabled) return {0, 0, 0, 0};
+
+    // Make sure all counter writes on both streams are visible to host.
+    if (mInferenceStream) cudaStreamSynchronize(mInferenceStream);
+    if (mTrainStream)      cudaStreamSynchronize(mTrainStream);
+
+    uint32_t primHost[2] = {0, 0};
+    uint32_t clsHost[2] = {0, 0};
+    if (mpPrimCollisionCounters) {
+        cudaMemcpy(primHost, mpPrimCollisionCounters, sizeof(uint32_t) * 2, cudaMemcpyDeviceToHost);
+    }
+    if (mpClsCollisionCounters) {
+        cudaMemcpy(clsHost, mpClsCollisionCounters, sizeof(uint32_t) * 2, cudaMemcpyDeviceToHost);
+    }
+    mLastCollisionStats.primUniqueSlots   = primHost[0];
+    mLastCollisionStats.primTotalQueries  = primHost[1];
+    mLastCollisionStats.clsUniqueSlots    = clsHost[0];
+    mLastCollisionStats.clsTotalQueries   = clsHost[1];
+    return mLastCollisionStats;
+}
+
+void NRModel::getLevelHistogram(std::vector<uint32_t>& outHostHistogram) const {
+    const uint32_t nLevels = mClsGridConfig.nLevels;
+    outHostHistogram.assign((size_t)nLevels * nLevels, 0u);
+    if (!mCollisionStatsEnabled || mpClsLevelHistogram == nullptr) return;
+
+    if (mInferenceStream) cudaStreamSynchronize(mInferenceStream);
+    if (mTrainStream)      cudaStreamSynchronize(mTrainStream);
+
+    cudaMemcpy(outHostHistogram.data(), mpClsLevelHistogram,
+               sizeof(uint32_t) * (size_t)nLevels * nLevels,
+               cudaMemcpyDeviceToHost);
+}
+
+std::vector<float> NRModel::getClusterGridScales() const {
+    const uint32_t nLevels = mClsGridConfig.nLevels;
+    std::vector<float> scales(nLevels);
+    float resolution = (float)mClsGridConfig.baseResolution;
+    for (uint32_t i = 0; i < nLevels; ++i) {
+        scales[i] = mClsGridConfig.interpRatio / resolution;
+        resolution *= mClsGridConfig.perLevelScale;
+    }
+    return scales;
+}
+
+// --- Runtime hyperparameter tuning ---
+
+// Helper: cast optimizer to EmaOptimizer to access decay
+static float getEmaDecay(const std::shared_ptr<tcnn::Optimizer<precision_t>>& opt) {
+    return opt->hyperparams()["decay"];
+}
+
+static void setEmaDecay(std::shared_ptr<tcnn::Optimizer<precision_t>>& opt, float v) {
+    tcnn::json hp = opt->hyperparams();
+    hp["decay"] = v;
+    opt->update_hyperparams(hp);
+}
+
+float NRModel::getPrimGridEmaDecay() const { return getEmaDecay(mpPrimGridOpt); }
+float NRModel::getClsGridEmaDecay()  const { return getEmaDecay(mpClsGridOpt); }
+float NRModel::getDiffNetEmaDecay()  const { return getEmaDecay(mpDiffNetOpt); }
+float NRModel::getSpecNetEmaDecay()  const { return getEmaDecay(mpSpecNetOpt); }
+
+void NRModel::setPrimGridEmaDecay(float v) { setEmaDecay(mpPrimGridOpt, v); }
+void NRModel::setClsGridEmaDecay(float v)  { setEmaDecay(mpClsGridOpt, v); }
+void NRModel::setDiffNetEmaDecay(float v)  { setEmaDecay(mpDiffNetOpt, v); }
+void NRModel::setSpecNetEmaDecay(float v)  { setEmaDecay(mpSpecNetOpt, v); }
+
+void NRModel::setInterpRatio(float v) {
+    if (v <= 0.f) return;
+    mClsGridConfig.interpRatio = v;
+    HashGridInterp::initializeConstants(mClsGridConfig);
+}
+
+// Learning rate accessors
+float NRModel::getPrimGridLr() const { return mpPrimGridOpt->learning_rate(); }
+float NRModel::getClsGridLr()  const { return mpClsGridOpt->learning_rate(); }
+float NRModel::getDiffNetLr()  const { return mpDiffNetOpt->learning_rate(); }
+float NRModel::getSpecNetLr()  const { return mpSpecNetOpt->learning_rate(); }
+
+void NRModel::setPrimGridLr(float v) { mpPrimGridOpt->set_learning_rate(v); }
+void NRModel::setClsGridLr(float v)  { mpClsGridOpt->set_learning_rate(v); }
+void NRModel::setDiffNetLr(float v)  { mpDiffNetOpt->set_learning_rate(v); }
+void NRModel::setSpecNetLr(float v)  { mpSpecNetOpt->set_learning_rate(v); }
+
+uint32_t NRModel::getOptimizerStep() const { return mpDiffNetOpt->step(); }
 
 void NRModel::setOnline(bool online)
 {
@@ -490,14 +642,147 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
             mClsGridConfig
         );
     }
-    if (diffBatchSize > 0) {
+    if (diffBatchSize > 0 && !mFreezeDiffNetOpt) {
         mpDiffNetOpt->step(mTrainStream, lossScale, mpDiffParamsFull->data(), mpDiffParams->data(), mpDiffParamsGradient->data());
     }
-    if (specBatchSize > 0) {
+    if (specBatchSize > 0 && !mFreezeSpecNetOpt) {
         mpSpecNetOpt->step(mTrainStream, lossScale, mpSpecParamsFull->data(), mpSpecParams->data(), mpSpecParamsGradient->data());
+    }
+    if (specBatchSize > 0 && !mFreezeClsGridOpt) {
         mpClsGridOpt->step(mTrainStream, lossScale, mpClsGridsFull->data(), mpClsGrids->data(), mpClsGridsGradient->data());
     }
-    if (diffBatchSize > 0 || specBatchSize > 0) {
+    if ((diffBatchSize > 0 || specBatchSize > 0) && !mFreezePrimGridOpt) {
         mpPrimGridOpt->step(mTrainStream, lossScale, mpPrimGridsFull->data(), mpPrimGrids->data(), mpPrimGridsGradient->data());
     }
+}
+
+// ============================================================================
+// Checkpoint save / load (from the Windows working branch).
+// ============================================================================
+
+namespace {
+void writeGPUBuffer(std::ofstream& ofs, const tcnn::GPUMemory<precision_t>& halfBuf, const tcnn::GPUMemory<float>& fullBuf) {
+    const uint32_t count = (uint32_t)halfBuf.size();
+    std::vector<float> host(count);
+    CUDA_CHECK_THROW(cudaMemcpy(host.data(), fullBuf.data(), count * sizeof(float), cudaMemcpyDeviceToHost));
+    ofs.write(reinterpret_cast<const char*>(host.data()), count * sizeof(float));
+}
+
+void readGPUBuffer(std::ifstream& ifs, tcnn::GPUMemory<precision_t>& halfBuf, tcnn::GPUMemory<float>& fullBuf) {
+    const uint32_t count = (uint32_t)halfBuf.size();
+    std::vector<float> host(count);
+    ifs.read(reinterpret_cast<char*>(host.data()), count * sizeof(float));
+    CUDA_CHECK_THROW(cudaMemcpy(fullBuf.data(), host.data(), count * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK_THROW(cudaMemcpy(halfBuf.data(), host.data(), count * sizeof(precision_t), cudaMemcpyHostToDevice));
+}
+} // namespace
+
+void NRModel::saveState(const std::string& path) {
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mTrainStream));
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mInferenceStream));
+
+    std::ofstream ofs(path, std::ios::binary);
+    if (!ofs) throw std::runtime_error("Cannot open file for writing: " + path);
+
+    const uint32_t version = 1;
+    const uint32_t nPrim = (uint32_t)mpPrimGrids->size();
+    const uint32_t nCls = (uint32_t)mpClsGrids->size();
+    const uint32_t nDiff = (uint32_t)mpDiffParams->size();
+    const uint32_t nSpec = (uint32_t)mpSpecParams->size();
+    ofs.write(reinterpret_cast<const char*>(&version), sizeof(version));
+    ofs.write(reinterpret_cast<const char*>(&nPrim), sizeof(nPrim));
+    ofs.write(reinterpret_cast<const char*>(&nCls), sizeof(nCls));
+    ofs.write(reinterpret_cast<const char*>(&nDiff), sizeof(nDiff));
+    ofs.write(reinterpret_cast<const char*>(&nSpec), sizeof(nSpec));
+
+    writeGPUBuffer(ofs, *mpPrimGrids, *mpPrimGridsFull);
+    writeGPUBuffer(ofs, *mpClsGrids, *mpClsGridsFull);
+    writeGPUBuffer(ofs, *mpDiffParams, *mpDiffParamsFull);
+    writeGPUBuffer(ofs, *mpSpecParams, *mpSpecParamsFull);
+
+    ofs.close();
+    fmt::print("NRModel::saveState: saved to {}\n", path);
+}
+
+// Reset the EMA optimizer's nested Adam step counter to a large value so that
+// the EMA debias factor is ~1.0 from the first step.
+static void resetOptimizerStepCounter(
+    const std::shared_ptr<tcnn::Optimizer<precision_t>>& opt,
+    uint32_t nWeights)
+{
+    if (!opt) return;
+    tcnn::json state = opt->serialize();
+    if (state.contains("nested")) {
+        auto& nested = state["nested"];
+        if (nested.contains("current_step")) {
+            nested["current_step"] = 10000u;
+        }
+        if (nested.contains("first_moments_binary")) {
+            auto& bin = nested["first_moments_binary"].get_binary();
+            std::fill(bin.begin(), bin.end(), 0);
+        }
+        if (nested.contains("second_moments_binary")) {
+            auto& bin = nested["second_moments_binary"].get_binary();
+            std::fill(bin.begin(), bin.end(), 0);
+        }
+        if (nested.contains("param_steps_binary")) {
+            auto& bin = nested["param_steps_binary"].get_binary();
+            std::fill(bin.begin(), bin.end(), 0);
+        }
+    }
+    opt->deserialize(state);
+}
+
+void NRModel::loadState(const std::string& path) {
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs) {
+        throw std::runtime_error("Cannot open file for reading: " + path);
+    }
+
+    uint32_t version = 0;
+    ifs.read(reinterpret_cast<char*>(&version), sizeof(version));
+    if (version != 1) {
+        throw std::runtime_error(fmt::format("Unsupported checkpoint version: {}", version));
+    }
+
+    fmt::print("Loading checkpoint: primGrids={}, clsGrids={}, diffParams={}, specParams={}\n",
+        mpPrimGrids->size(), mpClsGrids->size(), mpDiffParams->size(), mpSpecParams->size());
+
+    readGPUBuffer(ifs, *mpPrimGrids, *mpPrimGridsFull);
+    fmt::print("  primGrids loaded\n");
+    readGPUBuffer(ifs, *mpClsGrids, *mpClsGridsFull);
+    fmt::print("  clsGrids loaded\n");
+    readGPUBuffer(ifs, *mpDiffParams, *mpDiffParamsFull);
+    fmt::print("  diffParams loaded\n");
+    readGPUBuffer(ifs, *mpSpecParams, *mpSpecParamsFull);
+    fmt::print("  specParams loaded\n");
+
+    // Copy loaded weights to EMA optimizer's custom weights so inference uses them
+    const uint32_t primGridSize = mpPrimGrids->size();
+    const uint32_t clsGridSize = mpClsGrids->size();
+    const uint32_t diffNetSize = mpDiffParams->size();
+    const uint32_t specNetSize = mpSpecParams->size();
+
+    if (mpPrimGridOpt->custom_weights())
+        cudaMemcpy(mpPrimGridOpt->custom_weights(), mpPrimGrids->data(), primGridSize * sizeof(precision_t), cudaMemcpyDeviceToDevice);
+    if (mpClsGridOpt->custom_weights())
+        cudaMemcpy(mpClsGridOpt->custom_weights(), mpClsGrids->data(), clsGridSize * sizeof(precision_t), cudaMemcpyDeviceToDevice);
+    if (mpDiffNetOpt->custom_weights())
+        cudaMemcpy(mpDiffNetOpt->custom_weights(), mpDiffParams->data(), diffNetSize * sizeof(precision_t), cudaMemcpyDeviceToDevice);
+    if (mpSpecNetOpt->custom_weights())
+        cudaMemcpy(mpSpecNetOpt->custom_weights(), mpSpecParams->data(), specNetSize * sizeof(precision_t), cudaMemcpyDeviceToDevice);
+
+    // Reset optimizer step counters so EMA debias doesn't overwrite loaded weights
+    resetOptimizerStepCounter(mpPrimGridOpt, primGridSize);
+    resetOptimizerStepCounter(mpClsGridOpt, clsGridSize);
+    resetOptimizerStepCounter(mpDiffNetOpt, diffNetSize);
+    resetOptimizerStepCounter(mpSpecNetOpt, specNetSize);
+
+    mpPrimGridsInference = mpPrimGridOpt->custom_weights() ? mpPrimGridOpt->custom_weights() : mpPrimGrids->data();
+    mpClsGridsInference = mpClsGridOpt->custom_weights() ? mpClsGridOpt->custom_weights() : mpClsGrids->data();
+    mpDiffParamsInference = mpDiffNetOpt->custom_weights() ? mpDiffNetOpt->custom_weights() : mpDiffParams->data();
+    mpSpecParamsInference = mpSpecNetOpt->custom_weights() ? mpSpecNetOpt->custom_weights() : mpSpecParams->data();
+
+    ifs.close();
+    fmt::print("NRModel::loadState: loaded from {}\n", path);
 }

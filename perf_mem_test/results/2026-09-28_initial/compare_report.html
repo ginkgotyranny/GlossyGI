@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html><head><title>算法对比报告</title>
+<meta charset="utf-8">
+</head>
+<body style="background:#1a1a2e;color:#e0e0e0;font-family:monospace;margin:20px">
+<h2>算法对比报告 — ptdn, ptnrd, ncr (2026-09-22 18:02)</h2>
+
+
+<h3 style="color:#e0e0e0">测试方法</h3>
+<table style="border-collapse:collapse;margin:10px 0">
+<tr><td style="padding:4px 20px;color:#888">场景</td><td style="color:#e0e0e0">bathroom (scene-animation.pyscene, 851 个网格, 591K 三角形)</td></tr>
+<tr><td style="padding:4px 20px;color:#888">分辨率</td><td style="color:#e0e0e0">1280x720</td></tr>
+<tr><td style="padding:4px 20px;color:#888">每个算法测试时长</td><td style="color:#e0e0e0">25.0 秒</td></tr>
+<tr><td style="padding:4px 20px;color:#888">预热帧数</td><td style="color:#e0e0e0">30 帧（相机移动中，不记录数据；用于 shader 编译和 GPU 预热）</td></tr>
+<tr><td style="padding:4px 20px;color:#888">相机轨迹</td><td style="color:#e0e0e0">Catmull-Rom 样条插值，10 个航点，一圈 ≈ 23.0s，段间时间=2.0s</td></tr>
+<tr><td style="padding:4px 20px;color:#888">相机动画</td><td style="color:#e0e0e0">已禁用 (cam.animated=False)，由 sceneUpdateCallback 逐帧驱动</td></tr>
+<tr><td style="padding:4px 20px;color:#888">帧率测量</td><td style="color:#e0e0e0">连续两次 sceneUpdateCallback 调用之间的挂钟时间间隔（= 逐帧间隔）</td></tr>
+<tr><td style="padding:4px 20px;color:#888">RSS (CPU)</td><td style="color:#e0e0e0">/proc/self/status VmRSS — 进程驻留内存（含共享库），逐帧采样</td></tr>
+<tr><td style="padding:4px 20px;color:#888">PSS (CPU)</td><td style="color:#e0e0e0">/proc/self/smaps_rollup Pss — 比例分摊内存（私有 + 共享库按比例分摊），逐帧采样</td></tr>
+<tr><td style="padding:4px 20px;color:#888">VRAM (GPU)</td><td style="color:#e0e0e0">nvidia-smi --query-compute-apps — 进程级 GPU 显存，后台线程每 2 秒采样</td></tr>
+<tr><td style="padding:4px 20px;color:#888">GPU 功耗</td><td style="color:#e0e0e0">nvidia-smi --query-gpu power.draw — 后台进程每 500ms 采样</td></tr>
+</table>
+
+<h4 style="color:#ccc;margin-top:15px">相机航点（位置, 朝向, 停留时间）</h4>
+<table style="border-collapse:collapse;margin:5px 0;font-size:12px">
+<tr><th style="padding:3px 10px;color:#888;border-bottom:1px solid #444;text-align:left">#</th>
+<th style="padding:3px 10px;color:#888;border-bottom:1px solid #444;text-align:left">位置 (x, y, z)</th>
+<th style="padding:3px 10px;color:#888;border-bottom:1px solid #444;text-align:left">朝向 (x, y, z)</th>
+<th style="padding:3px 10px;color:#888;border-bottom:1px solid #444;text-align:left">停留</th></tr>
+<tr><td style="padding:3px 10px;color:#888">0</td><td style="padding:3px 10px;color:#ccc">(-0.04, 0.71, -0.61)</td><td style="padding:3px 10px;color:#ccc">(-1.02, 0.76, -0.78)</td><td style="padding:3px 10px;color:#ccc">0.3s</td></tr><tr><td style="padding:3px 10px;color:#888">1</td><td style="padding:3px 10px;color:#ccc">(-0.58, 0.78, -1.09)</td><td style="padding:3px 10px;color:#ccc">(-1.38, 0.92, -0.51)</td><td style="padding:3px 10px;color:#ccc">0.3s</td></tr><tr><td style="padding:3px 10px;color:#888">2</td><td style="padding:3px 10px;color:#ccc">(-0.97, 0.92, -0.94)</td><td style="padding:3px 10px;color:#ccc">(-1.93, 1.12, -0.72)</td><td style="padding:3px 10px;color:#ccc">0.3s</td></tr><tr><td style="padding:3px 10px;color:#888">3</td><td style="padding:3px 10px;color:#ccc">(-1.28, 1.00, -0.92)</td><td style="padding:3px 10px;color:#ccc">(-2.22, 0.99, -1.26)</td><td style="padding:3px 10px;color:#ccc">0.3s</td></tr><tr><td style="padding:3px 10px;color:#888">4</td><td style="padding:3px 10px;color:#ccc">(-1.55, 1.04, -1.24)</td><td style="padding:3px 10px;color:#ccc">(-2.15, 1.22, -2.02)</td><td style="padding:3px 10px;color:#ccc">0.3s</td></tr><tr><td style="padding:3px 10px;color:#888">5</td><td style="padding:3px 10px;color:#ccc">(-1.55, 1.04, -1.24)</td><td style="padding:3px 10px;color:#ccc">(-1.73, 1.25, -2.20)</td><td style="padding:3px 10px;color:#ccc">0.3s</td></tr><tr><td style="padding:3px 10px;color:#888">6</td><td style="padding:3px 10px;color:#ccc">(-1.30, 1.04, -1.29)</td><td style="padding:3px 10px;color:#ccc">(-1.15, 1.25, -2.25)</td><td style="padding:3px 10px;color:#ccc">0.3s</td></tr><tr><td style="padding:3px 10px;color:#888">7</td><td style="padding:3px 10px;color:#ccc">(-0.05, 0.87, -1.01)</td><td style="padding:3px 10px;color:#ccc">(-0.63, 1.15, -1.78)</td><td style="padding:3px 10px;color:#ccc">0.3s</td></tr><tr><td style="padding:3px 10px;color:#888">8</td><td style="padding:3px 10px;color:#ccc">(0.23, 0.84, -1.20)</td><td style="padding:3px 10px;color:#ccc">(-0.74, 1.00, -1.39)</td><td style="padding:3px 10px;color:#ccc">0.3s</td></tr><tr><td style="padding:3px 10px;color:#888">9</td><td style="padding:3px 10px;color:#ccc">(0.22, 0.92, -0.58)</td><td style="padding:3px 10px;color:#ccc">(-0.73, 1.02, -0.87)</td><td style="padding:3px 10px;color:#ccc">0.3s</td></tr>
+</table>
+<p style="color:#888;font-size:11px;margin-top:8px">注：相机移动导致 AccumulatePass 每帧重置（CameraPropertiesChanged 标志）。
+这测的是相机移动下的稳态渲染性能，是对比 ptdn/ptnrd（逐帧降噪）与 ncr（无时序累积的神经推理）的正确条件。</p>
+
+
+<h3 style="color:#e0e0e0">性能与内存汇总</h3>
+<table style="border-collapse:collapse;margin:10px 0">
+<tr><th style="padding:6px 20px;color:#888;border-bottom:2px solid #555;text-align:left">指标</th><th style="padding:6px 20px;color:#4ecdc4;border-bottom:2px solid #555">ptdn</th><th style="padding:6px 20px;color:#f7b731;border-bottom:2px solid #555">ptnrd</th><th style="padding:6px 20px;color:#ff6b6b;border-bottom:2px solid #555">ncr</th></tr>
+<tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">测量帧数</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">1248 </td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">1233 </td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">1879 </td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">平均 FPS</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">49.87 </td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">49.27 </td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">75.11 </td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">p50 FPS</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">50.30 </td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">50.17 </td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">82.48 </td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">p95 FPS</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">45.39 </td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">45.86 </td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">56.04 </td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">平均帧时间</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">20.05 ms</td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">20.30 ms</td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">13.31 ms</td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">p95 帧时间</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">22.03 ms</td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">21.80 ms</td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">17.84 ms</td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">平均 RSS (CPU)</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">2449.5 MB</td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">3076.0 MB</td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">2837.3 MB</td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">平均 PSS (CPU)</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">2370.1 MB</td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">2997.7 MB</td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">2759.1 MB</td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">平均 VRAM (GPU)</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">1012.0 MB</td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">1007.0 MB</td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">1359.5 MB</td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">峰值 VRAM</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">1012.0 MB</td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">1007.0 MB</td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">1364.0 MB</td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">平均总内存 (PSS+VRAM)</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">3382.1 MB</td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">4004.7 MB</td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">4118.5 MB</td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">峰值总内存</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">3382.1 MB</td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">4005.5 MB</td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">4123.1 MB</td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">平均 GPU 功耗</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">63.6 W</td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">67.0 W</td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">68.9 W</td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">峰值 GPU 功耗</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">73.0 W</td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">73.0 W</td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">73.0 W</td></tr><tr><td style="padding:6px 20px;color:#888;border-bottom:1px solid #333">平均 GPU 温度</td><td style="padding:6px 20px;color:#4ecdc4;border-bottom:1px solid #333;text-align:right">70.6 °C</td><td style="padding:6px 20px;color:#f7b731;border-bottom:1px solid #333;text-align:right">73.1 °C</td><td style="padding:6px 20px;color:#ff6b6b;border-bottom:1px solid #333;text-align:right">67.5 °C</td></tr>
+</table>
+
+
+<h3 style="color:#e0e0e0">NCR 与基线对比</h3>
+<table style="border-collapse:collapse;margin:10px 0">
+<tr><td style="padding:6px 20px;color:#888">FPS 提升</td><td style="font-family:monospace;color:#e0e0e0">vs ptdn: <span style='color:#4ecdc4'>+50.6%</span> &nbsp;|&nbsp; vs ptnrd: <span style='color:#4ecdc4'>+52.4%</span></td></tr>
+<tr><td style="padding:6px 20px;color:#888">内存变化 (总内存)</td><td style="font-family:monospace;color:#e0e0e0">vs ptdn: <span style='color:#ff6b6b'>+736 MB</span> &nbsp;|&nbsp; vs ptnrd: <span style='color:#4ecdc4'>+114 MB</span></td></tr>
+<tr><td style="padding:6px 20px;color:#888">目标</td><td style="font-family:monospace;color:#888;font-size:12px">FPS: ≥50% 提升 &nbsp;|&nbsp; 内存: 新增 &lt;200MB</td></tr>
+</table>
+
+<h3 style="color:#e0e0e0">图表</h3>
+<div>
+<svg width="480" height="260" xmlns="http://www.w3.org/2000/svg" style="background:#1a1a2e;font-family:monospace;display:inline-block;margin:10px">
+  <text x="50" y="25" fill="#e0e0e0" font-size="13" font-weight="bold">平均 FPS</text>
+  <rect x="50" y="40" width="410" height="170" fill="#0f0f23" stroke="#333"/>
+  <line x1="50" y1="210.0" x2="460" y2="210.0" stroke="#333" stroke-width="0.5"/><text x="45" y="214.0" fill="#666" font-size="10" text-anchor="end">0</text><line x1="50" y1="167.5" x2="460" y2="167.5" stroke="#333" stroke-width="0.5"/><text x="45" y="171.5" fill="#666" font-size="10" text-anchor="end">22</text><line x1="50" y1="125.0" x2="460" y2="125.0" stroke="#333" stroke-width="0.5"/><text x="45" y="129.0" fill="#666" font-size="10" text-anchor="end">43</text><line x1="50" y1="82.5" x2="460" y2="82.5" stroke="#333" stroke-width="0.5"/><text x="45" y="86.5" fill="#666" font-size="10" text-anchor="end">65</text><line x1="50" y1="40.0" x2="460" y2="40.0" stroke="#333" stroke-width="0.5"/><text x="45" y="44.0" fill="#666" font-size="10" text-anchor="end">86</text>
+  <rect x="72.8" y="111.8" width="91.1" height="98.2" fill="#4ecdc4" rx="3"/><text x="118.3" y="106.8" fill="#e0e0e0" font-size="12" text-anchor="middle">49.9</text><text x="118.3" y="228.0" fill="#888" font-size="11" text-anchor="middle">ptdn</text><rect x="209.4" y="113.0" width="91.1" height="97.0" fill="#f7b731" rx="3"/><text x="255.0" y="108.0" fill="#e0e0e0" font-size="12" text-anchor="middle">49.3</text><text x="255.0" y="228.0" fill="#888" font-size="11" text-anchor="middle">ptnrd</text><rect x="346.1" y="62.2" width="91.1" height="147.8" fill="#ff6b6b" rx="3"/><text x="391.7" y="57.2" fill="#e0e0e0" font-size="12" text-anchor="middle">75.1</text><text x="391.7" y="228.0" fill="#888" font-size="11" text-anchor="middle">ncr</text>
+</svg>
+<svg width="480" height="260" xmlns="http://www.w3.org/2000/svg" style="background:#1a1a2e;font-family:monospace;display:inline-block;margin:10px">
+  <text x="50" y="25" fill="#e0e0e0" font-size="13" font-weight="bold">p95 FPS</text>
+  <rect x="50" y="40" width="410" height="170" fill="#0f0f23" stroke="#333"/>
+  <line x1="50" y1="210.0" x2="460" y2="210.0" stroke="#333" stroke-width="0.5"/><text x="45" y="214.0" fill="#666" font-size="10" text-anchor="end">0</text><line x1="50" y1="167.5" x2="460" y2="167.5" stroke="#333" stroke-width="0.5"/><text x="45" y="171.5" fill="#666" font-size="10" text-anchor="end">16</text><line x1="50" y1="125.0" x2="460" y2="125.0" stroke="#333" stroke-width="0.5"/><text x="45" y="129.0" fill="#666" font-size="10" text-anchor="end">32</text><line x1="50" y1="82.5" x2="460" y2="82.5" stroke="#333" stroke-width="0.5"/><text x="45" y="86.5" fill="#666" font-size="10" text-anchor="end">48</text><line x1="50" y1="40.0" x2="460" y2="40.0" stroke="#333" stroke-width="0.5"/><text x="45" y="44.0" fill="#666" font-size="10" text-anchor="end">64</text>
+  <rect x="72.8" y="90.3" width="91.1" height="119.7" fill="#4ecdc4" rx="3"/><text x="118.3" y="85.3" fill="#e0e0e0" font-size="12" text-anchor="middle">45.4</text><text x="118.3" y="228.0" fill="#888" font-size="11" text-anchor="middle">ptdn</text><rect x="209.4" y="89.0" width="91.1" height="121.0" fill="#f7b731" rx="3"/><text x="255.0" y="84.0" fill="#e0e0e0" font-size="12" text-anchor="middle">45.9</text><text x="255.0" y="228.0" fill="#888" font-size="11" text-anchor="middle">ptnrd</text><rect x="346.1" y="62.2" width="91.1" height="147.8" fill="#ff6b6b" rx="3"/><text x="391.7" y="57.2" fill="#e0e0e0" font-size="12" text-anchor="middle">56.0</text><text x="391.7" y="228.0" fill="#888" font-size="11" text-anchor="middle">ncr</text>
+</svg>
+</div>
+<div>
+<svg width="480" height="260" xmlns="http://www.w3.org/2000/svg" style="background:#1a1a2e;font-family:monospace;display:inline-block;margin:10px">
+  <text x="50" y="25" fill="#e0e0e0" font-size="13" font-weight="bold">平均 PSS — CPU 内存 (MB)</text>
+  <rect x="50" y="40" width="410" height="170" fill="#0f0f23" stroke="#333"/>
+  <line x1="50" y1="210.0" x2="460" y2="210.0" stroke="#333" stroke-width="0.5"/><text x="45" y="214.0" fill="#666" font-size="10" text-anchor="end">0</text><line x1="50" y1="167.5" x2="460" y2="167.5" stroke="#333" stroke-width="0.5"/><text x="45" y="171.5" fill="#666" font-size="10" text-anchor="end">862</text><line x1="50" y1="125.0" x2="460" y2="125.0" stroke="#333" stroke-width="0.5"/><text x="45" y="129.0" fill="#666" font-size="10" text-anchor="end">1724</text><line x1="50" y1="82.5" x2="460" y2="82.5" stroke="#333" stroke-width="0.5"/><text x="45" y="86.5" fill="#666" font-size="10" text-anchor="end">2586</text><line x1="50" y1="40.0" x2="460" y2="40.0" stroke="#333" stroke-width="0.5"/><text x="45" y="44.0" fill="#666" font-size="10" text-anchor="end">3447</text>
+  <rect x="72.8" y="93.1" width="91.1" height="116.9" fill="#4ecdc4" rx="3"/><text x="118.3" y="88.1" fill="#e0e0e0" font-size="12" text-anchor="middle">2370.1</text><text x="118.3" y="228.0" fill="#888" font-size="11" text-anchor="middle">ptdn</text><rect x="209.4" y="62.2" width="91.1" height="147.8" fill="#f7b731" rx="3"/><text x="255.0" y="57.2" fill="#e0e0e0" font-size="12" text-anchor="middle">2997.7</text><text x="255.0" y="228.0" fill="#888" font-size="11" text-anchor="middle">ptnrd</text><rect x="346.1" y="73.9" width="91.1" height="136.1" fill="#ff6b6b" rx="3"/><text x="391.7" y="68.9" fill="#e0e0e0" font-size="12" text-anchor="middle">2759.1</text><text x="391.7" y="228.0" fill="#888" font-size="11" text-anchor="middle">ncr</text>
+</svg>
+<svg width="480" height="260" xmlns="http://www.w3.org/2000/svg" style="background:#1a1a2e;font-family:monospace;display:inline-block;margin:10px">
+  <text x="50" y="25" fill="#e0e0e0" font-size="13" font-weight="bold">平均 VRAM — GPU 显存 (MB)</text>
+  <rect x="50" y="40" width="410" height="170" fill="#0f0f23" stroke="#333"/>
+  <line x1="50" y1="210.0" x2="460" y2="210.0" stroke="#333" stroke-width="0.5"/><text x="45" y="214.0" fill="#666" font-size="10" text-anchor="end">0</text><line x1="50" y1="167.5" x2="460" y2="167.5" stroke="#333" stroke-width="0.5"/><text x="45" y="171.5" fill="#666" font-size="10" text-anchor="end">391</text><line x1="50" y1="125.0" x2="460" y2="125.0" stroke="#333" stroke-width="0.5"/><text x="45" y="129.0" fill="#666" font-size="10" text-anchor="end">782</text><line x1="50" y1="82.5" x2="460" y2="82.5" stroke="#333" stroke-width="0.5"/><text x="45" y="86.5" fill="#666" font-size="10" text-anchor="end">1173</text><line x1="50" y1="40.0" x2="460" y2="40.0" stroke="#333" stroke-width="0.5"/><text x="45" y="44.0" fill="#666" font-size="10" text-anchor="end">1563</text>
+  <rect x="72.8" y="100.0" width="91.1" height="110.0" fill="#4ecdc4" rx="3"/><text x="118.3" y="95.0" fill="#e0e0e0" font-size="12" text-anchor="middle">1012.0</text><text x="118.3" y="228.0" fill="#888" font-size="11" text-anchor="middle">ptdn</text><rect x="209.4" y="100.5" width="91.1" height="109.5" fill="#f7b731" rx="3"/><text x="255.0" y="95.5" fill="#e0e0e0" font-size="12" text-anchor="middle">1007.0</text><text x="255.0" y="228.0" fill="#888" font-size="11" text-anchor="middle">ptnrd</text><rect x="346.1" y="62.2" width="91.1" height="147.8" fill="#ff6b6b" rx="3"/><text x="391.7" y="57.2" fill="#e0e0e0" font-size="12" text-anchor="middle">1359.5</text><text x="391.7" y="228.0" fill="#888" font-size="11" text-anchor="middle">ncr</text>
+</svg>
+</div>
+<div>
+<svg width="480" height="260" xmlns="http://www.w3.org/2000/svg" style="background:#1a1a2e;font-family:monospace;display:inline-block;margin:10px">
+  <text x="50" y="25" fill="#e0e0e0" font-size="13" font-weight="bold">平均总内存 PSS+VRAM (MB)</text>
+  <rect x="50" y="40" width="410" height="170" fill="#0f0f23" stroke="#333"/>
+  <line x1="50" y1="210.0" x2="460" y2="210.0" stroke="#333" stroke-width="0.5"/><text x="45" y="214.0" fill="#666" font-size="10" text-anchor="end">0</text><line x1="50" y1="167.5" x2="460" y2="167.5" stroke="#333" stroke-width="0.5"/><text x="45" y="171.5" fill="#666" font-size="10" text-anchor="end">1184</text><line x1="50" y1="125.0" x2="460" y2="125.0" stroke="#333" stroke-width="0.5"/><text x="45" y="129.0" fill="#666" font-size="10" text-anchor="end">2368</text><line x1="50" y1="82.5" x2="460" y2="82.5" stroke="#333" stroke-width="0.5"/><text x="45" y="86.5" fill="#666" font-size="10" text-anchor="end">3552</text><line x1="50" y1="40.0" x2="460" y2="40.0" stroke="#333" stroke-width="0.5"/><text x="45" y="44.0" fill="#666" font-size="10" text-anchor="end">4736</text>
+  <rect x="72.8" y="88.6" width="91.1" height="121.4" fill="#4ecdc4" rx="3"/><text x="118.3" y="83.6" fill="#e0e0e0" font-size="12" text-anchor="middle">3382.1</text><text x="118.3" y="228.0" fill="#888" font-size="11" text-anchor="middle">ptdn</text><rect x="209.4" y="66.3" width="91.1" height="143.7" fill="#f7b731" rx="3"/><text x="255.0" y="61.3" fill="#e0e0e0" font-size="12" text-anchor="middle">4004.7</text><text x="255.0" y="228.0" fill="#888" font-size="11" text-anchor="middle">ptnrd</text><rect x="346.1" y="62.2" width="91.1" height="147.8" fill="#ff6b6b" rx="3"/><text x="391.7" y="57.2" fill="#e0e0e0" font-size="12" text-anchor="middle">4118.5</text><text x="391.7" y="228.0" fill="#888" font-size="11" text-anchor="middle">ncr</text>
+</svg>
+<svg width="480" height="260" xmlns="http://www.w3.org/2000/svg" style="background:#1a1a2e;font-family:monospace;display:inline-block;margin:10px">
+  <text x="50" y="25" fill="#e0e0e0" font-size="13" font-weight="bold">平均 GPU 功耗 (W)</text>
+  <rect x="50" y="40" width="410" height="170" fill="#0f0f23" stroke="#333"/>
+  <line x1="50" y1="210.0" x2="460" y2="210.0" stroke="#333" stroke-width="0.5"/><text x="45" y="214.0" fill="#666" font-size="10" text-anchor="end">0</text><line x1="50" y1="167.5" x2="460" y2="167.5" stroke="#333" stroke-width="0.5"/><text x="45" y="171.5" fill="#666" font-size="10" text-anchor="end">20</text><line x1="50" y1="125.0" x2="460" y2="125.0" stroke="#333" stroke-width="0.5"/><text x="45" y="129.0" fill="#666" font-size="10" text-anchor="end">40</text><line x1="50" y1="82.5" x2="460" y2="82.5" stroke="#333" stroke-width="0.5"/><text x="45" y="86.5" fill="#666" font-size="10" text-anchor="end">59</text><line x1="50" y1="40.0" x2="460" y2="40.0" stroke="#333" stroke-width="0.5"/><text x="45" y="44.0" fill="#666" font-size="10" text-anchor="end">79</text>
+  <rect x="72.8" y="73.6" width="91.1" height="136.4" fill="#4ecdc4" rx="3"/><text x="118.3" y="68.6" fill="#e0e0e0" font-size="12" text-anchor="middle">63.6</text><text x="118.3" y="228.0" fill="#888" font-size="11" text-anchor="middle">ptdn</text><rect x="209.4" y="66.4" width="91.1" height="143.6" fill="#f7b731" rx="3"/><text x="255.0" y="61.4" fill="#e0e0e0" font-size="12" text-anchor="middle">67.0</text><text x="255.0" y="228.0" fill="#888" font-size="11" text-anchor="middle">ptnrd</text><rect x="346.1" y="62.2" width="91.1" height="147.8" fill="#ff6b6b" rx="3"/><text x="391.7" y="57.2" fill="#e0e0e0" font-size="12" text-anchor="middle">68.9</text><text x="391.7" y="228.0" fill="#888" font-size="11" text-anchor="middle">ncr</text>
+</svg>
+</div>
+
+
+<h3 style="color:#e0e0e0">实测 vs 代码预估内存对比</h3>
+<p style="color:#888;font-size:12px">预估基于 1280x720 分辨率，从 render graph 源码分析各 pass 的缓冲分配、纹理格式、CUDA 分配。
+实测 = nvidia-smi 报告的进程 VRAM 均值。
+差异主要来自 shader 编译产物（第一帧一次性分配 ~670MB，已纳入预估）和驱动内部开销。</p>
+<table style="border-collapse:collapse;margin:10px 0;font-size:12px">
+<tr>
+  <th style="padding:6px 15px;color:#888;border-bottom:2px solid #555;text-align:left">算法</th>
+  <th style="padding:6px 15px;color:#888;border-bottom:2px solid #555;text-align:left">组件</th>
+  <th style="padding:6px 15px;color:#888;border-bottom:2px solid #555;text-align:right">预估 MB</th>
+  <th style="padding:6px 15px;color:#888;border-bottom:2px solid #555;text-align:right">实测 VRAM</th>
+  <th style="padding:6px 15px;color:#888;border-bottom:2px solid #555;text-align:right">预估总计</th>
+  <th style="padding:6px 15px;color:#888;border-bottom:2px solid #555;text-align:right">差异</th>
+</tr>
+
+<tr style="border-bottom:2px solid #444">
+  <td style="padding:8px 15px;color:#4ecdc4;font-weight:bold;font-size:14px" rowspan="12">ptdn</td>
+  <td style="padding:2px 10px;color:#888;font-size:11px;font-weight:bold">公共部分:</td>
+  <td></td>
+  <td style="padding:8px 15px;color:#4ecdc4;text-align:right" rowspan="12">1012 MB</td>
+  <td style="padding:8px 15px;color:#4ecdc4;text-align:right" rowspan="12">1199 MB</td>
+  <td style="padding:8px 15px;color:#f7b731;text-align:right" rowspan="12">-187 MB (-15.6%)</td>
+</tr>
+<tr><td style="padding:2px 10px;color:#666;font-size:11px">&nbsp;&nbsp;场景数据 (SceneStats: 纹理89 + BLAS 21 + 顶点12 + 索引3 + 其他)</td><td style="padding:2px 10px;color:#666;font-size:11px;text-align:right">126</td></tr><tr><td style="padding:2px 10px;color:#666;font-size:11px">&nbsp;&nbsp;Vulkan 框架 + 插件 + 交换链</td><td style="padding:2px 10px;color:#666;font-size:11px;text-align:right">52</td></tr><tr><td style="padding:2px 10px;color:#666;font-size:11px">&nbsp;&nbsp;Shader 编译产物 (Slang→SPIR-V→PSO, 第一帧分配)</td><td style="padding:2px 10px;color:#666;font-size:11px;text-align:right">670</td></tr><tr><td style="padding:2px 10px;color:#666;font-size:11px">&nbsp;&nbsp;CUDA Context + OptiX Context (OptiX denoiser 需要)</td><td style="padding:2px 10px;color:#666;font-size:11px;text-align:right">100</td></tr><tr><td style="padding:2px 10px;color:#888;font-size:11px;font-weight:bold">算法特定:</td><td></td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;GBufferRT (vbuffer, viewW, mvec, normW, posW, linearZ)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">70</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;PathTracer 输出 (color, albedo, emission, reflectance)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">73</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;AccumulatePass (累积颜色 + 权重)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">18</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;OptixDenoiser (内部状态 + 输出 + staging buffers)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">75</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;ToneMapper 输出</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">15</td></tr>
+<tr><td style="padding:4px 10px;color:#888;font-size:11px;font-weight:bold">预估总计</td><td style="padding:4px 10px;color:#888;text-align:right">1199</td></tr>
+<tr><td colspan="2" style="padding:4px 10px;color:#666;font-size:11px;font-style:italic">1spp + OptiX HDR 降噪器。移动相机下 AccumulatePass 每帧重置。Shader 编译开销为 Falcor 框架层面，三个算法共享但各自独立编译。</td></tr>
+
+<tr style="border-bottom:2px solid #444">
+  <td style="padding:8px 15px;color:#f7b731;font-weight:bold;font-size:14px" rowspan="15">ptnrd</td>
+  <td style="padding:2px 10px;color:#888;font-size:11px;font-weight:bold">公共部分:</td>
+  <td></td>
+  <td style="padding:8px 15px;color:#f7b731;text-align:right" rowspan="15">1007 MB</td>
+  <td style="padding:8px 15px;color:#f7b731;text-align:right" rowspan="15">1746 MB</td>
+  <td style="padding:8px 15px;color:#ff6b6b;text-align:right" rowspan="15">-739 MB (-42.3%)</td>
+</tr>
+<tr><td style="padding:2px 10px;color:#666;font-size:11px">&nbsp;&nbsp;场景数据 (SceneStats: 纹理89 + BLAS 21 + 顶点12 + 索引3 + 其他)</td><td style="padding:2px 10px;color:#666;font-size:11px;text-align:right">126</td></tr><tr><td style="padding:2px 10px;color:#666;font-size:11px">&nbsp;&nbsp;Vulkan 框架 + 插件 + 交换链</td><td style="padding:2px 10px;color:#666;font-size:11px;text-align:right">52</td></tr><tr><td style="padding:2px 10px;color:#666;font-size:11px">&nbsp;&nbsp;Shader 编译产物 (Slang→SPIR-V→PSO, 第一帧分配)</td><td style="padding:2px 10px;color:#666;font-size:11px;text-align:right">670</td></tr><tr><td style="padding:2px 10px;color:#666;font-size:11px">&nbsp;&nbsp;CUDA Context + OptiX Context</td><td style="padding:2px 10px;color:#666;font-size:11px;text-align:right">100</td></tr><tr><td style="padding:2px 10px;color:#888;font-size:11px;font-weight:bold">算法特定:</td><td></td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;GBufferRT (vbuffer, viewW, mvec, mvecW, normW, posW, linearZ)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">85</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;PathTracer NRD 输出 (diffuse/specular radiance+hitdist, delta refl/trans, residual, reflectance, emission)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">220</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;NRD ReblurDiffuseSpecular (历史缓冲 + 内部纹理)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">140</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;NRD RelaxDiffuse x2 (delta reflection + transmission)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">220</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;NRD SpecularReflectionMv + SpecularDeltaMv</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">70</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;AccumulatePass (参考路径)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">18</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;ModulateIllumination (合成器)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">15</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;2x ToneMapper</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">30</td></tr>
+<tr><td style="padding:4px 10px;color:#888;font-size:11px;font-weight:bold">预估总计</td><td style="padding:4px 10px;color:#888;text-align:right">1746</td></tr>
+<tr><td colspan="2" style="padding:4px 10px;color:#666;font-size:11px;font-style:italic">1spp + 5 个 NRD 降噪器实例 (Reblur + 2x Relax + 2x 运动向量)。NRD 的历史缓冲和内部纹理比 OptiX denoiser 多用 ~300MB。</td></tr>
+
+<tr style="border-bottom:2px solid #444">
+  <td style="padding:8px 15px;color:#ff6b6b;font-weight:bold;font-size:14px" rowspan="15">ncr</td>
+  <td style="padding:2px 10px;color:#888;font-size:11px;font-weight:bold">公共部分:</td>
+  <td></td>
+  <td style="padding:8px 15px;color:#ff6b6b;text-align:right" rowspan="15">1359 MB</td>
+  <td style="padding:8px 15px;color:#ff6b6b;text-align:right" rowspan="15">1807 MB</td>
+  <td style="padding:8px 15px;color:#f7b731;text-align:right" rowspan="15">-448 MB (-24.8%)</td>
+</tr>
+<tr><td style="padding:2px 10px;color:#666;font-size:11px">&nbsp;&nbsp;场景数据 (SceneStats: 纹理89 + BLAS 21 + 顶点12 + 索引3 + 其他)</td><td style="padding:2px 10px;color:#666;font-size:11px;text-align:right">126</td></tr><tr><td style="padding:2px 10px;color:#666;font-size:11px">&nbsp;&nbsp;Vulkan 框架 + 插件 + 交换链</td><td style="padding:2px 10px;color:#666;font-size:11px;text-align:right">52</td></tr><tr><td style="padding:2px 10px;color:#666;font-size:11px">&nbsp;&nbsp;Shader 编译产物 (Slang→SPIR-V→PSO, 第一帧分配)</td><td style="padding:2px 10px;color:#666;font-size:11px;text-align:right">670</td></tr><tr><td style="padding:2px 10px;color:#666;font-size:11px">&nbsp;&nbsp;CUDA Context (NeuralRadiosity 需要, 含 tiny-cuda-nn JIT)</td><td style="padding:2px 10px;color:#666;font-size:11px;text-align:right">150</td></tr><tr><td style="padding:2px 10px;color:#888;font-size:11px;font-weight:bold">算法特定:</td><td></td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;NCR 哈希网格 (主网格 6层x2特征 + 聚类网格 4簇x6层x4特征, log2HashMapSize=18)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">124</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;NCR 优化器状态 (EMA+Adam, 3x 参数量)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">125</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;NCR MLP 权重 (diffuse 11K + specular 18K 参数)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">1</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;NCR 渲染批次缓冲 (逐像素结构化缓冲, 1280x720)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">333</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;NCR 训练批次缓冲 (LHS 32K + RHS 262K 元素)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">152</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;NCR 帧临时纹理 (2x RGBA32F)</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">29</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;NCR 内部路径追踪输出</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">30</td></tr><tr><td style="padding:2px 10px;color:#aaa;font-size:11px">&nbsp;&nbsp;ToneMapper 输出</td><td style="padding:2px 10px;color:#aaa;font-size:11px;text-align:right">15</td></tr>
+<tr><td style="padding:4px 10px;color:#888;font-size:11px;font-weight:bold">预估总计</td><td style="padding:4px 10px;color:#888;text-align:right">1807</td></tr>
+<tr><td colspan="2" style="padding:4px 10px;color:#666;font-size:11px;font-style:italic">自包含 pass (自带 GBuffer + 路径追踪 + 神经推理)。哈希网格: 6 层, 2 特征/层, log2HashMapSize=18。MLP: 64 隐藏单元, 3-4 层。在线训练增加优化器状态 + 训练批次缓冲。CUDA Context 比 ptdn/ptnrd 大 ~50MB (tiny-cuda-nn JIT 编译缓存)。</td></tr>
+
+</table>
+<p style="color:#888;font-size:11px">差异 = 实测 - 预估。绿色 &lt;15%, 黄色 &lt;30%, 红色 &gt;30%。</p>
+
+
+
+<h3 style="color:#e0e0e0">Falcor SceneStats 精确内存分解</h3>
+<p style="color:#888;font-size:12px">SceneStats 是 Falcor 框架在运行时统计的场景数据内存分配，由 m.scene.stats 返回。
+注意：SceneStats 不包含 shader 编译产物、Vulkan PSO、CUDA context、render graph 纹理等非场景资源。</p>
+
+<h4 style="color:#4ecdc4">ptdn</h4>
+<table style="border-collapse:collapse;margin:5px 0;font-size:12px">
+<tr><td style="padding:3px 15px;color:#888">场景总内存</td><td style="padding:3px 15px;color:#4ecdc4;text-align:right">126.1 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">网格数</td><td style="padding:3px 15px;color:#ccc;text-align:right">852</td></tr>
+<tr><td style="padding:3px 15px;color:#888">三角形数</td><td style="padding:3px 15px;color:#ccc;text-align:right">591,288</td></tr>
+<tr><td style="padding:3px 15px;color:#888">顶点数</td><td style="padding:3px 15px;color:#ccc;text-align:right">376,110</td></tr>
+<tr><td style="padding:3px 15px;color:#888">材质纹理 (9 张, 0 张压缩)</td><td style="padding:3px 15px;color:#ccc;text-align:right">89.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">BLAS 加速结构</td><td style="padding:3px 15px;color:#ccc;text-align:right">21.2 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">BLAS scratch</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">顶点缓冲</td><td style="padding:3px 15px;color:#ccc;text-align:right">12.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">索引缓冲</td><td style="padding:3px 15px;color:#ccc;text-align:right">3.5 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">几何数据</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.1 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">动画数据</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.2 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">TLAS</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">材质数据</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">发光光源</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">环境贴图</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+</table>
+
+<h4 style="color:#f7b731">ptnrd</h4>
+<table style="border-collapse:collapse;margin:5px 0;font-size:12px">
+<tr><td style="padding:3px 15px;color:#888">场景总内存</td><td style="padding:3px 15px;color:#f7b731;text-align:right">126.1 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">网格数</td><td style="padding:3px 15px;color:#ccc;text-align:right">852</td></tr>
+<tr><td style="padding:3px 15px;color:#888">三角形数</td><td style="padding:3px 15px;color:#ccc;text-align:right">591,288</td></tr>
+<tr><td style="padding:3px 15px;color:#888">顶点数</td><td style="padding:3px 15px;color:#ccc;text-align:right">376,110</td></tr>
+<tr><td style="padding:3px 15px;color:#888">材质纹理 (9 张, 0 张压缩)</td><td style="padding:3px 15px;color:#ccc;text-align:right">89.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">BLAS 加速结构</td><td style="padding:3px 15px;color:#ccc;text-align:right">21.2 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">BLAS scratch</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">顶点缓冲</td><td style="padding:3px 15px;color:#ccc;text-align:right">12.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">索引缓冲</td><td style="padding:3px 15px;color:#ccc;text-align:right">3.5 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">几何数据</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.1 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">动画数据</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.2 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">TLAS</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">材质数据</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">发光光源</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">环境贴图</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+</table>
+
+<h4 style="color:#ff6b6b">ncr</h4>
+<table style="border-collapse:collapse;margin:5px 0;font-size:12px">
+<tr><td style="padding:3px 15px;color:#888">场景总内存</td><td style="padding:3px 15px;color:#ff6b6b;text-align:right">126.1 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">网格数</td><td style="padding:3px 15px;color:#ccc;text-align:right">852</td></tr>
+<tr><td style="padding:3px 15px;color:#888">三角形数</td><td style="padding:3px 15px;color:#ccc;text-align:right">591,288</td></tr>
+<tr><td style="padding:3px 15px;color:#888">顶点数</td><td style="padding:3px 15px;color:#ccc;text-align:right">376,110</td></tr>
+<tr><td style="padding:3px 15px;color:#888">材质纹理 (9 张, 0 张压缩)</td><td style="padding:3px 15px;color:#ccc;text-align:right">89.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">BLAS 加速结构</td><td style="padding:3px 15px;color:#ccc;text-align:right">21.2 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">BLAS scratch</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">顶点缓冲</td><td style="padding:3px 15px;color:#ccc;text-align:right">12.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">索引缓冲</td><td style="padding:3px 15px;color:#ccc;text-align:right">3.5 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">几何数据</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.1 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">动画数据</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.2 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">TLAS</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">材质数据</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">发光光源</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+<tr><td style="padding:3px 15px;color:#888">环境贴图</td><td style="padding:3px 15px;color:#ccc;text-align:right">0.0 MB</td></tr>
+</table>
+
+<p style="color:#888;font-size:11px;margin-top:10px">
+VRAM 差异分析：实测 VRAM (nvidia-smi) = SceneStats (126 MB) + Render Graph 纹理 (~250 MB) +
+Shader 编译产物 + Vulkan PSO (~670 MB) + CUDA/OptiX Context (~100 MB)。
+Shader 编译产物是最大单项，在第一帧渲染时一次性分配，后续保持不变。</p>
+
+
+<h3 style="color:#e0e0e0">源文件</h3>
+<table style="border-collapse:collapse;margin:10px 0;font-size:12px">
+<tr><th style="padding:4px 12px;color:#888;text-align:left">算法</th><th style="padding:4px 12px;color:#888;text-align:left">Benchmark CSV</th><th style="padding:4px 12px;color:#888;text-align:left">功耗 CSV</th></tr>
+<tr><td style="padding:4px 12px;color:#4ecdc4">ptdn</td><td style="padding:4px 12px;color:#888">benchmark_ptdn_20260922_180026.csv</td><td style="padding:4px 12px;color:#888">power_ptdn_20260922_175928.csv</td></tr><tr><td style="padding:4px 12px;color:#f7b731">ptnrd</td><td style="padding:4px 12px;color:#888">benchmark_ptnrd_20260922_180125.csv</td><td style="padding:4px 12px;color:#888">power_ptnrd_20260922_180026.csv</td></tr><tr><td style="padding:4px 12px;color:#ff6b6b">ncr</td><td style="padding:4px 12px;color:#888">benchmark_ncr_20260922_180222.csv</td><td style="padding:4px 12px;color:#888">power_ncr_20260922_180125.csv</td></tr></table>
+
+</body></html>

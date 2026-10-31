@@ -1,0 +1,747 @@
+=============================================
+7-Scene Benchmark — Round: rtxdi_on
+  RTXDI      : 1
+  Warmup     : 30s (static camera)
+  Measure    : 60s (moving camera)
+  Scenes     : bathroom bathroom2 cornell-box kitchen living-room teapot veach-ajar
+  Algorithms : ptdn ptnrd ncr
+=============================================
+
+---------------------------------------------
+[22:16:53] scene=bathroom  algo=ptdn  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0317s
+(Info) Importing scene: media/scenes/bathroom/scene-animation.pyscene
+(Info) Found 851 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 1 dynamic non-instanced meshes, arranged in 1 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 9 material textures.
+(Info) Removing duplicate material 'BlindsString' (duplicate of 'Paper').
+(Info) Removing duplicate material 'GreyWall' (duplicate of 'Blinds').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 10 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.017897 s
+(Info) Optimizing materials:     0.056344 s
+(Info) Creating resources:       0.754659 s
+(Info) Loading scene (total):    1.853576 s
+(Info) Created CUDA device 'NVIDIA GeForce RTX 3090' (architecture 8.6).
+(Info) Initiating BLAS build for 2 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 41.29 MB
+(Info) BLAS build scratch buffer size: 28.51 MB
+(Info) BLAS group 0 final size: 20.26 MB
+(Info) LightCollection::build preparation: 0.000455 s
+(Info) LightCollection::build integrate emissive: 0.975631 s
+(Info) LightCollection::build finalize: 0.001342 s
+  -> benchmark_results/bench_bathroom_ptdn_rtxdi_on.csv (1503 lines)
+
+---------------------------------------------
+[22:18:26] scene=bathroom  algo=ptnrd  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0301s
+(Info) Importing scene: media/scenes/bathroom/scene-animation.pyscene
+(Info) Found 851 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 1 dynamic non-instanced meshes, arranged in 1 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 9 material textures.
+(Info) Removing duplicate material 'BlindsString' (duplicate of 'Paper').
+(Info) Removing duplicate material 'GreyWall' (duplicate of 'Blinds').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 10 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.018393 s
+(Info) Optimizing materials:     0.054457 s
+(Info) Creating resources:       0.744623 s
+(Info) Loading scene (total):    1.816559 s
+(Info) Initiating BLAS build for 2 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 41.29 MB
+(Info) BLAS build scratch buffer size: 28.51 MB
+(Info) BLAS group 0 final size: 20.26 MB
+(Info) LightCollection::build preparation: 0.000445 s
+(Info) LightCollection::build integrate emissive: 0.977948 s
+(Info) LightCollection::build finalize: 0.002545 s
+  -> benchmark_results/bench_bathroom_ptnrd_rtxdi_on.csv (1501 lines)
+
+---------------------------------------------
+[22:19:59] scene=bathroom  algo=ncr  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0388s
+(Info) Importing scene: media/scenes/bathroom/scene-animation.pyscene
+(Info) Found 851 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 1 dynamic non-instanced meshes, arranged in 1 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 9 material textures.
+(Info) Removing duplicate material 'BlindsString' (duplicate of 'Paper').
+(Info) Removing duplicate material 'GreyWall' (duplicate of 'Blinds').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 10 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.018044 s
+(Info) Optimizing materials:     0.055634 s
+(Info) Creating resources:       0.747270 s
+(Info) Loading scene (total):    1.824588 s
+(Info) LightCollection::build preparation: 0.000474 s
+(Info) LightCollection::build integrate emissive: 1.006473 s
+(Info) LightCollection::build finalize: 0.001060 s
+(Info) Initiating BLAS build for 2 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 41.29 MB
+(Info) BLAS build scratch buffer size: 28.51 MB
+(Info) BLAS group 0 final size: 20.26 MB
+(Info) Screen passes created: 	4953 ms
+(Info) Batch passes created: 	4450 ms
+(Info) NRModel created: 	93 ms
+(Info) NeuralRadiosity::updatePrograms() took 9496 ms
+(Info) NeuralRadiosity::prepareResources() took 7 ms
+  -> benchmark_results/bench_bathroom_ncr_rtxdi_on.csv (1607 lines)
+
+---------------------------------------------
+[22:21:32] scene=bathroom2  algo=ptdn  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0302s
+(Info) Importing scene: media/scenes/bathroom2/scene-animation.pyscene
+(Info) Found 72 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 dynamic non-instanced meshes, arranged in 0 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 3 material textures.
+(Info) Removing duplicate material 'Wall' (duplicate of 'Towel').
+(Info) Removing duplicate material 'Bin' (duplicate of 'Mirror').
+(Info) Removing duplicate material 'Ceramic' (duplicate of 'Plastic').
+(Info) Removing duplicate material 'DarkBorder' (duplicate of 'DarkPlastic').
+(Info) Removing duplicate material 'WallRight' (duplicate of 'Towel').
+(Info) Removing duplicate material 'Trims' (duplicate of 'Towel').
+(Info) Removing duplicate material '__inline_material_18' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_19' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_20' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_21' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_22' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_23' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_24' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_25' (duplicate of '__inline_material_16').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 7 bits, primitiveIndex: 18 bits)
+(Info) Post processing geometry: 0.021393 s
+(Info) Optimizing materials:     0.054364 s
+(Info) Creating resources:       0.781593 s
+(Info) Loading scene (total):    5.422520 s
+(Info) Created CUDA device 'NVIDIA GeForce RTX 3090' (architecture 8.6).
+(Info) Initiating BLAS build for 1 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 77.36 MB
+(Info) BLAS build scratch buffer size: 59.91 MB
+(Info) BLAS group 0 final size: 29.25 MB
+(Info) LightCollection::build preparation: 0.000464 s
+(Info) LightCollection::build integrate emissive: 0.971980 s
+(Info) LightCollection::build finalize: 0.001404 s
+  -> benchmark_results/bench_bathroom2_ptdn_rtxdi_on.csv (1527 lines)
+
+---------------------------------------------
+[22:23:09] scene=bathroom2  algo=ptnrd  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0304s
+(Info) Importing scene: media/scenes/bathroom2/scene-animation.pyscene
+(Info) Found 72 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 dynamic non-instanced meshes, arranged in 0 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 3 material textures.
+(Info) Removing duplicate material 'Wall' (duplicate of 'Towel').
+(Info) Removing duplicate material 'Bin' (duplicate of 'Mirror').
+(Info) Removing duplicate material 'Ceramic' (duplicate of 'Plastic').
+(Info) Removing duplicate material 'DarkBorder' (duplicate of 'DarkPlastic').
+(Info) Removing duplicate material 'WallRight' (duplicate of 'Towel').
+(Info) Removing duplicate material 'Trims' (duplicate of 'Towel').
+(Info) Removing duplicate material '__inline_material_18' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_19' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_20' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_21' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_22' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_23' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_24' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_25' (duplicate of '__inline_material_16').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 7 bits, primitiveIndex: 18 bits)
+(Info) Post processing geometry: 0.020065 s
+(Info) Optimizing materials:     0.059045 s
+(Info) Creating resources:       0.783084 s
+(Info) Loading scene (total):    5.533445 s
+(Info) Initiating BLAS build for 1 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 77.36 MB
+(Info) BLAS build scratch buffer size: 59.91 MB
+(Info) BLAS group 0 final size: 29.25 MB
+(Info) LightCollection::build preparation: 0.000479 s
+(Info) LightCollection::build integrate emissive: 0.983681 s
+(Info) LightCollection::build finalize: 0.004866 s
+  -> benchmark_results/bench_bathroom2_ptnrd_rtxdi_on.csv (1557 lines)
+
+---------------------------------------------
+[22:24:46] scene=bathroom2  algo=ncr  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0294s
+(Info) Importing scene: media/scenes/bathroom2/scene-animation.pyscene
+(Info) Found 72 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 dynamic non-instanced meshes, arranged in 0 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 3 material textures.
+(Info) Removing duplicate material 'Wall' (duplicate of 'Towel').
+(Info) Removing duplicate material 'Bin' (duplicate of 'Mirror').
+(Info) Removing duplicate material 'Ceramic' (duplicate of 'Plastic').
+(Info) Removing duplicate material 'DarkBorder' (duplicate of 'DarkPlastic').
+(Info) Removing duplicate material 'WallRight' (duplicate of 'Towel').
+(Info) Removing duplicate material 'Trims' (duplicate of 'Towel').
+(Info) Removing duplicate material '__inline_material_18' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_19' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_20' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_21' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_22' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_23' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_24' (duplicate of '__inline_material_16').
+(Info) Removing duplicate material '__inline_material_25' (duplicate of '__inline_material_16').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 7 bits, primitiveIndex: 18 bits)
+(Info) Post processing geometry: 0.021850 s
+(Info) Optimizing materials:     0.053942 s
+(Info) Creating resources:       0.778586 s
+(Info) Loading scene (total):    5.459732 s
+(Info) LightCollection::build preparation: 0.000461 s
+(Info) LightCollection::build integrate emissive: 0.959680 s
+(Info) LightCollection::build finalize: 0.001121 s
+(Info) Initiating BLAS build for 1 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 77.36 MB
+(Info) BLAS build scratch buffer size: 59.91 MB
+(Info) BLAS group 0 final size: 29.25 MB
+(Info) Screen passes created: 	4805 ms
+(Info) Batch passes created: 	4323 ms
+(Info) NRModel created: 	84 ms
+(Info) NeuralRadiosity::updatePrograms() took 9212 ms
+(Info) NeuralRadiosity::prepareResources() took 6 ms
+  -> benchmark_results/bench_bathroom2_ncr_rtxdi_on.csv (1696 lines)
+
+---------------------------------------------
+[22:26:23] scene=cornell-box  algo=ptdn  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0286s
+(Info) Importing scene: media/scenes/cornell-box/scene-animation.pyscene
+(Info) Found 7 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 3 dynamic non-instanced meshes, arranged in 3 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 3 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) Removing duplicate material 'ShortBox' (duplicate of 'Ceiling').
+(Info) Removing duplicate material 'TallBox' (duplicate of 'Ceiling').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 4 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.002469 s
+(Info) Optimizing materials:     0.051189 s
+(Info) Creating resources:       0.726379 s
+(Info) Loading scene (total):    1.015962 s
+(Info) Created CUDA device 'NVIDIA GeForce RTX 3090' (architecture 8.6).
+(Info) Initiating BLAS build for 4 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 10.41 MB
+(Info) BLAS build scratch buffer size: 2.30 MB
+(Info) BLAS group 0 final size: 4.64 MB
+(Info) LightCollection::build preparation: 0.000483 s
+(Info) LightCollection::build integrate emissive: 0.990139 s
+(Info) LightCollection::build finalize: 0.001287 s
+  -> benchmark_results/bench_cornell-box_ptdn_rtxdi_on.csv (1570 lines)
+
+---------------------------------------------
+[22:27:55] scene=cornell-box  algo=ptnrd  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0307s
+(Info) Importing scene: media/scenes/cornell-box/scene-animation.pyscene
+(Info) Found 7 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 3 dynamic non-instanced meshes, arranged in 3 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 3 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) Removing duplicate material 'ShortBox' (duplicate of 'Ceiling').
+(Info) Removing duplicate material 'TallBox' (duplicate of 'Ceiling').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 4 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.002519 s
+(Info) Optimizing materials:     0.050831 s
+(Info) Creating resources:       0.725028 s
+(Info) Loading scene (total):    1.013551 s
+(Info) Initiating BLAS build for 4 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 10.41 MB
+(Info) BLAS build scratch buffer size: 2.30 MB
+(Info) BLAS group 0 final size: 4.64 MB
+(Info) LightCollection::build preparation: 0.000509 s
+(Info) LightCollection::build integrate emissive: 0.971696 s
+(Info) LightCollection::build finalize: 0.002609 s
+  -> benchmark_results/bench_cornell-box_ptnrd_rtxdi_on.csv (1626 lines)
+
+---------------------------------------------
+[22:29:28] scene=cornell-box  algo=ncr  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0415s
+(Info) Importing scene: media/scenes/cornell-box/scene-animation.pyscene
+(Info) Found 7 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 3 dynamic non-instanced meshes, arranged in 3 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 3 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) Removing duplicate material 'ShortBox' (duplicate of 'Ceiling').
+(Info) Removing duplicate material 'TallBox' (duplicate of 'Ceiling').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 4 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.002610 s
+(Info) Optimizing materials:     0.049977 s
+(Info) Creating resources:       0.720050 s
+(Info) Loading scene (total):    1.099398 s
+(Info) LightCollection::build preparation: 0.000485 s
+(Info) LightCollection::build integrate emissive: 0.948209 s
+(Info) LightCollection::build finalize: 0.000996 s
+(Info) Initiating BLAS build for 4 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 10.41 MB
+(Info) BLAS build scratch buffer size: 2.30 MB
+(Info) BLAS group 0 final size: 4.64 MB
+(Info) Screen passes created: 	4795 ms
+(Info) Batch passes created: 	4312 ms
+(Info) NRModel created: 	97 ms
+(Info) NeuralRadiosity::updatePrograms() took 9204 ms
+(Info) NeuralRadiosity::prepareResources() took 7 ms
+  -> benchmark_results/bench_cornell-box_ncr_rtxdi_on.csv (1623 lines)
+
+---------------------------------------------
+[22:31:00] scene=kitchen  algo=ptdn  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0282s
+(Info) Importing scene: media/scenes/kitchen/scene-animation.pyscene
+(Info) Found 275 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 9 dynamic non-instanced meshes, arranged in 9 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 18 material textures.
+(Info) Removing duplicate material 'TableCross' (duplicate of 'Cable').
+(Info) Removing duplicate material 'BreadBinHandle' (duplicate of 'CookerChrome').
+(Info) Removing duplicate material 'Cutlery' (duplicate of 'CookerChrome').
+(Info) Removing duplicate material 'KettleHandle' (duplicate of 'PotHandles').
+(Info) Removing duplicate material 'Utensils' (duplicate of 'Kettle').
+(Info) Removing duplicate material 'MicrowaveBack' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'Microwave' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'ChoppingKnifeEdge' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'Window' (duplicate of 'WallSocket').
+(Info) Removing duplicate material 'Burners' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'BurnersTop' (duplicate of 'PotHandles').
+(Info) Removing duplicate material 'BushLogo' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'RadioDialLine' (duplicate of 'WindowLock').
+(Info) Removing duplicate material 'RadioMetalRing' (duplicate of 'CookerChrome').
+(Info) Removing duplicate material 'RadioEdges' (duplicate of 'WindowLock').
+(Info) Removing duplicate material 'WhitePot' (duplicate of 'Plates').
+(Info) Removing duplicate material 'Home' (duplicate of 'LampInside').
+(Info) Removing duplicate material '__inline_material_88' (duplicate of '__inline_material_87').
+(Info) Removing duplicate material '__inline_material_89' (duplicate of '__inline_material_87').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 9 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.040865 s
+(Info) Optimizing materials:     0.057134 s
+(Info) Creating resources:       0.813275 s
+(Info) Loading scene (total):    2.325902 s
+(Info) Created CUDA device 'NVIDIA GeForce RTX 3090' (architecture 8.6).
+(Info) Initiating BLAS build for 10 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 96.47 MB
+(Info) BLAS build scratch buffer size: 61.79 MB
+(Info) BLAS group 0 final size: 43.26 MB
+(Info) LightCollection::build preparation: 0.000550 s
+(Info) LightCollection::build integrate emissive: 0.976896 s
+(Info) LightCollection::build finalize: 0.003056 s
+  -> benchmark_results/bench_kitchen_ptdn_rtxdi_on.csv (1460 lines)
+
+---------------------------------------------
+[22:32:33] scene=kitchen  algo=ptnrd  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0303s
+(Info) Importing scene: media/scenes/kitchen/scene-animation.pyscene
+(Info) Found 275 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 9 dynamic non-instanced meshes, arranged in 9 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 18 material textures.
+(Info) Removing duplicate material 'TableCross' (duplicate of 'Cable').
+(Info) Removing duplicate material 'BreadBinHandle' (duplicate of 'CookerChrome').
+(Info) Removing duplicate material 'Cutlery' (duplicate of 'CookerChrome').
+(Info) Removing duplicate material 'KettleHandle' (duplicate of 'PotHandles').
+(Info) Removing duplicate material 'Utensils' (duplicate of 'Kettle').
+(Info) Removing duplicate material 'MicrowaveBack' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'Microwave' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'ChoppingKnifeEdge' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'Window' (duplicate of 'WallSocket').
+(Info) Removing duplicate material 'Burners' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'BurnersTop' (duplicate of 'PotHandles').
+(Info) Removing duplicate material 'BushLogo' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'RadioDialLine' (duplicate of 'WindowLock').
+(Info) Removing duplicate material 'RadioMetalRing' (duplicate of 'CookerChrome').
+(Info) Removing duplicate material 'RadioEdges' (duplicate of 'WindowLock').
+(Info) Removing duplicate material 'WhitePot' (duplicate of 'Plates').
+(Info) Removing duplicate material 'Home' (duplicate of 'LampInside').
+(Info) Removing duplicate material '__inline_material_88' (duplicate of '__inline_material_87').
+(Info) Removing duplicate material '__inline_material_89' (duplicate of '__inline_material_87').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 9 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.040041 s
+(Info) Optimizing materials:     0.052164 s
+(Info) Creating resources:       0.765552 s
+(Info) Loading scene (total):    2.255004 s
+(Info) Initiating BLAS build for 10 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 96.47 MB
+(Info) BLAS build scratch buffer size: 61.79 MB
+(Info) BLAS group 0 final size: 43.26 MB
+(Info) LightCollection::build preparation: 0.000530 s
+(Info) LightCollection::build integrate emissive: 0.965422 s
+(Info) LightCollection::build finalize: 0.007563 s
+  -> benchmark_results/bench_kitchen_ptnrd_rtxdi_on.csv (1500 lines)
+
+---------------------------------------------
+[22:34:07] scene=kitchen  algo=ncr  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0292s
+(Info) Importing scene: media/scenes/kitchen/scene-animation.pyscene
+(Info) Found 275 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 9 dynamic non-instanced meshes, arranged in 9 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 18 material textures.
+(Info) Removing duplicate material 'TableCross' (duplicate of 'Cable').
+(Info) Removing duplicate material 'BreadBinHandle' (duplicate of 'CookerChrome').
+(Info) Removing duplicate material 'Cutlery' (duplicate of 'CookerChrome').
+(Info) Removing duplicate material 'KettleHandle' (duplicate of 'PotHandles').
+(Info) Removing duplicate material 'Utensils' (duplicate of 'Kettle').
+(Info) Removing duplicate material 'MicrowaveBack' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'Microwave' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'ChoppingKnifeEdge' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'Window' (duplicate of 'WallSocket').
+(Info) Removing duplicate material 'Burners' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'BurnersTop' (duplicate of 'PotHandles').
+(Info) Removing duplicate material 'BushLogo' (duplicate of 'SteelPot').
+(Info) Removing duplicate material 'RadioDialLine' (duplicate of 'WindowLock').
+(Info) Removing duplicate material 'RadioMetalRing' (duplicate of 'CookerChrome').
+(Info) Removing duplicate material 'RadioEdges' (duplicate of 'WindowLock').
+(Info) Removing duplicate material 'WhitePot' (duplicate of 'Plates').
+(Info) Removing duplicate material 'Home' (duplicate of 'LampInside').
+(Info) Removing duplicate material '__inline_material_88' (duplicate of '__inline_material_87').
+(Info) Removing duplicate material '__inline_material_89' (duplicate of '__inline_material_87').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 9 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.040448 s
+(Info) Optimizing materials:     0.052265 s
+(Info) Creating resources:       0.770853 s
+(Info) Loading scene (total):    2.262591 s
+(Info) LightCollection::build preparation: 0.000561 s
+(Info) LightCollection::build integrate emissive: 0.965092 s
+(Info) LightCollection::build finalize: 0.002709 s
+(Info) Initiating BLAS build for 10 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 96.47 MB
+(Info) BLAS build scratch buffer size: 61.79 MB
+(Info) BLAS group 0 final size: 43.26 MB
+(Info) Screen passes created: 	4915 ms
+(Info) Batch passes created: 	4337 ms
+(Info) NRModel created: 	86 ms
+(Info) NeuralRadiosity::updatePrograms() took 9338 ms
+(Info) NeuralRadiosity::prepareResources() took 6 ms
+  -> benchmark_results/bench_kitchen_ncr_rtxdi_on.csv (1638 lines)
+
+---------------------------------------------
+[22:35:41] scene=living-room  algo=ptdn  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0292s
+(Info) Importing scene: media/scenes/living-room/scene-animation.pyscene
+(Info) Found 58 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 7 dynamic non-instanced meshes, arranged in 7 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 5 material textures.
+(Info) Removing duplicate material 'Walls' (duplicate of 'PlantPot').
+(Info) Removing duplicate material 'Mirror' (duplicate of 'FireplaceGlass').
+(Info) Removing duplicate material 'SofaLegs' (duplicate of 'PlantPot').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 7 bits, primitiveIndex: 14 bits)
+(Info) Post processing geometry: 0.004834 s
+(Info) Optimizing materials:     0.063872 s
+(Info) Creating resources:       0.729773 s
+(Info) Loading scene (total):    1.174706 s
+(Info) Created CUDA device 'NVIDIA GeForce RTX 3090' (architecture 8.6).
+(Info) Initiating BLAS build for 8 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 8.93 MB
+(Info) BLAS build scratch buffer size: 5.99 MB
+(Info) BLAS group 0 final size: 3.77 MB
+  -> benchmark_results/bench_living-room_ptdn_rtxdi_on.csv (1508 lines)
+
+---------------------------------------------
+[22:37:13] scene=living-room  algo=ptnrd  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0296s
+(Info) Importing scene: media/scenes/living-room/scene-animation.pyscene
+(Info) Found 58 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 7 dynamic non-instanced meshes, arranged in 7 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 5 material textures.
+(Info) Removing duplicate material 'Walls' (duplicate of 'PlantPot').
+(Info) Removing duplicate material 'Mirror' (duplicate of 'FireplaceGlass').
+(Info) Removing duplicate material 'SofaLegs' (duplicate of 'PlantPot').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 7 bits, primitiveIndex: 14 bits)
+(Info) Post processing geometry: 0.005656 s
+(Info) Optimizing materials:     0.054001 s
+(Info) Creating resources:       0.741155 s
+(Info) Loading scene (total):    1.177015 s
+(Info) Initiating BLAS build for 8 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 8.93 MB
+(Info) BLAS build scratch buffer size: 5.99 MB
+(Info) BLAS group 0 final size: 3.77 MB
+  -> benchmark_results/bench_living-room_ptnrd_rtxdi_on.csv (1542 lines)
+
+---------------------------------------------
+[22:38:46] scene=living-room  algo=ncr  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0342s
+(Info) Importing scene: media/scenes/living-room/scene-animation.pyscene
+(Info) Found 58 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 7 dynamic non-instanced meshes, arranged in 7 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 5 material textures.
+(Info) Removing duplicate material 'Walls' (duplicate of 'PlantPot').
+(Info) Removing duplicate material 'Mirror' (duplicate of 'FireplaceGlass').
+(Info) Removing duplicate material 'SofaLegs' (duplicate of 'PlantPot').
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 7 bits, primitiveIndex: 14 bits)
+(Info) Post processing geometry: 0.004982 s
+(Info) Optimizing materials:     0.053923 s
+(Info) Creating resources:       0.736222 s
+(Info) Loading scene (total):    1.170922 s
+(Info) Initiating BLAS build for 8 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 8.93 MB
+(Info) BLAS build scratch buffer size: 5.99 MB
+(Info) BLAS group 0 final size: 3.77 MB
+(Info) Screen passes created: 	4887 ms
+(Info) Batch passes created: 	4413 ms
+(Info) NRModel created: 	95 ms
+(Info) NeuralRadiosity::updatePrograms() took 9395 ms
+(Info) NeuralRadiosity::prepareResources() took 7 ms
+  -> benchmark_results/bench_living-room_ncr_rtxdi_on.csv (1596 lines)
+
+---------------------------------------------
+[22:40:18] scene=teapot  algo=ptdn  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.029s
+(Info) Importing scene: media/scenes/teapot/scene-v4.pbrt
+(Info) PBRTImporter: Started parsing '/home/wy/.cache/packman/chk/falcor_media/7acdf8b0/scenes/teapot/scene-v4.pbrt'.
+(Info) PBRTImporter: Finished parsing '/home/wy/.cache/packman/chk/falcor_media/7acdf8b0/scenes/teapot/scene-v4.pbrt'.
+(Info) Parsing pbrt scene:       0.000128 s
+(Info) Building pbrt scene:      0.354123 s
+(Info) Pre-transformed 4 static meshes to world space.
+(Info) Found 5 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 dynamic non-instanced meshes, arranged in 0 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 1 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 3 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.005419 s
+(Info) Optimizing materials:     0.052072 s
+(Info) Creating resources:       0.721214 s
+(Info) Loading scene (total):    1.134094 s
+(Info) Created CUDA device 'NVIDIA GeForce RTX 3090' (architecture 8.6).
+(Info) Initiating BLAS build for 1 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 15.68 MB
+(Info) BLAS build scratch buffer size: 12.14 MB
+(Info) BLAS group 0 final size: 6.57 MB
+  -> benchmark_results/bench_teapot_ptdn_rtxdi_on.csv (1774 lines)
+
+---------------------------------------------
+[22:41:50] scene=teapot  algo=ptnrd  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0312s
+(Info) Importing scene: media/scenes/teapot/scene-v4.pbrt
+(Info) PBRTImporter: Started parsing '/home/wy/.cache/packman/chk/falcor_media/7acdf8b0/scenes/teapot/scene-v4.pbrt'.
+(Info) PBRTImporter: Finished parsing '/home/wy/.cache/packman/chk/falcor_media/7acdf8b0/scenes/teapot/scene-v4.pbrt'.
+(Info) Parsing pbrt scene:       0.000128 s
+(Info) Building pbrt scene:      0.328435 s
+(Info) Pre-transformed 4 static meshes to world space.
+(Info) Found 5 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 dynamic non-instanced meshes, arranged in 0 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 1 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 3 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.005554 s
+(Info) Optimizing materials:     0.052662 s
+(Info) Creating resources:       0.731267 s
+(Info) Loading scene (total):    1.119216 s
+(Info) Initiating BLAS build for 1 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 15.68 MB
+(Info) BLAS build scratch buffer size: 12.14 MB
+(Info) BLAS group 0 final size: 6.57 MB
+  -> benchmark_results/bench_teapot_ptnrd_rtxdi_on.csv (1751 lines)
+
+---------------------------------------------
+[22:43:23] scene=teapot  algo=ncr  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0293s
+(Info) Importing scene: media/scenes/teapot/scene-v4.pbrt
+(Info) PBRTImporter: Started parsing '/home/wy/.cache/packman/chk/falcor_media/7acdf8b0/scenes/teapot/scene-v4.pbrt'.
+(Info) PBRTImporter: Finished parsing '/home/wy/.cache/packman/chk/falcor_media/7acdf8b0/scenes/teapot/scene-v4.pbrt'.
+(Info) Parsing pbrt scene:       0.000238 s
+(Info) Building pbrt scene:      0.325184 s
+(Info) Pre-transformed 4 static meshes to world space.
+(Info) Found 5 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 dynamic non-instanced meshes, arranged in 0 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 1 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 3 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.005251 s
+(Info) Optimizing materials:     0.052751 s
+(Info) Creating resources:       0.737463 s
+(Info) Loading scene (total):    1.122229 s
+(Info) Initiating BLAS build for 1 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 15.68 MB
+(Info) BLAS build scratch buffer size: 12.14 MB
+(Info) BLAS group 0 final size: 6.57 MB
+(Info) Screen passes created: 	4851 ms
+(Info) Batch passes created: 	4397 ms
+(Info) NRModel created: 	89 ms
+(Info) NeuralRadiosity::updatePrograms() took 9337 ms
+(Info) NeuralRadiosity::prepareResources() took 7 ms
+  -> benchmark_results/bench_teapot_ncr_rtxdi_on.csv (1663 lines)
+
+---------------------------------------------
+[22:44:55] scene=veach-ajar  algo=ptdn  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0292s
+(Info) Importing scene: media/scenes/veach-ajar/scene-animation.pyscene
+(Info) Found 14 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 8 dynamic non-instanced meshes, arranged in 8 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 4 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 5 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.042916 s
+(Info) Optimizing materials:     0.050973 s
+(Info) Creating resources:       0.715394 s
+(Info) Loading scene (total):    1.656283 s
+(Info) Created CUDA device 'NVIDIA GeForce RTX 3090' (architecture 8.6).
+(Info) Initiating BLAS build for 9 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 23.83 MB
+(Info) BLAS build scratch buffer size: 5.31 MB
+(Info) BLAS group 0 final size: 8.96 MB
+(Info) LightCollection::build preparation: 0.000438 s
+(Info) LightCollection::build integrate emissive: 0.950985 s
+(Info) LightCollection::build finalize: 0.001442 s
+  -> benchmark_results/bench_veach-ajar_ptdn_rtxdi_on.csv (1566 lines)
+
+---------------------------------------------
+[22:46:28] scene=veach-ajar  algo=ptnrd  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0299s
+(Info) Importing scene: media/scenes/veach-ajar/scene-animation.pyscene
+(Info) Found 14 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 8 dynamic non-instanced meshes, arranged in 8 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 4 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 5 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.049967 s
+(Info) Optimizing materials:     0.053087 s
+(Info) Creating resources:       0.735840 s
+(Info) Loading scene (total):    1.696111 s
+(Info) Initiating BLAS build for 9 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 23.83 MB
+(Info) BLAS build scratch buffer size: 5.31 MB
+(Info) BLAS group 0 final size: 8.96 MB
+(Info) LightCollection::build preparation: 0.000442 s
+(Info) LightCollection::build integrate emissive: 0.959242 s
+(Info) LightCollection::build finalize: 0.001369 s
+  -> benchmark_results/bench_veach-ajar_ptnrd_rtxdi_on.csv (1501 lines)
+
+---------------------------------------------
+[22:48:01] scene=veach-ajar  algo=ncr  rtxdi=rtxdi_on
+---------------------------------------------
+(Info) Falcor 8.0 (commit: 44f39e74, branch: stage4dev, contains uncommitted changes)
+(Info) Created GPU device 'NVIDIA GeForce RTX 3090' using 'Vulkan' API (SM6.6).
+(Info) Loaded 34 plugin(s) in 0.0285s
+(Info) Importing scene: media/scenes/veach-ajar/scene-animation.pyscene
+(Info) Found 14 static non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 0 displaced non-instanced meshes, arranged in 1 mesh group.
+(Info) Found 8 dynamic non-instanced meshes, arranged in 8 mesh groups.
+(Info) Found 0 instanced meshes, arranged in 0 mesh groups.
+(Info) Analyzing 4 material textures.
+(Info) Optimized materials by disabling alpha test for 1 materials.
+(Info) HitInfo: Total size is 128 bits (type: 3 bits, instanceID: 5 bits, primitiveIndex: 17 bits)
+(Info) Post processing geometry: 0.048485 s
+(Info) Optimizing materials:     0.051251 s
+(Info) Creating resources:       0.716369 s
+(Info) Loading scene (total):    1.731470 s
+(Info) LightCollection::build preparation: 0.000513 s
+(Info) LightCollection::build integrate emissive: 0.974703 s
+(Info) LightCollection::build finalize: 0.001078 s
+(Info) Initiating BLAS build for 9 mesh groups
+(Info) BLAS build split into 1 groups
+(Info) BLAS build result buffer size: 23.83 MB
+(Info) BLAS build scratch buffer size: 5.31 MB
+(Info) BLAS group 0 final size: 8.96 MB
+(Info) Screen passes created: 	4813 ms
+(Info) Batch passes created: 	4315 ms
+(Info) NRModel created: 	91 ms
+(Info) NeuralRadiosity::updatePrograms() took 9219 ms
+(Info) NeuralRadiosity::prepareResources() took 6 ms
+  -> benchmark_results/bench_veach-ajar_ncr_rtxdi_on.csv (1659 lines)
+
+=============================================
+Round rtxdi_on complete. Elapsed: 1961s
+=============================================

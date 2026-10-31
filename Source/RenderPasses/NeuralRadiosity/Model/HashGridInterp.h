@@ -26,6 +26,16 @@ namespace HashGridInterp {
         uint32_t baseResolution;
         float perLevelScale;
         float interpRatio;
+
+        // --- Debug: hash collision stats (same semantics as HashGrid::Config) ---
+        uint32_t* counters = nullptr;
+        uint32_t* slotMarker = nullptr;
+
+        // --- Debug: level usage histogram ---
+        // When != nullptr, forwardKernel atomically increments
+        // histogram[upperLevel * nLevels + lowerLevel] for each (pixel, cluster)
+        // query. Size must be nLevels * nLevels uint32_t. Reset per frame.
+        uint32_t* levelHistogram = nullptr;
     };
 
     void initializeConstants(const Config& config);
@@ -57,4 +67,7 @@ namespace HashGridInterp {
         uint32_t weightOffset,
         const Config& config
     );
+
+    void resetCollisionStats(cudaStream_t stream, const Config& config);
+    void resetLevelHistogram(cudaStream_t stream, const Config& config);
 }

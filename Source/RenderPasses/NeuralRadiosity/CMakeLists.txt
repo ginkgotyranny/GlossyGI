@@ -1,5 +1,6 @@
 add_plugin(NeuralRadiosity)
-set_property(TARGET NeuralRadiosity PROPERTY CUDA_ARCHITECTURES 86)
+# 120 = Blackwell RTX 50 (local Windows GPU); 86 = Ampere (Linux box).
+set_property(TARGET NeuralRadiosity PROPERTY CUDA_ARCHITECTURES 120)
 
 file(GLOB_RECURSE NR_SOURCES
     "*.cpp"

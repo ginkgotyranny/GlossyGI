@@ -1,0 +1,4 @@
+0_bare_mogwai	751.6	829.0
+1_graph_loaded	771.8	849.3
+3_after_first_frame	924.7	1002.1
+4_steady_state_100frames	3531.7	3609.1

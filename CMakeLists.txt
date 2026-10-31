@@ -58,7 +58,7 @@ message(STATUS "Platform: ${FALCOR_PLATFORM}")
 
 # Check if D3D12/Vulkan are available.
 set(FALCOR_HAS_D3D12 ${FALCOR_WINDOWS})
-set(FALCOR_HAS_VULKAN ON)
+set(FALCOR_HAS_VULKAN ${FALCOR_LINUX})
 
 # -----------------------------------------------------------------------------
 # git submodules

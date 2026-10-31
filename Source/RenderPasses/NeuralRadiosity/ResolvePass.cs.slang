@@ -36,6 +36,9 @@ struct TemporalSpecHistory
 };
 // RWStructuredBuffer<TemporalSpecHistory> temporalHistory;
 
+// Debug: per-spec-pixel dominant grid level (written by ConeTrace).
+RWStructuredBuffer<float> gSpecLevel;
+
 
 #ifndef RAY_FLAGS
 #define RAY_FLAGS true
@@ -45,10 +48,28 @@ struct TemporalSpecHistory
 #define NUM_CLUSTERS 4
 #endif
 
+#ifndef DEBUG_RENDER_DIFFUSE_ONLY
+#define DEBUG_RENDER_DIFFUSE_ONLY 0
+#endif
+
+#ifndef DEBUG_RENDER_SPECULAR_ONLY
+#define DEBUG_RENDER_SPECULAR_ONLY 0
+#endif
+
+#ifndef DEBUG_SHOW_SPEC_LEVEL
+#define DEBUG_SHOW_SPEC_LEVEL 0
+#endif
+
+#ifndef N_GRID_LEVELS
+#define N_GRID_LEVELS 6
+#endif
+
 struct ResolvePass
 {
     static const uint kRayFlags = RAY_FLAGS;
     static const uint numClusters = NUM_CLUSTERS;
+    static const bool kDebugDiffuseOnly = (DEBUG_RENDER_DIFFUSE_ONLY != 0);
+    static const bool kDebugSpecularOnly = (DEBUG_RENDER_SPECULAR_ONLY != 0);
 
     uint2 frameDim = {};
     uint frameCount = 0;
@@ -62,38 +83,64 @@ struct ResolvePass
         uint pixIdx = pixel.y * frameDim.x + pixel.x;
         float4 thp = gColor[pixel];
 
+        // Debug: visualize per-spec-pixel grid level as color.
+        // Level 0 (coarsest) -> red, level N-1 (finest) -> blue, mid -> green.
+        // Diffuse / inactive pixels -> black so only spec regions are shown.
+        if (DEBUG_SHOW_SPEC_LEVEL != 0)
+        {
+            if (specActive[pixIdx] != 0)
+            {
+                const uint specIdx = specIndex[pixIdx];
+                float lvl = gSpecLevel[specIdx];
+                if (lvl < 0.0f)
+                {
+                    gColor[pixel] = float4(0.0f, 0.0f, 0.0f, 1.0f);
+                }
+                else
+                {
+                    float t = saturate(lvl / float(N_GRID_LEVELS - 1));
+                    // Red (0) -> Green (0.5) -> Blue (1)
+                    float3 col;
+                    if (t < 0.5f)
+                    {
+                        col = lerp(float3(1, 0, 0), float3(0, 1, 0), t * 2.0f);
+                    }
+                    else
+                    {
+                        col = lerp(float3(0, 1, 0), float3(0, 0, 1), (t - 0.5f) * 2.0f);
+                    }
+                    gColor[pixel] = float4(col, 1.0f);
+                }
+            }
+            else
+            {
+                gColor[pixel] = float4(0.0f, 0.0f, 0.0f, 1.0f);
+            }
+            tempColor[pixel] = gColor[pixel];
+            return;
+        }
+
+        // When isolating a component, the other component's active mask was
+        // zeroed in FirstSmoothPass, so the inactive branch naturally falls
+        // through to the kept branch. No extra branching needed here.
         if (specActive[pixIdx] != 0)
         {
             const uint specIdx = specIndex[pixIdx];
             gColor[pixel] = thp * specColor[specIdx].toFloat4();
-            // uint visIdx = specIdx * 4;
-            // gPos[pixel] = clusterPos[visIdx];
-            // gDir[pixel] = clusterPos[visIdx + 1];
-            // gNormal[pixel] = clusterPos[visIdx + 2];
-            // gAlbedo[pixel] = clusterPos[visIdx + 3];
-            // gNormal[pixel] = float4(clusterScale[specIdx * 4], clusterScale[specIdx * 4 + 1], clusterScale[specIdx * 4 + 3], 1.0f);
-            // gAlbedo[pixel] = float4(clusterWeight[specIdx * 4], clusterWeight[specIdx * 4 + 1], clusterWeight[specIdx * 4 + 3], 1.0f);
-            // gRoughness[pixel] = clusterScale[visIdx];
-            // TemporalSpecHistory history = temporalHistory[specIdx];
-            // float totalCount = history.count[0] + history.count[1] + history.count[2] + history.count[3];
-            // gPos[pixel] = float4(history.count[0], history.count[1], history.count[3], history.count[2]) / totalCount;
-            // gDir[pixel] = float4(history.std[0], history.std[0], history.std[0], 1.0f) / 1.f;
-            // gNormal[pixel] = float4(history.std[1], history.std[1], history.std[1], 1.0f) / 1.f;
-            // gAlbedo[pixel] = float4(history.std[2], history.std[2], history.std[2], 1.0f) / 1.f;
-            // gRoughness[pixel] = history.std[3] / 1.f;
         }
         else if (diffActive[pixIdx] != 0)
         {
             const uint diffIdx = diffIndex[pixIdx];
             gColor[pixel] = thp * diffColor[diffIdx].toFloat4();
         }
+        else if (kDebugDiffuseOnly || kDebugSpecularOnly)
+        {
+            // Isolated component had nothing to contribute for this pixel:
+            // write pure black so the screen clearly shows only the kept lobe.
+            gColor[pixel] = float4(0.f, 0.f, 0.f, 0.f);
+        }
 
         tempColor[pixel] = gColor[pixel];
-
-        // if ((pixIdx > 100000) && (pixIdx < 200000))
-        // {
-        //     gColor[pixel] = debug[pixIdx - 100000];
-        // }
     }
 }
 

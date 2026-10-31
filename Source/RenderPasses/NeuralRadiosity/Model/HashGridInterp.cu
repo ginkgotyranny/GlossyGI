@@ -118,6 +118,12 @@ __global__ void forwardKernel(
 
     const precision_t* upperGrid = grids + cGridOffsets[upperLevel] * N_FEATURES_PER_LEVEL;
     const precision_t* lowerGrid = grids + cGridOffsets[lowerLevel] * N_FEATURES_PER_LEVEL;
+
+    // Debug: record (upperLevel, lowerLevel) pair usage in histogram.
+    if (config.levelHistogram != nullptr) {
+        const uint32_t idx = upperLevel * config.nLevels + lowerLevel;
+        atomicAdd(&config.levelHistogram[idx], 1u);
+    }
     
     uint32_t upperRes = cResolutions[upperLevel];
     uint32_t lowerRes = cResolutions[lowerLevel];
@@ -146,6 +152,26 @@ __global__ void forwardKernel(
         uint32_t upperIndex = _hash_index(upperIndex3, upperLevel, config.log2HashMapSize);
         uint32_t lowerIndex = _hash_index(lowerIndex3, lowerLevel, config.log2HashMapSize);
 
+        // Debug: count unique hash slots and total hash-mode queries.
+        const bool collectStats = (config.counters != nullptr && config.slotMarker != nullptr);
+        if (collectStats) {
+            const uint32_t maxHash = 1u << config.log2HashMapSize;
+            // Upper level
+            if (cGridSizes[upperLevel] > maxHash) {
+                uint32_t slotGlobalIdx = upperLevel * maxHash + upperIndex;
+                uint32_t old = atomicExch(&config.slotMarker[slotGlobalIdx], 1u);
+                if (old == 0u) atomicAdd(&config.counters[0], 1u);
+                atomicAdd(&config.counters[1], 1u);
+            }
+            // Lower level (may equal upper level, still counts as separate query)
+            if (cGridSizes[lowerLevel] > maxHash) {
+                uint32_t slotGlobalIdx = lowerLevel * maxHash + lowerIndex;
+                uint32_t old = atomicExch(&config.slotMarker[slotGlobalIdx], 1u);
+                if (old == 0u) atomicAdd(&config.counters[0], 1u);
+                atomicAdd(&config.counters[1], 1u);
+            }
+        }
+
         // Calculate interpolation weight
         float upperCornerWeight = (corner3.x ? upperOffset.x : (1 - upperOffset.x)) *
                             (corner3.y ? upperOffset.y : (1 - upperOffset.y)) *
@@ -153,7 +179,7 @@ __global__ void forwardKernel(
         float lowerCornerWeight = (corner3.x ? lowerOffset.x : (1 - lowerOffset.x)) *
                             (corner3.y ? lowerOffset.y : (1 - lowerOffset.y)) *
                             (corner3.z ? lowerOffset.z : (1 - lowerOffset.z));
-        
+
         const precision_t* upperFeatures = upperGrid + upperIndex * N_FEATURES_PER_LEVEL;
         const precision_t* lowerFeatures = lowerGrid + lowerIndex * N_FEATURES_PER_LEVEL;
 
@@ -383,6 +409,20 @@ void launchBackward(
         case 8: backwardKernel<8><<<grid, block, 0, stream>>>(grids, input, dL_dinput, dL_dgrids, count, fullDim, encOffset, posOffset, scaleOffset, weightOffset, config); break;
         default: assert(false);
     }
+}
+
+void resetCollisionStats(cudaStream_t stream, const Config& config) {
+    if (config.counters == nullptr || config.slotMarker == nullptr) return;
+    const uint32_t maxHash = 1u << config.log2HashMapSize;
+    const uint32_t markerSize = maxHash * config.nLevels;
+    cudaMemsetAsync(config.counters, 0, sizeof(uint32_t) * 2, stream);
+    cudaMemsetAsync(config.slotMarker, 0, sizeof(uint32_t) * markerSize, stream);
+}
+
+void resetLevelHistogram(cudaStream_t stream, const Config& config) {
+    if (config.levelHistogram == nullptr) return;
+    const uint32_t histSize = config.nLevels * config.nLevels;
+    cudaMemsetAsync(config.levelHistogram, 0, sizeof(uint32_t) * histSize, stream);
 }
 
 }  // namespace HashGridInterp

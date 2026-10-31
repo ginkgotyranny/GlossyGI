@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Falcor 内存占用拆解报告 — ptdn / ptnrd / ncr</title>
+<style>
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 1400px; margin: 0 auto; padding: 24px; color: #1f2937; line-height: 1.6; }
+h1 { font-size: 22px; border-bottom: 2px solid #2563eb; padding-bottom: 8px; }
+h2 { font-size: 18px; margin-top: 32px; color: #1e40af; border-left: 4px solid #2563eb; padding-left: 10px; }
+h3 { font-size: 15px; margin-top: 24px; color: #374151; }
+h4 { font-size: 13px; margin-top: 18px; color: #4b5563; margin-bottom: 4px; }
+table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 12.5px; }
+th, td { border: 1px solid #d1d5db; padding: 5px 8px; text-align: left; vertical-align: top; }
+th { background: #eff6ff; font-weight: 600; }
+tr:nth-child(even) { background: #f9fafb; }
+.cat-shared { background: #ecfdf5 !important; }
+.cat-pt { background: #fef3c7 !important; }
+.cat-nrd { background: #fee2e2 !important; }
+.cat-optix { background: #f3e8ff !important; }
+.cat-ncr { background: #dbeafe !important; }
+.cat-rtxdi { background: #ffe4e6 !important; }
+.cat-cuda { background: #e0e7ff !important; }
+.bad { background: #fecaca !important; }
+.ok { background: #d1fae5 !important; }
+.note { font-size: 12px; color: #6b7280; margin: 6px 0 16px; }
+.formula { font-family: "SF Mono", Consolas, monospace; font-size: 11.5px; color: #7c3aed; }
+.total-row { font-weight: 700; background: #fde68a !important; }
+code { background: #f3f4f6; padding: 1px 4px; border-radius: 3px; font-size: 11.5px; }
+.summary-card { display: inline-block; border: 1px solid #d1d5db; border-radius: 6px; padding: 12px 16px; margin: 6px 8px 6px 0; background: #fff; vertical-align: top; min-width: 180px; }
+.summary-card h4 { margin: 0 0 6px; color: #1e40af; }
+.summary-card .big { font-size: 22px; font-weight: 700; color: #059669; }
+.summary-card .label { font-size: 11px; color: #6b7280; }
+ul { margin: 4px 0 8px 18px; padding: 0; }
+li { margin: 2px 0; }
+.legend span { display: inline-block; padding: 2px 8px; margin-right: 6px; border-radius: 3px; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<h1>Falcor 内存占用拆解报告 — ptdn / ptnrd / ncr</h1>
+<p class="note">生成日期 2026-09-29 · 基准分辨率 1280×720 · 数据来源：实测 nvitop（living-room 代表场景）+ 源码静态分析</p>
+
+<div class="legend">
+<strong>图例：</strong>
+<span class="cat-shared">共享 (Scene)</span>
+<span class="cat-pt">PathTracer</span>
+<span class="cat-nrd">NRDPass</span>
+<span class="cat-optix">OptixDenoiser</span>
+<span class="cat-ncr">NeuralRadiosity (Falcor)</span>
+<span class="cat-cuda">NeuralRadiosity (CUDA)</span>
+<span class="cat-rtxdi">RTXDI</span>
+</div>
+
+<h2>1. 实测内存基线（living-room, 1280×720, avg MB）</h2>
+
+<table>
+<thead><tr><th>算法</th><th>RTXDI</th><th>CPU-MEM (RSS)</th><th>GPU-MEM (VRAM)</th><th>Total</th><th>Δ vs ptdn</th></tr></thead>
+<tbody>
+<tr><td>ptdn</td><td>off</td><td>2186</td><td>1016</td><td>3202</td><td>—</td></tr>
+<tr><td>ptnrd</td><td>off</td><td>2828</td><td>1011</td><td>3839</td><td class="bad">+637</td></tr>
+<tr><td>ncr</td><td>off</td><td>2700</td><td>1371</td><td>4071</td><td class="bad">+869</td></tr>
+<tr><td>ptdn</td><td>on</td><td>3343</td><td>1191</td><td>4534</td><td>+1332 (vs off)</td></tr>
+<tr><td>ptnrd</td><td>on</td><td>3985</td><td>1184</td><td>5169</td><td>+1330 (vs off)</td></tr>
+<tr><td>ncr</td><td>on</td><td>2700</td><td>1371</td><td>4071</td><td>0 (vs off)</td></tr>
+</tbody>
+</table>
+<p class="note">关键观察：RTXDI 对 CPU 影响 +1157MB，对 GPU 仅 +175MB；ncr 两轮完全一致（不受 RTXDI 影响）；ptnrd 比 ptdn 多 +637MB（全部在 CPU 侧 = NRD denoiser）。</p>
+
+<h2>2. 共享内存（Scene 对象 — 三算法共用）</h2>
+<p>以下由 <code>Scene::update()</code> 在 <code>Source/Falcor/Scene/Scene.cpp</code> 分配，绑定到 SceneBlock，所有 ray-tracing pass 共享。三算法此项完全相同。</p>
+
+<table>
+<thead><tr><th>资源</th><th>变量</th><th class="formula">大小公式</th><th>用途</th><th>living-room 估算</th></tr></thead>
+<tbody>
+<tr class="cat-shared"><td>BLAS (底层加速结构)</td><td>Scene::mpBlas</td><td class="formula">∝ 三角形数 (post-compaction)</td><td>每 mesh 一个 BVH，光线求交用</td><td>~500-800 MB</td></tr>
+<tr class="cat-shared"><td>TLAS (顶层加速结构)</td><td>Scene::mTlasCache</td><td class="formula">∝ 实例数 × rayTypeCount</td><td>顶层加速结构，按 ray type 缓存</td><td>~10-30 MB</td></tr>
+<tr class="cat-shared"><td>顶点缓冲</td><td>SplitVertexBuffer</td><td class="formula">uniqueVertexCount × 32B</td><td>PackedStaticVertexData (pos+normal+tangent+texCrd)</td><td>~80-150 MB</td></tr>
+<tr class="cat-shared"><td>索引缓冲</td><td>SplitIndexBuffer</td><td class="formula">triangleCount × 6B (16bit)</td><td>三角形索引</td><td>~10-30 MB</td></tr>
+<tr class="cat-shared"><td>材质纹理</td><td>MaterialSystem::mpTextureManager</td><td class="formula">Σ 各纹理 (BC7 压缩, 8B/px)</td><td>PBR 纹理数组（albedo/normal/roughness/metallic 等）</td><td>~300-600 MB</td></tr>
+<tr class="cat-shared"><td>材质数据缓冲</td><td>mpMaterialDataBuffer</td><td class="formula">materialCount × sizeof(MaterialData)</td><td>材质参数（纹理句柄、常量）</td><td>~1-2 MB</td></tr>
+<tr class="cat-shared"><td>Mesh 描述符</td><td>mpMeshesBuffer</td><td class="formula">meshCount × 32B</td><td>每 mesh 的顶点/索引偏移</td><td>&lt;1 MB</td></tr>
+<tr class="cat-shared"><td>GeometryInstance</td><td>mpGeometryInstancesBuffer</td><td class="formula">instanceCount × 40B</td><td>每实例的 transform + mesh 引用</td><td>~40 KB</td></tr>
+<tr class="cat-shared"><td>环境贴图</td><td>EnvMap::mpEnvMap</td><td class="formula">W×H×mips × 4B (RG11B10UF)</td><td>HDR 环境光照</td><td>~32-64 MB</td></tr>
+<tr class="cat-shared"><td>解析光源</td><td>mpLightsBuffer</td><td class="formula">lightCount × sizeof(LightData)</td><td>点光源/方向光/聚光灯</td><td>&lt;100 KB</td></tr>
+<tr class="cat-shared"><td>发光三角形数据</td><td>LightCollection</td><td class="formula">emissiveTriCount × (64+16)B</td><td>PackedEmissiveTriangle + flux，用于 EmissiveUniformSampler</td><td>~10-50 MB</td></tr>
+<tr class="cat-shared"><td>动画缓冲</td><td>AnimationController</td><td class="formula">骨骼矩阵 + prevVertex (动画时)</td><td>蒙皮动画 + 运动模糊</td><td>~20-80 MB (动画场景)</td></tr>
+<tr class="total-row cat-shared"><td colspan="4">共享基线合计（living-room 估算）</td><td>~960-1500 MB</td></tr>
+</tbody>
+</table>
+<p class="note">注：BLAS + 材质纹理是最大项，但三算法完全相同。以下差异分析中此项作为"背景常数"不重复列。</p>
+
+<h2>3. ptdn = PathTracer + OptixDenoiser</h2>
+
+<h3>3.1 PathTracer 内部缓冲（GPU, Falcor 管理）</h3>
+<table>
+<thead><tr><th>资源</th><th>变量</th><th class="formula">大小公式 (1280×720)</th><th>用途</th><th>估算</th></tr></thead>
+<tbody>
+<tr class="cat-pt"><td>SampleColor</td><td>mpSampleColor</td><td class="formula">sampleCount × 4B (LogLuvHDR, SPP=1 时跳过)</td><td>紧凑每样本颜色（可变 SPP 时）</td><td>~0 (SPP=1 跳过)</td></tr>
+<tr class="cat-pt"><td>SampleGuideData</td><td>mpSampleGuideData</td><td class="formula">sampleCount × 48B (albedo/normal/specAlb/indAlb/reflPos)</td><td>denoiser 引导数据（ptdn/ptnrd 用）</td><td>~9 MB</td></tr>
+<tr class="cat-pt"><td>SampleNRD*</td><td>mpSampleNRD{Radiance,HitDist,NeeOnDelta,Emission,Reflectance}</td><td class="formula">sampleCount × (16+4+16+16+16)B = 68B/sample</td><td>NRD 专用每样本数据（仅 ptnrd 用）</td><td>~0 (ptdn 不用)</td></tr>
+<tr class="cat-pt"><td>SampleOffset</td><td>mpSampleOffset</td><td class="formula">W×H × 2B (R16Uint)</td><td>每像素到 tiled 样本缓冲的偏移</td><td>~1.8 MB</td></tr>
+<tr class="cat-pt"><td>ParameterBlock</td><td>mpPathTracerBlock</td><td class="formula">~256B</td><td>shader 参数块</td><td>可忽略</td></tr>
+</tbody>
+</table>
+<p class="note">sampleCount = ceil(1280/16)×ceil(720/16)×256 = 80×45×256 = 921,600。SPP=1 时大部分样本缓冲跳过。</p>
+
+<h3>3.2 PathTracer 输出纹理（GPU, RenderGraph 分配）</h3>
+<table>
+<thead><tr><th>输出</th><th class="formula">格式 / Bytes-per-pixel</th><th>用途</th><th>1280×720 估算</th></tr></thead>
+<tbody>
+<tr class="cat-pt"><td>color</td><td class="formula">RGBA32Float / 16B</td><td>最终颜色（送 OptixDenoiser）</td><td>14.7 MB</td></tr>
+<tr class="cat-pt"><td>albedo</td><td class="formula">RGBA8Unorm / 4B</td><td>反照率引导</td><td>3.7 MB</td></tr>
+<tr class="cat-pt"><td>guideNormal</td><td class="formula">RGBA16Float / 8B</td><td>法线引导</td><td>7.4 MB</td></tr>
+<tr class="cat-pt"><td>reflectionPosW</td><td class="formula">RGBA32Float / 16B</td><td>反射位置（OptiX 时空引导）</td><td>14.7 MB</td></tr>
+<tr class="total-row cat-pt"><td colspan="3">PathTracer 输出小计</td><td>~40 MB</td></tr>
+</tbody>
+</table>
+
+<h3>3.3 OptixDenoiser 资源（GPU, CUDA interop）</h3>
+<table>
+<thead><tr><th>资源</th><th>变量</th><th class="formula">大小公式 (1280×720)</th><th>用途</th><th>估算</th></tr></thead>
+<tbody>
+<tr class="cat-optix"><td>Input staging</td><td>interop.denoiserInput.buffer</td><td class="formula">W×H × 16B (RGBA32F linear)</td><td>Falcor 纹理 → CUDA 线性缓冲（噪点输入）</td><td>14.7 MB</td></tr>
+<tr class="cat-optix"><td>Output staging</td><td>interop.denoiserOutput.buffer</td><td class="formula">W×H × 16B</td><td>CUDA → Falcor（去噪输出）</td><td>14.7 MB</td></tr>
+<tr class="cat-optix"><td>Normal staging</td><td>interop.normal.buffer</td><td class="formula">W×H × 12B (FLOAT3)</td><td>法线引导 staging</td><td>11.0 MB</td></tr>
+<tr class="cat-optix"><td>Albedo staging</td><td>interop.albedo.buffer</td><td class="formula">W×H × 16B</td><td>反照率引导 staging</td><td>14.7 MB</td></tr>
+<tr class="cat-optix"><td>MotionVec staging</td><td>interop.motionVec.buffer</td><td class="formula">W×H × 8B (FLOAT2)</td><td>运动矢量 staging（时序模式）</td><td>7.4 MB</td></tr>
+<tr class="cat-optix"><td>OptiX scratch</td><td>mDenoiser.scratchBuffer</td><td class="formula">optixDenoiserComputeMemoryResources</td><td>去噪计算 scratch</td><td>~10-30 MB</td></tr>
+<tr class="cat-optix"><td>OptiX state</td><td>mDenoiser.stateBuffer</td><td class="formula">同上查询</td><td>AI 模型权重 + 时序先验状态</td><td>~2-5 MB</td></tr>
+<tr class="cat-optix"><td>Intensity/HDR avg</td><td>intensityBuffer + hdrAverageBuffer</td><td class="formula">4B + 12B</td><td>HDR 强度标量 + 平均色</td><td>可忽略</td></tr>
+<tr class="total-row cat-optix"><td colspan="4">OptixDenoiser 小计</td><td>~75-100 MB</td></tr>
+</tbody>
+</table>
+<p class="note">OptiX 用 AI 模型去噪，无显式 history 纹理——时序状态压缩在 flat stateBuffer (~2-5MB) 内。代价是需把 Falcor 纹理转成 CUDA 线性缓冲（5 个 staging buffer）。</p>
+
+<h3>3.4 RTXDI 资源（仅 useRTXDI=true 时，ptdn 专属）</h3>
+<table>
+<thead><tr><th>资源</th><th>变量</th><th class="formula">大小公式 (1280×720)</th><th>用途</th><th>估算</th></tr></thead>
+<tbody>
+<tr class="cat-rtxdi"><td>LightTileBuffer (RIS)</td><td>mpLightTileBuffer</td><td class="formula">128×1024 tiles × 8B</td><td>预采样光栅 RIS 缓冲</td><td>~1 MB</td></tr>
+<tr class="cat-rtxdi"><td>CompactLightInfo</td><td>mpCompactLightInfoBuffer</td><td class="formula">2×128K × 48B (PackedPolymorphicLight)</td><td>tile 相干性紧凑光信息</td><td>~12 MB</td></tr>
+<tr class="cat-rtxdi"><td>ReservoirBuffer</td><td>mpReservoirBuffer</td><td class="formula">W×H × 3 reservoirs × ~64B</td><td>每像素 3 个 ReSTIR reservoir（当前+历史）</td><td>~166 MB</td></tr>
+<tr class="cat-rtxdi"><td>SurfaceData</td><td>mpSurfaceDataBuffer</td><td class="formula">2 × W×H × 32B (current+prev)</td><td>每像素表面数据（当前+上一帧）</td><td>~59 MB</td></tr>
+<tr class="cat-rtxdi"><td>NeighborOffsets</td><td>mpNeighborOffsetsBuffer</td><td class="formula">~1KB (固定)</td><td>空间采样邻域偏移</td><td>可忽略</td></tr>
+<tr class="cat-rtxdi"><td>LightInfoBuffer</td><td>mpLightInfoBuffer</td><td class="formula">lightCount × 48B</td><td>所有发光体信息</td><td>~1 MB</td></tr>
+<tr class="cat-rtxdi"><td>LocalLightPdf</td><td>mpLocalLightPdfTexture</td><td class="formula">pdfTexSize × 2B (R16Float mip)</td><td>局部光重要性采样 PDF</td><td>~2-8 MB</td></tr>
+<tr class="cat-rtxdi"><td>EnvLightLuminance</td><td>mpEnvLightLuminanceTexture</td><td class="formula">bit_ceil(W)×bit_ceil(H) × 4B</td><td>环境光亮度</td><td>~4-16 MB</td></tr>
+<tr class="cat-rtxdi"><td>EnvLightPdf</td><td>mpEnvLightPdfTexture</td><td class="formula">同上 × 4B (mip)</td><td>环境光 PDF</td><td>~4-16 MB</td></tr>
+<tr class="cat-rtxdi"><td>RTXDI Context (CPU)</td><td>mpRTXDIContext</td><td class="formula">SDK 内部（runtime params + shader bytecode）</td><td>RTXDI SDK 上下文（CPU 侧）</><td>~800-1100 MB (CPU RSS)</td></tr>
+<tr class="total-row cat-rtxdi"><td colspan="4">RTXDI 小计 (GPU)</td><td>~250-280 MB</td></tr>
+</tbody>
+</table>
+<p class="note">RTXDI 的 +1157MB CPU 增量主要来自 SDK context（shader bytecode + runtime 表），GPU 侧 +175MB 主要来自 ReservoirBuffer + SurfaceData。</p>
+
+<h2>4. ptnrd = PathTracer + NRD</h2>
+
+<h3>4.1 PathTracer 部分（同 ptdn，但输出不同）</h3>
+<p>ptnrd 复用 PathTracer，但输出 NRD 专用纹理（替代 OptiX 引导纹理）。SampleGuideData 仍分配，SampleNRD* 也分配。</p>
+<table>
+<thead><tr><th>输出</th><th class="formula">格式 / Bpp</th><th>用途</th><th>1280×720</th></tr></thead>
+<tbody>
+<tr class="cat-pt"><td>nrdDiffuseRadianceHitDist</td><td class="formula">RGBA32Float / 16B</td><td>漫反射辐照 + hitDist</td><td>14.7 MB</td></tr>
+<tr class="cat-pt"><td>nrdSpecularRadianceHitDist</td><td class="formula">RGBA32Float / 16B</td><td>镜面反射辐照 + hitDist</td><td>14.7 MB</td></tr>
+<tr class="cat-pt"><td>nrdEmission</td><td class="formula">RGBA32Float / 16B</td><td>主表面自发光</td><td>14.7 MB</td></tr>
+<tr class="cat-pt"><td>nrdDiffuseReflectance</td><td class="formula">RGBA16Float / 8B</td><td>漫反射反射率</td><td>7.4 MB</td></tr>
+<tr class="cat-pt"><td>nrdSpecularReflectance</td><td class="formula">RGBA16Float / 8B</td><td>镜面反射率</td><td>7.4 MB</td></tr>
+<tr class="cat-pt"><td>nrdDeltaReflection* (5)</td><td class="formula">~48B/px 合计</td><td>delta 反射路径（颜色/反射率/发光/法线/路径长度）</td><td>~33 MB</td></tr>
+<tr class="cat-pt"><td>nrdDeltaTransmission* (5)</td><td class="formula">~48B/px 合计</td><td>delta 透射路径</td><td>~33 MB</td></tr>
+<tr class="cat-pt"><td>nrdResidualRadianceHitDist</td><td class="formula">RGBA32Float / 16B</td><td>残差辐照</td><td>14.7 MB</td></tr>
+<tr class="total-row cat-pt"><td colspan="3">PathTracer NRD 输出小计</td><td>~140 MB</td></tr>
+</tbody>
+</table>
+
+<h3>4.2 NRDPass 资源（GPU — ptnrd 比 ptdn 多的部分）</h3>
+<p>NRD SDK 是闭源二进制（libNRD.so），采用 RELAX_DiffuseSpecular 模式。它声明两个纹理池：</p>
+
+<h4>Permanent Pool（持久 history 纹理，跨帧保留）</h4>
+<table>
+<thead><tr><th>纹理</th><th class="formula">格式 / Bpp</th><th>用途</th><th>1280×720</th></tr></thead>
+<tbody>
+<tr class="cat-nrd"><td>gPrevDiffuseIllumination</td><td class="formula">RGBA16Float / 8B</td><td>慢通道漫反射辐照累积</td><td>7.4 MB</td></tr>
+<tr class="cat-nrd"><td>gPrevSpecularIllumination</td><td class="formula">RGBA16Float / 8B</td><td>慢通道镜面反射累积</td><td>7.4 MB</td></tr>
+<tr class="cat-nrd"><td>gPrevDiffuseIlluminationResponsive</td><td class="formula">RGBA16Float / 8B</td><td>快通道漫反射（响应快）</td><td>7.4 MB</td></tr>
+<tr class="cat-nrd"><td>gPrevSpecularIlluminationResponsive</td><td class="formula">RGBA16Float / 8B</td><td>快通道镜面反射</td><td>7.4 MB</td></tr>
+<tr class="cat-nrd"><td>gPrevHistoryLength</td><td class="formula">RG16Float / 4B</td><td>历史长度计数（漫+镜）</td><td>3.7 MB</td></tr>
+<tr class="cat-nrd"><td>gPrevReflectionHitT</td><td class="formula">R16Float / 2B</td><td>镜面反射 hitDist 历史</td><td>1.8 MB</td></tr>
+<tr class="cat-nrd"><td>gPrevNormalRoughness</td><td class="formula">RGBA8Unorm / 4B</td><td>上一帧法线+粗糙度</td><td>3.7 MB</td></tr>
+<tr class="cat-nrd"><td>gPrevViewZ</td><td class="formula">R16Float / 2B</td><td>上一帧视图深度</td><td>1.8 MB</td></tr>
+<tr class="cat-nrd"><td>gPrevMaterialID</td><td class="formula">R8Unorm / 1B</td><td>上一帧材质 ID</td><td>0.9 MB</td></tr>
+<tr class="cat-nrd"><td>gOutSpecularReprojConfidence</td><td class="formula">R16Float / 2B</td><td>镜面重投影置信度</td><td>1.8 MB</td></tr>
+<tr class="total-row cat-nrd"><td colspan="3">Permanent pool 小计</td><td>~40 MB</td></tr>
+</tbody>
+</table>
+
+<h4>Transient Pool（每帧复用 scratch 纹理）</h4>
+<table>
+<thead><tr><th>纹理</th><th class="formula">格式 / Bpp</th><th>用途</th><th>1280×720</th></tr></thead>
+<tbody>
+<tr class="cat-nrd"><td>PrePass ViewZ ×2</td><td class="formula">R16Float / 2B ×2</td><td>预处理深度</td><td>3.7 MB</td></tr>
+<tr class="cat-nrd"><td>PrePass blur diff+spec ×2</td><td class="formula">RGBA16Float / 8B ×2</td><td>预处理模糊结果</td><td>14.7 MB</td></tr>
+<tr class="cat-nrd"><td>A-trous diff+spec ×2</td><td class="formula">RGBA16Float / 8B ×2</td><td>A-trous 空间滤波临时</td><td>14.7 MB</td></tr>
+<tr class="cat-nrd"><td>HistoryFix/Clamp 中间量 ×4-6</td><td class="formula">RGBA16Float / 8B ×~5</td><td>遮挡修复 + clamping 临时</td><td>~37 MB</td></tr>
+<tr class="total-row cat-nrd"><td colspan="3">Transient pool 小计</td><td>~70 MB</td></tr>
+</tbody>
+</table>
+
+<h4>NRD 输出（RenderGraph 分配）</h4>
+<table>
+<thead><tr><th>输出</th><th class="formula">格式</th><th>用途</th><th>1280×720</th></tr></thead>
+<tbody>
+<tr class="cat-nrd"><td>filteredDiffuseRadianceHitDist</td><td class="formula">RGBA16Float / 8B</td><td>去噪后漫反射</td><td>7.4 MB</td></tr>
+<tr class="cat-nrd"><td>filteredSpecularRadianceHitDist</td><td class="formula">RGBA16Float / 8B</td><td>去噪后镜面反射</td><td>7.4 MB</td></tr>
+<tr class="total-row cat-nrd"><td colspan="3">NRD 输出小计</td><td>~15 MB</td></tr>
+</tbody>
+</table>
+<p class="note"><strong>ptnrd vs ptdn 差异</strong>：NRD 用 10 张持久 history 纹理 + ~8 张 transient 纹理（~110MB GPU），而 OptiX 只用 5 个 staging buffer + flat stateBuffer（~75-100MB）。但实测 ptnrd 比 ptdn 多 +637MB 全在 CPU 侧——NRD SDK 闭源二进制（shader bytecode + 内部表）占用大量 RSS，远超 OptiX。</p>
+
+<h2>5. ncr = NeuralRadiosity</h2>
+<p>NCR 渲染图只有 NeuralRadiosity + ToneMapper，<strong>不含 PathTracer pass</strong>。但 NCR pass 内部自实现 path tracing（ConeTrace.cs.slang / FirstSmoothPass.cs.slang / SampleRHS.cs.slang 调用 traceRay），用硬编码 <code>EmissiveUniformSampler</code>（非 RTXDI）。</p>
+
+<h3>5.1 Falcor GPU 资源</h3>
+
+<h4>RayBatch 缓冲（最大项）</h4>
+<p>三套 RayBatchBuffer，每套含 ~20 个结构化缓冲。每元素 stride 因 needAll 标志不同：</p>
+<table>
+<thead><tr><th>缓冲集</th><th>变量</th><th class="formula">元素数 × stride</th><th>用途</th><th>估算</th></tr></thead>
+<tbody>
+<tr class="cat-ncr"><td>RenderBatch</td><td>mpRenderBatch</td><td class="formula">1280×720 × 364B (needAll=false)</td><td>每像素推理 batch（pos/dir/normal/albedo + diff/spec 输入输出）</td><td>~335 MB</td></tr>
+<tr class="cat-ncr"><td>TrainLHSBatch</td><td>mpTrainLHSBatch</td><td class="formula">32768 × 528B (needAll=true)</td><td>训练左项 batch（含 G-buffer）</td><td>~17 MB</td></tr>
+<tr class="cat-ncr"><td>TrainRHSBatch</td><td>mpTrainRHSBatch</td><td class="formula">32768×8 × 528B</td><td>训练右项 batch（8 个 RHS 采样）</td><td>~134 MB</td></tr>
+<tr class="total-row cat-ncr"><td colspan="4">RayBatch 小计</td><td>~486 MB</td></tr>
+</tbody>
+</table>
+<p class="note">每元素 364B（needAll=false）/ 528B（needAll=true）包含：pos/dir/normal/albedo (4×16B) + roughness(4B) + vbuffer(16B) + color(64B) + emission(16B) + diff{Active,Index,Input,Color}(4+4+32+64B) + spec{VBuffer,Pixel,Pos,Dir,Rough,Active,Index,Input,Color}(16+8+16+16+4+4+4+48+64B)。NR_USE_FP16=1 使 diffInput/specInput 用 fp16，但 C++ precision_t=float。</p>
+
+<h4>临时纹理 + 输出纹理</h4>
+<table>
+<thead><tr><th>资源</th><th class="formula">格式 / Bpp</th><th>用途</th><th>1280×720</th></tr></thead>
+<tbody>
+<tr class="cat-ncr"><td>mpRenderTempColor</td><td class="formula">RGBA32Float / 16B</td><td>推理临时色</td><td>14.7 MB</td></tr>
+<tr class="cat-ncr"><td>mpPostFilterTempColor</td><td class="formula">RGBA32Float / 16B</td><td>后滤波临时色</td><td>14.7 MB</td></tr>
+<tr class="cat-ncr"><td>gColor (output)</td><td class="formula">RGBA32Float / 16B</td><td>输出色</td><td>14.7 MB</td></tr>
+<tr class="cat-ncr"><td>gVBuffer (output)</td><td class="formula">RGBA32Uint / 16B</td><td>命中信息</td><td>14.7 MB</td></tr>
+<tr class="cat-ncr"><td>gActive (output)</td><td class="formula">R32Uint / 4B</td><td>像素激活标记</td><td>3.7 MB</td></tr>
+<tr class="cat-ncr"><td>gPos/gDir/gNormal/gAlbedo (output)</td><td class="formula">RGBA32Float / 16B ×4</td><td>G-buffer 输出</td><td>58.8 MB</td></tr>
+<tr class="cat-ncr"><td>gRoughness (output)</td><td class="formula">R32Float / 4B</td><td>粗糙度</td><td>3.7 MB</td></tr>
+<tr class="total-row cat-ncr"><td colspan="3">纹理小计</td><td>~125 MB</td></tr>
+</tbody>
+</table>
+
+<h3>5.2 CUDA / tiny-cuda-nn 资源</h3>
+
+<h4>Hash Grid 编码</h4>
+<table>
+<thead><tr><th>资源</th><th class="formula">参数数 × 4B</th><th>用途</th><th>估算</th></tr></thead>
+<tbody>
+<tr class="cat-cuda"><td>PrimGrid (主网格)</td><td class="formula">2,189,700 params (6 levels × 2 feat, log2Hash=18)</td><td>主空间位置编码</td><td>8.8 MB</td></tr>
+<tr class="cat-cuda"><td>PrimGrid gradient</td><td class="formula">同上</td><td>反向传播梯度</td><td>8.8 MB</td></tr>
+<tr class="cat-cuda"><td>PrimGrid full (fp32 copy)</td><td class="formula">同上</td><td>EMA 权重副本</td><td>8.8 MB</td></tr>
+<tr class="cat-cuda"><td>ClsGrid (聚类网格 ×4)</td><td class="formula">4,400,312 params (4 clusters × 6 levels × 4 feat)</td><td>聚类位置编码</td><td>17.6 MB</td></tr>
+<tr class="cat-cuda"><td>ClsGrid gradient</td><td class="formula">同上</td><td>梯度</td><td>17.6 MB</td></tr>
+<tr class="cat-cuda"><td>ClsGrid full</td><td class="formula">同上</td><td>EMA 副本</td><td>17.6 MB</td></tr>
+<tr class="total-row cat-cuda"><td colspan="3">HashGrid 小计</td><td>~79 MB</td></tr>
+</tbody>
+</table>
+
+<h4>MLP 网络 + 优化器</h4>
+<table>
+<thead><tr><th>资源</th><th class="formula">参数数</th><th>用途</th><th>估算</th></tr></thead>
+<tbody>
+<tr class="cat-cuda"><td>DiffNet (3 hidden, 64 neurons)</td><td class="formula">11,472 params</td><td>漫反射 MLP</td><td>0.14 MB</td></tr>
+<tr class="cat-cuda"><td>SpecNet (4 hidden, 64 neurons)</td><td class="formula">17,680 params</td><td>镜面反射 MLP</td><td>0.21 MB</td></tr>
+<tr class="cat-cuda"><td>Adam moments (m,v) PrimGrid</td><td class="formula">2 × 2,189,700 × 4B</td><td>Adam 一阶/二阶矩</td><td>17.5 MB</td></tr>
+<tr class="cat-cuda"><td>Adam moments ClsGrid</td><td class="formula">2 × 4,400,312 × 4B</td><td>Adam 矩</td><td>35.2 MB</td></tr>
+<tr class="cat-cuda"><td>EMA 权重 (所有 4 优化器)</td><td class="formula">Σ params × 4B</td><td>指数移动平均权重</td><td>~26 MB</td></tr>
+<tr class="total-row cat-cuda"><td colspan="3">MLP + Optimizer 小计</td><td>~79 MB</td></tr>
+</tbody>
+</table>
+
+<h4>训练临时缓冲（每帧分配/释放，峰值）</h4>
+<table>
+<thead><tr><th>资源</th><th class="formula">大小</th><th>用途</th><th>峰值估算</th></tr></thead>
+<tbody>
+<tr class="cat-cuda"><td>networkOutput + dL_doutput</td><td class="formula">16 × batchSize × 4B ×2</td><td>前向输出 + 反向梯度</td><td>~8 MB (LHS) / ~67 MB (RHS)</td></tr>
+<tr class="cat-cuda"><td>dL_dnetworkInput</td><td class="formula">inputDim × batchSize × 4B</td><td>输入梯度</td><td>~8 MB / ~67 MB</td></tr>
+<tr class="cat-cuda"><td>loss buffer</td><td class="formula">16 × batchSize × 4B</td><td>损失值</td><td>~2 MB / ~16 MB</td></tr>
+<tr class="total-row cat-cuda"><td colspan="3">训练临时峰值 (RHS)</td><td>~150 MB (瞬态)</td></tr>
+</tbody>
+</table>
+
+<h3>5.3 NCR 内存汇总</h3>
+<table>
+<thead><tr><th>类别</th><th>估算</th><th>占比</th></tr></thead>
+<tbody>
+<tr><td>Falcor RayBatch 缓冲</td><td>~486 MB</td><td>38%</td></tr>
+<tr><td>Falcor 纹理（临时+输出）</td><td>~125 MB</td><td>10%</td></tr>
+<tr><td>CUDA HashGrid</td><td>~79 MB</td><td>6%</td></tr>
+<tr><td>CUDA MLP + Optimizer</td><td>~79 MB</td><td>6%</td></tr>
+<tr><td>训练临时峰值</td><td>~150 MB (瞬态)</td><td>12%</td></tr>
+<tr class="total-row"><td>NCR 专属合计（不含共享 Scene）</td><td>~770 MB (持续) / ~920 MB (峰值)</td><td>—</td></tr>
+</tbody>
+</table>
+
+<h2>6. 三算法对比（共享部分归并）</h2>
+
+<h3>6.1 共享基线（三者完全相同）</h3>
+<table>
+<thead><tr><th>类别</th><th>估算 (living-room)</th><th>说明</th></tr></thead>
+<tbody>
+<tr class="cat-shared"><td>BLAS + TLAS</td><td>~510-830 MB</td><td>光线求交加速结构，三算法都依赖</td></tr>
+<tr class="cat-shared"><td>材质纹理</td><td>~300-600 MB</td><td>PBR 纹理数组，共享</td></tr>
+<tr class="cat-shared"><td>顶点/索引缓冲</td><td>~90-180 MB</td><td>几何数据</td></tr>
+<tr class="cat-shared"><td>环境贴图 + 光源 + LightCollection</td><td>~50-120 MB</td><td>光照数据（EmissiveUniformSampler 用）</td></tr>
+<tr class="cat-shared"><td>动画缓冲</td><td>~20-80 MB</td><td>动画场景</td></tr>
+<tr class="total-row cat-shared"><td>共享基线合计</td><td>~960-1500 MB</td><td>三者相同，以下对比不重复列</td></tr>
+</tbody>
+</table>
+
+<h3>6.2 算法专属内存对比（不含共享基线）</h3>
+<table>
+<thead><tr>
+<th>类别</th>
+<th>ptdn (rtxdi_off)</th>
+<th>ptnrd (rtxdi_off)</th>
+<th>ncr (rtxdi_off)</th>
+<th>ptdn (rtxdi_on)</th>
+<th>ptnrd (rtxdi_on)</th>
+</tr></thead>
+<tbody>
+<tr><td><strong>光线求交核心</strong></td><td colspan="5" class="cat-shared">三者共用 Scene 的 TLAS/BLAS + EmissiveSampler（见 6.1）</td></tr>
+<tr><td>PathTracer 输出纹理</td><td class="cat-pt">~40 MB</td><td class="cat-pt">~140 MB</td><td class="cat-ncr">— (无 PT pass)</td><td class="cat-pt">~40 MB</td><td class="cat-pt">~140 MB</td></tr>
+<tr><td>PathTracer 样本缓冲</td><td class="cat-pt">~11 MB</td><td class="cat-pt">~73 MB</td><td class="cat-ncr">—</td><td class="cat-pt">~11 MB</td><td class="cat-pt">~73 MB</td></tr>
+<tr><td>去噪器资源</td><td class="cat-optix">~75-100 MB (OptiX)</td><td class="cat-nrd">~125 MB (NRD pools)</td><td class="cat-ncr">— (NCR 自带后滤波)</td><td class="cat-optix">~75-100 MB</td><td class="cat-nrd">~125 MB</td></tr>
+<tr><td>RTXDI 资源 (GPU)</td><td class="cat-rtxdi">—</td><td class="cat-rtxdi">—</td><td class="cat-rtxdi">—</td><td class="cat-rtxdi">~250-280 MB</td><td class="cat-rtxdi">~250-280 MB</td></tr>
+<tr><td>RTXDI 资源 (CPU RSS)</td><td class="cat-rtxdi">—</td><td class="cat-rtxdi">—</td><td class="cat-rtxdi">—</td><td class="cat-rtxdi">~1100 MB</td><td class="cat-rtxdi">~1100 MB</td></tr>
+<tr><td>NCR RayBatch</td><td class="cat-ncr">—</td><td class="cat-ncr">—</td><td class="cat-ncr">~486 MB</td><td class="cat-ncr">—</td><td class="cat-ncr">—</td></tr>
+<tr><td>NCR 纹理</td><td class="cat-ncr">—</td><td class="cat-ncr">—</td><td class="cat-ncr">~125 MB</td><td class="cat-ncr">—</td><td class="cat-ncr">—</td></tr>
+<tr><td>NCR CUDA (HashGrid+MLP+Opt)</td><td class="cat-cuda">—</td><td class="cat-cuda">—</td><td class="cat-cuda">~158 MB</td><td class="cat-cuda">—</td><td class="cat-cuda">—</td></tr>
+<tr><td>NCR 训练临时 (峰值)</td><td class="cat-cuda">—</td><td class="cat-cuda">—</td><td class="cat-cuda">~150 MB</td><td class="cat-cuda">—</td><td class="cat-cuda">—</td></tr>
+<tr class="total-row"><td><strong>专属合计 (GPU)</strong></td><td>~126-151 MB</td><td>~338 MB</td><td>~919 MB (峰值)</td><td>~376-431 MB</td><td>~588 MB</td></tr>
+</tbody>
+</table>
+
+<h3>6.3 专属 CPU 内存拆解（基于源码）</h3>
+<p>每个 pass 在 CPU 侧申请的内存，分四类：C++ 堆对象、加载的共享库、Slang shader 编译缓存、SDK 内部 malloc。数据来源为源码静态分析（成员变量 + CMake 链接库 + shader 文件计数）。</p>
+
+<table>
+<thead><tr><th>组件</th><th>ptdn (rtxdi_off)</th><th>ptnrd (rtxdi_off)</th><th>ncr (rtxdi_off)</th><th>来源 / 代码位置</th></tr></thead>
+<tbody>
+<tr><td colspan="5"><strong>共享基线（Falcor 框架 + Scene + Vulkan 驱动）</strong></td></tr>
+<tr class="cat-shared"><td>Falcor runtime + Mogwai</td><td colspan="3">~1200-1500 MB</td><td>框架自身代码段 + Vulkan 驱动 + Scene C++ 对象（无法单独测量，含在 ptdn 基线内）</td></tr>
+
+<tr><td colspan="5"><strong>PathTracer pass（ptdn/ptnrd 共用）</strong></td></tr>
+<tr class="cat-pt"><td>C++ 堆对象</td><td>~1 MB</td><td>~1 MB</td><td>—</td><td>PathTracer.h:71-207 — mParams, mpSampleGenerator, mpEmissiveSampler, mpEnvMapSampler 等成员</td></tr>
+<tr class="cat-pt"><td>Slang shader 缓存</td><td>~3-8 MB</td><td>~3-8 MB</td><td>—</td><td>13 个 .slang 文件 → ~6 个 Program（GeneratePaths, TracePass×3, ResolvePass, ReflectTypes），每个含 bytecode + reflection</td></tr>
+
+<tr><td colspan="5"><strong>去噪器 pass（ptdn vs ptnrd 差异）</strong></td></tr>
+<tr class="cat-optix"><td>OptiX C++ 对象</td><td>~1 MB</td><td>—</td><td>—</td><td>OptixDenoiser.h:99-203 — 5 个 Interop 结构 + 4 个 CudaBuffer 句柄 + 配置 struct</td></tr>
+<tr class="cat-optix"><td>OptiX context (SDK 内部)</td><td>~5-20 MB</td><td>—</td><td>—</td><td>optixDenoiserCreate → SDK 内部 shader cache（AI 模型权重 + 管线状态），大小由 SDK 决定</td></tr>
+<tr class="cat-optix"><td>OptiX shader 缓存</td><td>~1-2 MB</td><td>—</td><td>—</td><td>4 个 Slang 文件（ConvertTexToBuf 等）→ 4 个 ComputePass</td></tr>
+<tr class="cat-nrd"><td>NRD C++ 对象</td><td>—</td><td>~5 MB</td><td>—</td><td>NRDPass.h:86-163 — mpDenoiser 指针 + mVkPipelines + 描述符池 + 设置 struct</td></tr>
+<tr class="cat-nrd"><td>libNRD.so (加载的库)</td><td>—</td><td>~5 MB</td><td>—</td><td>CMakeLists 链接 libNRD.so.3.1.0（磁盘 3.8MB），代码+数据段映射到 RSS</td></tr>
+<tr class="cat-nrd"><td>NRD SDK 内部 malloc</td><td>—</td><td>~600-630 MB</td><td>—</td><td>nrd::CreateDenoiser() (NRDPass.cpp:883) → 内部 pipeline 元数据 + SPIR-V bytecode 副本 + 纹理池描述符。闭源，用自定义 malloc 分配</td></tr>
+<tr class="cat-nrd"><td>NRD shader 缓存</td><td>—</td><td>~1 MB</td><td>—</td><td>Vulkan 下 SPIR-V 内嵌于 libNRD.so；仅 1 个本地 Slang (PackRadiance.cs.slang)</td></tr>
+<tr class="cat-optix"><td><strong>去噪器 CPU 小计</strong></td><td>~7-23 MB</td><td>~606-636 MB</td><td>—</td><td>ptnrd 比 ptdn 多 ~590-620MB，全部来自 NRD SDK 内部 malloc</td></tr>
+
+<tr><td colspan="5"><strong>NeuralRadiosity pass（ncr 专属）</strong></td></tr>
+<tr class="cat-ncr"><td>NCR C++ 堆对象</td><td>—</td><td>—</td><td>~15 KB</td><td>NeuralRadiosity.h:396-450 — 3 个 RayBatchBuffer shared_ptr + 11 个 ComputePass ref + 配置参数。对象本身极小</td></tr>
+<tr class="cat-ncr"><td>NCR shader 缓存</td><td>—</td><td>—</td><td>~0.2-0.5 MB</td><td>14 个 .slang 文件 → ~11 个 ComputePass，每个 bytecode 10-50KB</td></tr>
+<tr class="cat-cuda"><td>libnvrtc.so（NVRTC 编译器）</td><td>—</td><td>—</td><td>~40-54 MB</td><td>NeuralRadiosity.so NEEDED 依赖（readelf -d 确认）。磁盘 55MB，虚拟 54MB。tiny-cuda-nn CMakeLists:275 强制链接。注意：运行时实际不调用 NVRTC（FullyFusedMLP 使用编译期模板而非 RTC），但库仍被加载到 RSS</td></tr>
+<tr class="cat-cuda"><td>NeuralRadiosity.so 插件</td><td>—</td><td>—</td><td>~19 MB</td><td>插件 .so 磁盘 19.2MB，含 14.6MB .nv_fatbin（17 个 __global__ CUDA kernel 的 cubin/PTX，编译期生成）。加载插件时映射到 RSS</td></tr>
+<tr class="cat-cuda"><td>CUDA 驱动上下文扩展</td><td>—</td><td>—</td><td>~400-450 MB（估算）</td><td>NCR 的 17 个 CUDA kernel 通过 cuModuleLoadData 加载到 CUDA context，驱动为每个 module 维护元数据。NCR 分配 ~1.4GB GPU 内存（vs ptdn ~1GB），CUDA 驱动在 CPU 侧维护 page table / VMA 跟踪 / allocation descriptor，与 GPU 内存量正相关。ptdn 仅用 OptiX（SDK 预编译 kernel），驱动上下文更小</td></tr>
+<tr class="cat-cuda"><td>tiny-cuda-nn (静态链接)</td><td>—</td><td>—</td><td>含在插件内</td><td>静态编入 NeuralRadiosity.so。GPUMemoryArena 簿记（host 侧 &lt;10KB interval map）。无 cudaMallocHost / pinned memory</td></tr>
+<tr class="cat-cuda"><td>CUDA-interop 映射</td><td>—</td><td>—</td><td>&lt;1 KB</td><td>CudaUtils getSharedDevicePtr → cudaExternalMemoryGetMappedBuffer，纯 GPU 指针，无 host 副本</td></tr>
+<tr class="cat-cuda"><td>训练 host 状态</td><td>—</td><td>—</td><td>&lt;1 KB</td><td>优化器超参（lr/decay/step）~200B；所有 Adam 矩 + EMA 权重都在 GPU 侧 (GPUMemory&lt;T&gt; via cudaMalloc, managed=false)</td></tr>
+<tr class="cat-cuda"><td><strong>NCR CPU 小计（增量）</strong></td><td>—</td><td>—</td><td>~460-520 MB</td><td>NCR 自身不申请 CPU buffer（全部 GPU-resident）。增量来自：libnvrtc.so 加载(~50MB) + 插件 .so(~19MB) + CUDA 驱动上下文扩展(~400-450MB)。ptdn 也加载 libcuda/libcudart（共享成本），不产生此增量</td></tr>
+
+<tr><td colspan="5"><strong>RTXDI（仅 useRTXDI=true，ptdn/ptnrd 专属）</strong></td></tr>
+<tr class="cat-rtxdi"><td>RTXDI C++ 对象</td><td>—</td><td>—</td><td>—</td><td>RTXDI.h:275-398 — rtxdi::Context (~2KB) + Options struct (~300B) + 向量。极小</td></tr>
+<tr class="cat-rtxdi"><td>RTXDI 加载的库</td><td colspan="3">无独立 .so</td><td>RTXDISDK.cpp:31 直接 #include SDK 源码，编译进 Falcor 二进制</td></tr>
+<tr class="cat-rtxdi"><td>RTXDI shader 编译缓存</td><td colspan="3">~1000-1100 MB</td><td>10 个 ComputePass（UpdateLights, EnvLightUpdater, presample×2, generateCandidates, testVisibility, spatialResampling, temporalResampling, spatiotemporalResampling, ReflectTypes）+ PathTracer 在 RTXDI_INSTALLED=1 下重编译。RTXDI.slang 模块及其 import（PolymorphicLight, SurfaceData, PackedTypes, RTXDIApplicationBridge）庞大，每个 program 的 bytecode+reflection 很大</td></tr>
+<tr class="cat-rtxdi"><td><strong>RTXDI CPU 小计</strong></td><td>+1000-1100 MB</td><td>+1000-1100 MB</td><td>0 (不受影响)</td><td>主因是 Slang shader 编译缓存，非 SDK 库本身</td></tr>
+</tbody>
+</table>
+
+<h3>6.4 实测 CPU RSS 对账</h3>
+<table>
+<thead><tr><th>项目</th><th>ptdn (off)</th><th>ptnrd (off)</th><th>ncr (off)</th><th>ptdn (on)</th><th>ptnrd (on)</th></tr></thead>
+<tbody>
+<tr><td>共享基线 (Falcor+Scene+Vulkan)</td><td colspan="5">~1500 MB（估算，= ptdn off 2186 - 专属项）</td></tr>
+<tr><td>PathTracer CPU</td><td>~5 MB</td><td>~5 MB</td><td>—</td><td>~5 MB</td><td>~5 MB</td></tr>
+<tr><td>去噪器 CPU</td><td>~15 MB (OptiX)</td><td>~620 MB (NRD SDK)</td><td>—</td><td>~15 MB</td><td>~620 MB</td></tr>
+<tr><td>NCR pass CPU（对象+shader）</td><td>—</td><td>—</td><td>~1 MB</td><td>—</td><td>—</td></tr>
+<tr><td>libnvrtc.so + NeuralRadiosity.so</td><td>—</td><td>—</td><td>~70 MB</td><td>—</td><td>—</td></tr>
+<tr><td>CUDA 驱动上下文扩展</td><td>—</td><td>—</td><td>~440 MB</td><td>—</td><td>—</td></tr>
+<tr><td>RTXDI shader 缓存</td><td>—</td><td>—</td><td>—</td><td>~1100 MB</td><td>~1100 MB</td></tr>
+<tr class="total-row"><td><strong>估算合计</strong></td><td>~1520 MB</td><td>~2125 MB</td><td>~1852 MB</td><td>~2620 MB</td><td>~3225 MB</td></tr>
+<tr><td><strong>实测 RSS</strong></td><td>2186 MB</td><td>2828 MB</td><td>2700 MB</td><td>3343 MB</td><td>3985 MB</td></tr>
+<tr><td>偏差</td><td>~30% (低估)</td><td>~25% (低估)</td><td>~31% (低估)</td><td>~22% (低估)</td><td>~19% (低估)</td></tr>
+</tbody>
+</table>
+<p class="note">所有算法系统性低估 ~600-700MB，说明共享基线估算偏高或遗漏了某些 CPU 侧开销（可能是 Vulkan 驱动的内部分配、Falcor 的 ProgramManager 全局缓存、或 Scene 的 host 侧镜像数据）。<strong>关键纠正</strong>：libcuda.so + libcudart.so 是 libFalcor.so 的 NEEDED 依赖，<strong>三个算法都加载</strong>（ptdn 的 OptiX 也通过 CudaUtils.cpp:338 cuInit 触发），不是 NCR 的增量。NCR 的 +514MB 增量来自：libnvrtc.so(~50MB, NCR 专属依赖) + NeuralRadiosity.so 插件(~19MB) + CUDA 驱动上下文扩展(~440MB, NCR 加载 17 个 CUDA module + 分配 1.4GB GPU 内存导致驱动维护更多 CPU 侧元数据)。<strong>NCR 自身代码不申请任何 CPU buffer</strong>——所有 RayBatch/HashGrid/MLP/Optimizer 状态都是 GPU-resident (cudaMalloc, managed=false)。</p>
+
+<h3>6.5 关键差异点</h3>
+<table>
+<thead><tr><th>对比维度</th><th>ptdn</th><th>ptnrd</th><th>ncr</th></tr></thead>
+<tbody>
+<tr><td>光线求交</td><td colspan="3" class="cat-shared">共用 Scene TLAS/BLAS + EmissiveUniformSampler（ptnrd/ptdn 走 PathTracer pass；ncr 自实现 traceRay）</td></tr>
+<tr><td>去噪/后处理</td><td class="cat-optix">OptiX AI 去噪：5 staging buffer + flat state (~90MB GPU)</td><td class="cat-nrd">NRD 时序去噪：10 history + 8 transient 纹理 (~125MB GPU) + 闭源 SDK RSS (~637MB CPU)</td><td class="cat-cuda">自带后滤波 + 神经网络推理（含在 RayBatch/CUDA 内）</td></tr>
+<tr><td>直接光照采样</td><td class="cat-pt">EmissiveUniformSampler（rtxdi_off）或 RTXDI（rtxdi_on）</td><td class="cat-pt">同 ptdn</td><td class="cat-ncr">硬编码 EmissiveUniformSampler，无 RTXDI 选项</td></tr>
+<tr><td>RTXDI 影响</td><td class="cat-rtxdi">+250MB GPU / +1100MB CPU</td><td class="cat-rtxdi">同 ptdn</td><td class="cat-rtxdi">无影响（不用 PathTracer，不用 RTXDI）</td></tr>
+<tr><td>训练开销</td><td>—</td><td>—</td><td class="cat-cuda">OnlineTrain: Adam 状态 + EMA + 临时缓冲 ~230MB (持续+峰值)</td></tr>
+<tr><td>最大单块</td><td class="cat-optix">OptiX staging (~62MB)</td><td class="cat-nrd">NRD texture pools (~125MB)</td><td class="cat-ncr">RenderBatch (~486MB)</td></tr>
+</tbody>
+</table>
+
+<h2>7. 与实测数据对账</h2>
+<p>实测 (living-room, rtxdi_off)：ptdn GPU=1016MB, ptnrd GPU=1011MB, ncr GPU=1371MB。</p>
+<table>
+<thead><tr><th>项目</th><th>ptdn 估算</th><th>ptnrd 估算</th><th>ncr 估算</th></tr></thead>
+<tbody>
+<tr><td>共享基线</td><td>~850 MB</td><td>~850 MB</td><td>~850 MB</td></tr>
+<tr><td>专属 GPU</td><td>~126-151 MB</td><td>~338 MB</td><td>~770 MB (持续)</td></tr>
+<tr><td>估算合计</td><td>~976-1001 MB</td><td>~1188 MB</td><td>~1620 MB</td></tr>
+<tr><td><strong>实测</strong></td><td>1016 MB</td><td>1011 MB</td><td>1371 MB</td></tr>
+<tr><td>偏差</td><td>~2-4%</td><td>~17% (高估)</td><td>~18% (高估)</td></tr>
+</tbody>
+</table>
+<p class="note">ptnrd 估算偏高：NRD 实际 transient pool 可能比分析的 8 张少（SDK 内部复用）。ncr 估算偏高：RayBatch 中许多缓冲是稀疏的（diff/spec 不同时全满），实际驻留小于峰值。ptdn 估算最准。整体量级与实测一致，差异在 SDK 内部复用策略与稀疏分配上。</p>
+
+<h2>8. 结论</h2>
+<ul>
+<li><strong>共享部分占大头</strong>：BLAS + 材质纹理 + 几何缓冲 ~1GB，三算法相同，是内存基线。</li>
+<li><strong>ptdn 最省</strong>：OptiX 去噪用 AI 模型压缩时序状态到 flat buffer，无显式 history 纹理，专属仅 ~90MB GPU。</li>
+<li><strong>ptnrd 比 ptdn 多 +637MB 全在 CPU</strong>：NRD 闭源 SDK 的 shader bytecode + 内部表占大量 RSS；GPU 侧仅多 ~35MB（history 纹理 vs staging buffer 几乎抵消）。</li>
+<li><strong>ncr 专属最大</strong>：RayBatch 缓冲 ~486MB 是最大块（每像素 364B × 1280×720），加上 CUDA hashgrid+MLP+optimizer ~158MB。这是为训练数据采集和推理付出的代价。</li>
+<li><strong>RTXDI 是 CPU 大户</strong>：+1157MB CPU RSS（SDK context），GPU 仅 +175MB。仅 ptdn/ptnrd 受影响，ncr 不用 RTXDI 完全不受影响。</li>
+<li><strong>公平对比（rtxdi_off）下 ncr 内存超标</strong>：ncr 专属 ~770MB vs ptdn ~90MB，多 ~680MB，超过 +200MB 预算。主要来自 RayBatch 设计（每像素全量缓冲）。</li>
+</ul>
+
+</body>
+</html>

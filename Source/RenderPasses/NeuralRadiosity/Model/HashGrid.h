@@ -32,6 +32,15 @@ namespace HashGrid {
         uint32_t log2HashMapSize;
         uint32_t baseResolution;
         float perLevelScale;
+
+        // --- Debug: hash collision stats ---
+        // When != nullptr, forwardKernel records:
+        //   counters[0] = number of unique hash slots touched this frame
+        //   counters[1] = total hash-mode corner queries this frame
+        // slotMarker must have (1 << log2HashMapSize) * nLevels uint32_t entries,
+        // zeroed before each frame. Collisions = counters[1] - counters[0].
+        uint32_t* counters = nullptr;
+        uint32_t* slotMarker = nullptr;
     };
 
     void initializeConstants(const Config& config);
@@ -59,4 +68,8 @@ namespace HashGrid {
         uint32_t posOffset,
         const Config& config
     );
+
+    // Reset collision counters and slot marker buffer to zero.
+    // gridSize = (1 << log2HashMapSize) * nLevels.
+    void resetCollisionStats(cudaStream_t stream, const Config& config);
 }

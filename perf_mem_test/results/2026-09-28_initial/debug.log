@@ -1,0 +1,2302 @@
+[1790061084.105] loading graph: scripts/OptixDenoiser.py
+[1790061084.177] graph loaded
+[1790061084.177] camera=<falcor.falcor_ext.Camera object at 0x763ca1ba5770>, clock=<falcor.falcor_ext.Clock object at 0x763ca01f7d70>
+[1790061084.177] orig_callback=None, orig_cam_animated=True
+[1790061084.177] camera animation disabled
+[1790061084.177] clock playing
+[1790061084.178] VRAM sampler thread started
+[1790061084.178] callback installed
+[1790061084.178] benchmark started
+[1790061084.326] first callback: current_time=0.073, warmup_t0=1790061084.326
+[1790061114.347] warmup done, t_start=1790061114.347
+[1790061174.363] finish called, frames=2969
+[1790061174.370] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790061177.237] loading graph: scripts/PathTracerNRD_VK.py
+[1790061177.849] graph loaded
+[1790061177.849] camera=<falcor.falcor_ext.Camera object at 0x7c4693fb2cf0>, clock=<falcor.falcor_ext.Clock object at 0x7c4691bfbd70>
+[1790061177.849] orig_callback=None, orig_cam_animated=True
+[1790061177.849] camera animation disabled
+[1790061177.849] clock playing
+[1790061177.850] VRAM sampler thread started
+[1790061177.850] callback installed
+[1790061177.850] benchmark started
+[1790061177.884] first callback: current_time=0.094, warmup_t0=1790061177.884
+[1790061207.896] warmup done, t_start=1790061207.895
+[1790061267.901] finish called, frames=2946
+[1790061267.908] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790061270.801] loading graph: scripts/NeuralRadiosity.py
+[1790061270.825] graph loaded
+[1790061270.825] camera=<falcor.falcor_ext.Camera object at 0x75cd18113570>, clock=<falcor.falcor_ext.Clock object at 0x75cd1b5a8eb0>
+[1790061270.825] orig_callback=None, orig_cam_animated=True
+[1790061270.826] camera animation disabled
+[1790061270.826] clock playing
+[1790061270.827] VRAM sampler thread started
+[1790061270.827] callback installed
+[1790061270.827] benchmark started
+[1790061270.830] first callback: current_time=0.068, warmup_t0=1790061270.830
+[1790061300.834] warmup done, t_start=1790061300.834
+[1790061360.841] finish called, frames=6742
+[1790061360.860] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790065499.922] loading graph: scripts/OptixDenoiser.py
+[1790065500.041] graph loaded
+[1790065500.041] camera=<falcor.falcor_ext.Camera object at 0x73b2457a2a30>, clock=<falcor.falcor_ext.Clock object at 0x73b23f7f9770>
+[1790065500.041] orig_callback=None, orig_cam_animated=True
+[1790065500.041] camera animation disabled
+[1790065500.041] clock playing
+[1790065500.043] VRAM sampler thread started
+[1790065500.043] callback installed
+[1790065500.043] benchmark started
+[1790065500.193] first callback: current_time=0.065, warmup_t0=1790065500.193
+[1790065530.969] warmup done, t_start=1790065530.969
+[1790065555.980] finish called, frames=1220
+[1790065555.984] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790065558.781] loading graph: scripts/PathTracerNRD_VK.py
+[1790065559.444] graph loaded
+[1790065559.444] camera=<falcor.falcor_ext.Camera object at 0x787697fb85b0>, clock=<falcor.falcor_ext.Clock object at 0x7876941031b0>
+[1790065559.445] orig_callback=None, orig_cam_animated=True
+[1790065559.445] camera animation disabled
+[1790065559.445] clock playing
+[1790065559.446] VRAM sampler thread started
+[1790065559.446] callback installed
+[1790065559.446] benchmark started
+[1790065559.479] first callback: current_time=0.078, warmup_t0=1790065559.479
+[1790065595.081] warmup done, t_start=1790065595.081
+[1790065620.095] finish called, frames=1212
+[1790065620.099] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790065623.001] loading graph: scripts/NeuralRadiosity.py
+[1790065623.028] graph loaded
+[1790065623.028] camera=<falcor.falcor_ext.Camera object at 0x7eb3aa1b45b0>, clock=<falcor.falcor_ext.Clock object at 0x7eb39ffff1b0>
+[1790065623.028] orig_callback=None, orig_cam_animated=True
+[1790065623.028] camera animation disabled
+[1790065623.028] clock playing
+[1790065623.029] VRAM sampler thread started
+[1790065623.029] callback installed
+[1790065623.030] benchmark started
+[1790065623.034] first callback: current_time=0.072, warmup_t0=1790065623.034
+[1790065653.041] warmup done, t_start=1790065653.041
+[1790065678.050] finish called, frames=1775
+[1790065678.055] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790071171.368] loading graph: scripts/OptixDenoiser.py
+[1790071171.447] graph loaded
+[1790071171.447] camera=<falcor.falcor_ext.Camera object at 0x723f4b5a2a30>, clock=<falcor.falcor_ext.Clock object at 0x723f491f9770>
+[1790071171.447] orig_callback=None, orig_cam_animated=True
+[1790071171.447] camera animation disabled
+[1790071171.447] clock playing
+[1790071171.448] VRAM sampler thread started
+[1790071171.448] callback installed
+[1790071171.448] benchmark started
+[1790071171.595] first callback: current_time=0.074, warmup_t0=1790071171.594
+[1790071201.598] warmup done, t_start=1790071201.598
+[1790071226.602] finish called, frames=1248
+[1790071226.607] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790071229.391] loading graph: scripts/PathTracerNRD_VK.py
+[1790071230.012] graph loaded
+[1790071230.012] camera=<falcor.falcor_ext.Camera object at 0x724b93fb45b0>, clock=<falcor.falcor_ext.Clock object at 0x724b91fff1b0>
+[1790071230.012] orig_callback=None, orig_cam_animated=True
+[1790071230.012] camera animation disabled
+[1790071230.013] clock playing
+[1790071230.014] VRAM sampler thread started
+[1790071230.014] callback installed
+[1790071230.014] benchmark started
+[1790071230.049] first callback: current_time=0.070, warmup_t0=1790071230.049
+[1790071260.050] warmup done, t_start=1790071260.050
+[1790071285.054] finish called, frames=1233
+[1790071285.058] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790071287.854] loading graph: scripts/NeuralRadiosity.py
+[1790071287.880] graph loaded
+[1790071287.880] camera=<falcor.falcor_ext.Camera object at 0x74ad595b85b0>, clock=<falcor.falcor_ext.Clock object at 0x74ad501031b0>
+[1790071287.881] orig_callback=None, orig_cam_animated=True
+[1790071287.881] camera animation disabled
+[1790071287.881] clock playing
+[1790071287.882] VRAM sampler thread started
+[1790071287.882] callback installed
+[1790071287.882] benchmark started
+[1790071287.885] first callback: current_time=0.064, warmup_t0=1790071287.885
+[1790071317.891] warmup done, t_start=1790071317.891
+[1790071342.894] finish called, frames=1879
+[1790071342.900] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790590460.593] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790590687.248] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790590687.248] loading graph: scripts/OptixDenoiser.py
+[1790590687.321] graph loaded
+[1790590687.321] camera=<falcor.falcor_ext.Camera object at 0x79d8a3fdfd30>, clock=<falcor.falcor_ext.Clock object at 0x79d8a3fd1a70>
+[1790590687.321] orig_callback=None, orig_cam_animated=True
+[1790590687.321] camera animation disabled
+[1790590687.321] clock playing
+[1790590687.340] VRAM sampler thread started
+[1790590687.340] callback installed
+[1790590687.340] benchmark started
+[1790590687.488] first callback: current_time=0.093, warmup_t0=1790590687.488
+[1790590717.491] warmup done, t_start=1790590717.490
+[1790590777.503] finish called, frames=3024
+[1790590777.530] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790590780.553] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790590780.554] loading graph: scripts/PathTracerNRD_VK.py
+[1790590781.214] graph loaded
+[1790590781.214] camera=<falcor.falcor_ext.Camera object at 0x71c7a2bdfd30>, clock=<falcor.falcor_ext.Clock object at 0x71c7a2bd1a70>
+[1790590781.214] orig_callback=None, orig_cam_animated=True
+[1790590781.214] camera animation disabled
+[1790590781.214] clock playing
+[1790590781.215] VRAM sampler thread started
+[1790590781.215] callback installed
+[1790590781.216] benchmark started
+[1790590781.250] first callback: current_time=0.075, warmup_t0=1790590781.249
+[1790590811.253] warmup done, t_start=1790590811.253
+[1790590871.255] finish called, frames=2957
+[1790590871.263] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790590874.112] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790590874.112] loading graph: scripts/NeuralRadiosity.py
+[1790590874.138] graph loaded
+[1790590874.138] camera=<falcor.falcor_ext.Camera object at 0x7922fbfe0070>, clock=<falcor.falcor_ext.Clock object at 0x7922fbfacd70>
+[1790590874.138] orig_callback=None, orig_cam_animated=True
+[1790590874.138] camera animation disabled
+[1790590874.138] clock playing
+[1790590874.139] VRAM sampler thread started
+[1790590874.139] callback installed
+[1790590874.140] benchmark started
+[1790590874.143] first callback: current_time=0.083, warmup_t0=1790590874.143
+[1790590904.151] warmup done, t_start=1790590904.151
+[1790590964.165] finish called, frames=4485
+[1790590964.175] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790590970.776] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790590970.777] loading graph: scripts/OptixDenoiser.py
+[1790590970.849] graph loaded
+[1790590970.849] camera=<falcor.falcor_ext.Camera object at 0x7b770efcd3f0>, clock=<falcor.falcor_ext.Clock object at 0x7b770efcda70>
+[1790590970.849] orig_callback=None, orig_cam_animated=True
+[1790590970.849] camera animation disabled
+[1790590970.849] clock playing
+[1790590970.850] VRAM sampler thread started
+[1790590970.850] callback installed
+[1790590970.851] benchmark started
+[1790590970.997] first callback: current_time=0.152, warmup_t0=1790590970.996
+[1790591001.009] warmup done, t_start=1790591001.008
+[1790591061.013] finish called, frames=3497
+[1790591061.022] scene stats: total=98.7MB, tex=37.4, blas=30.7, vert=21.7, idx=8.8
+[1790591067.518] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790591067.518] loading graph: scripts/PathTracerNRD_VK.py
+[1790591068.130] graph loaded
+[1790591068.130] camera=<falcor.falcor_ext.Camera object at 0x77439dfa5b70>, clock=<falcor.falcor_ext.Clock object at 0x77439371d8b0>
+[1790591068.130] orig_callback=None, orig_cam_animated=True
+[1790591068.130] camera animation disabled
+[1790591068.130] clock playing
+[1790591068.132] VRAM sampler thread started
+[1790591068.132] callback installed
+[1790591068.133] benchmark started
+[1790591068.166] first callback: current_time=0.106, warmup_t0=1790591068.166
+[1790591098.173] warmup done, t_start=1790591098.173
+[1790591158.180] finish called, frames=3671
+[1790591158.191] scene stats: total=98.7MB, tex=37.4, blas=30.7, vert=21.7, idx=8.8
+[1790591164.605] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790591164.605] loading graph: scripts/NeuralRadiosity.py
+[1790591164.628] graph loaded
+[1790591164.628] camera=<falcor.falcor_ext.Camera object at 0x7d24415d13f0>, clock=<falcor.falcor_ext.Clock object at 0x7d24415d1a70>
+[1790591164.628] orig_callback=None, orig_cam_animated=True
+[1790591164.628] camera animation disabled
+[1790591164.628] clock playing
+[1790591164.629] VRAM sampler thread started
+[1790591164.629] callback installed
+[1790591164.629] benchmark started
+[1790591164.632] first callback: current_time=0.087, warmup_t0=1790591164.632
+[1790591194.637] warmup done, t_start=1790591194.637
+[1790591254.641] finish called, frames=5486
+[1790591254.653] scene stats: total=98.7MB, tex=37.4, blas=30.7, vert=21.7, idx=8.8
+[1790591256.668] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790591256.668] loading graph: scripts/OptixDenoiser.py
+[1790591256.741] graph loaded
+[1790591256.741] camera=<falcor.falcor_ext.Camera object at 0x73d5933cd3f0>, clock=<falcor.falcor_ext.Clock object at 0x73d5933cda70>
+[1790591256.741] orig_callback=None, orig_cam_animated=True
+[1790591256.741] camera animation disabled
+[1790591256.741] clock playing
+[1790591256.742] VRAM sampler thread started
+[1790591256.742] callback installed
+[1790591256.742] benchmark started
+[1790591256.891] first callback: current_time=0.062, warmup_t0=1790591256.891
+[1790591286.897] warmup done, t_start=1790591286.897
+[1790591346.905] finish called, frames=4893
+[1790591346.916] scene stats: total=29.7MB, tex=21.2, blas=4.9, vert=2.7, idx=1.0
+[1790591348.947] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790591348.947] loading graph: scripts/PathTracerNRD_VK.py
+[1790591349.543] graph loaded
+[1790591349.543] camera=<falcor.falcor_ext.Camera object at 0x74b09f5d13f0>, clock=<falcor.falcor_ext.Clock object at 0x74b09f5d1a70>
+[1790591349.543] orig_callback=None, orig_cam_animated=True
+[1790591349.543] camera animation disabled
+[1790591349.543] clock playing
+[1790591349.544] VRAM sampler thread started
+[1790591349.544] callback installed
+[1790591349.544] benchmark started
+[1790591349.577] first callback: current_time=0.096, warmup_t0=1790591349.577
+[1790591379.579] warmup done, t_start=1790591379.579
+[1790591439.588] finish called, frames=6033
+[1790591439.602] scene stats: total=29.7MB, tex=21.2, blas=4.9, vert=2.7, idx=1.0
+[1790591441.646] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790591441.647] loading graph: scripts/NeuralRadiosity.py
+[1790591441.673] graph loaded
+[1790591441.673] camera=<falcor.falcor_ext.Camera object at 0x7066221d13f0>, clock=<falcor.falcor_ext.Clock object at 0x7066221d1a70>
+[1790591441.673] orig_callback=None, orig_cam_animated=True
+[1790591441.673] camera animation disabled
+[1790591441.673] clock playing
+[1790591441.674] VRAM sampler thread started
+[1790591441.674] callback installed
+[1790591441.674] benchmark started
+[1790591441.677] first callback: current_time=0.089, warmup_t0=1790591441.677
+[1790591471.679] warmup done, t_start=1790591471.679
+[1790591531.683] finish called, frames=5178
+[1790591531.694] scene stats: total=29.7MB, tex=21.2, blas=4.9, vert=2.7, idx=1.0
+[1790591534.985] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790591534.985] loading graph: scripts/OptixDenoiser.py
+[1790591535.050] graph loaded
+[1790591535.050] camera=<falcor.falcor_ext.Camera object at 0x7928e17cd3f0>, clock=<falcor.falcor_ext.Clock object at 0x7928e17cda70>
+[1790591535.050] orig_callback=None, orig_cam_animated=True
+[1790591535.051] camera animation disabled
+[1790591535.051] clock playing
+[1790591535.052] VRAM sampler thread started
+[1790591535.052] callback installed
+[1790591535.052] benchmark started
+[1790591535.197] first callback: current_time=0.086, warmup_t0=1790591535.197
+[1790591565.213] warmup done, t_start=1790591565.213
+[1790591625.241] finish called, frames=2941
+[1790591625.249] scene stats: total=128.5MB, tex=49.0, blas=45.4, vert=25.4, idx=8.4
+[1790591628.554] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790591628.554] loading graph: scripts/PathTracerNRD_VK.py
+[1790591629.172] graph loaded
+[1790591629.172] camera=<falcor.falcor_ext.Camera object at 0x77379ebcf4b0>, clock=<falcor.falcor_ext.Clock object at 0x77379ebcda70>
+[1790591629.172] orig_callback=None, orig_cam_animated=True
+[1790591629.172] camera animation disabled
+[1790591629.172] clock playing
+[1790591629.173] VRAM sampler thread started
+[1790591629.173] callback installed
+[1790591629.173] benchmark started
+[1790591629.208] first callback: current_time=0.078, warmup_t0=1790591629.208
+[1790591659.210] warmup done, t_start=1790591659.210
+[1790591719.219] finish called, frames=2939
+[1790591719.227] scene stats: total=128.5MB, tex=49.0, blas=45.4, vert=25.4, idx=8.4
+[1790591722.510] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790591722.510] loading graph: scripts/NeuralRadiosity.py
+[1790591722.534] graph loaded
+[1790591722.534] camera=<falcor.falcor_ext.Camera object at 0x7108415cd3f0>, clock=<falcor.falcor_ext.Clock object at 0x7108415cda70>
+[1790591722.534] orig_callback=None, orig_cam_animated=True
+[1790591722.535] camera animation disabled
+[1790591722.535] clock playing
+[1790591722.535] VRAM sampler thread started
+[1790591722.536] callback installed
+[1790591722.536] benchmark started
+[1790591722.539] first callback: current_time=0.098, warmup_t0=1790591722.539
+[1790591752.539] warmup done, t_start=1790591752.539
+[1790591812.549] finish called, frames=4939
+[1790591812.560] scene stats: total=128.5MB, tex=49.0, blas=45.4, vert=25.4, idx=8.4
+[1790591814.730] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790591814.730] loading graph: scripts/OptixDenoiser.py
+[1790591814.804] graph loaded
+[1790591814.804] camera=<falcor.falcor_ext.Camera object at 0x714776703530>, clock=<falcor.falcor_ext.Clock object at 0x7147835d1a70>
+[1790591814.804] orig_callback=None, orig_cam_animated=True
+[1790591814.804] camera animation disabled
+[1790591814.804] clock playing
+[1790591814.805] VRAM sampler thread started
+[1790591814.805] callback installed
+[1790591814.805] benchmark started
+[1790591814.962] first callback: current_time=0.061, warmup_t0=1790591814.962
+[1790591844.968] warmup done, t_start=1790591844.968
+[1790591904.982] finish called, frames=3096
+[1790591904.990] scene stats: total=128.5MB, tex=30.3, blas=4.0, vert=3.9, idx=0.9
+[1790591907.193] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790591907.193] loading graph: scripts/PathTracerNRD_VK.py
+[1790591907.794] graph loaded
+[1790591907.794] camera=<falcor.falcor_ext.Camera object at 0x7288d01ff530>, clock=<falcor.falcor_ext.Clock object at 0x7288d15cda70>
+[1790591907.794] orig_callback=None, orig_cam_animated=True
+[1790591907.794] camera animation disabled
+[1790591907.794] clock playing
+[1790591907.795] VRAM sampler thread started
+[1790591907.795] callback installed
+[1790591907.795] benchmark started
+[1790591907.830] first callback: current_time=0.081, warmup_t0=1790591907.830
+[1790591937.836] warmup done, t_start=1790591937.836
+[1790591997.841] finish called, frames=3169
+[1790591997.851] scene stats: total=128.5MB, tex=30.3, blas=4.0, vert=3.9, idx=0.9
+[1790592000.046] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790592000.047] loading graph: scripts/NeuralRadiosity.py
+[1790592000.073] graph loaded
+[1790592000.073] camera=<falcor.falcor_ext.Camera object at 0x7ae2f67dd130>, clock=<falcor.falcor_ext.Clock object at 0x7ae2f7facd70>
+[1790592000.073] orig_callback=None, orig_cam_animated=True
+[1790592000.073] camera animation disabled
+[1790592000.073] clock playing
+[1790592000.074] VRAM sampler thread started
+[1790592000.074] callback installed
+[1790592000.075] benchmark started
+[1790592000.079] first callback: current_time=0.085, warmup_t0=1790592000.079
+[1790592030.079] warmup done, t_start=1790592030.079
+[1790592090.090] finish called, frames=4557
+[1790592090.101] scene stats: total=128.5MB, tex=30.3, blas=4.0, vert=3.9, idx=0.9
+[1790592092.256] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790592092.256] loading graph: scripts/OptixDenoiser.py
+[1790592092.329] graph loaded
+[1790592092.329] camera=<falcor.falcor_ext.Camera object at 0x786775bfe2b0>, clock=<falcor.falcor_ext.Clock object at 0x786777fcda70>
+[1790592092.329] orig_callback=None, orig_cam_animated=True
+[1790592092.330] camera animation disabled
+[1790592092.330] clock playing
+[1790592092.330] VRAM sampler thread started
+[1790592092.331] callback installed
+[1790592092.331] benchmark started
+[1790592092.486] first callback: current_time=0.097, warmup_t0=1790592092.486
+[1790592122.494] warmup done, t_start=1790592122.494
+[1790592182.499] finish called, frames=5621
+[1790592182.514] scene stats: total=46.1MB, tex=0.1, blas=6.9, vert=4.0, idx=1.5
+[1790592184.711] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790592184.711] loading graph: scripts/PathTracerNRD_VK.py
+[1790592185.320] graph loaded
+[1790592185.320] camera=<falcor.falcor_ext.Camera object at 0x758c1a7fe2b0>, clock=<falcor.falcor_ext.Clock object at 0x758c1bfcda70>
+[1790592185.320] orig_callback=None, orig_cam_animated=True
+[1790592185.321] camera animation disabled
+[1790592185.321] clock playing
+[1790592185.322] VRAM sampler thread started
+[1790592185.322] callback installed
+[1790592185.322] benchmark started
+[1790592185.355] first callback: current_time=0.089, warmup_t0=1790592185.355
+[1790592215.361] warmup done, t_start=1790592215.361
+[1790592275.364] finish called, frames=7883
+[1790592275.381] scene stats: total=46.1MB, tex=0.1, blas=6.9, vert=4.0, idx=1.5
+[1790592277.557] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790592277.557] loading graph: scripts/NeuralRadiosity.py
+[1790592277.583] graph loaded
+[1790592277.583] camera=<falcor.falcor_ext.Camera object at 0x7fd347bfbef0>, clock=<falcor.falcor_ext.Clock object at 0x7fd3521acd70>
+[1790592277.583] orig_callback=None, orig_cam_animated=True
+[1790592277.583] camera animation disabled
+[1790592277.583] clock playing
+[1790592277.584] VRAM sampler thread started
+[1790592277.584] callback installed
+[1790592277.584] benchmark started
+[1790592277.588] first callback: current_time=0.088, warmup_t0=1790592277.588
+[1790592307.590] warmup done, t_start=1790592307.589
+[1790592367.598] finish called, frames=5412
+[1790592367.611] scene stats: total=46.1MB, tex=0.1, blas=6.9, vert=4.0, idx=1.5
+[1790592370.298] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790592370.298] loading graph: scripts/OptixDenoiser.py
+[1790592370.362] graph loaded
+[1790592370.362] camera=<falcor.falcor_ext.Camera object at 0x7beca7bfedb0>, clock=<falcor.falcor_ext.Clock object at 0x7becb21cda70>
+[1790592370.362] orig_callback=None, orig_cam_animated=True
+[1790592370.362] camera animation disabled
+[1790592370.362] clock playing
+[1790592370.363] VRAM sampler thread started
+[1790592370.363] callback installed
+[1790592370.363] benchmark started
+[1790592370.510] first callback: current_time=0.081, warmup_t0=1790592370.509
+[1790592400.515] warmup done, t_start=1790592400.515
+[1790592460.526] finish called, frames=4157
+[1790592460.536] scene stats: total=104.1MB, tex=53.4, blas=9.4, vert=36.7, idx=4.6
+[1790592463.256] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790592463.256] loading graph: scripts/PathTracerNRD_VK.py
+[1790592463.862] graph loaded
+[1790592463.862] camera=<falcor.falcor_ext.Camera object at 0x77603d5d2ab0>, clock=<falcor.falcor_ext.Clock object at 0x77603d5acd70>
+[1790592463.862] orig_callback=None, orig_cam_animated=True
+[1790592463.862] camera animation disabled
+[1790592463.863] clock playing
+[1790592463.863] VRAM sampler thread started
+[1790592463.864] callback installed
+[1790592463.864] benchmark started
+[1790592463.897] first callback: current_time=0.093, warmup_t0=1790592463.897
+[1790592493.901] warmup done, t_start=1790592493.901
+[1790592553.908] finish called, frames=4356
+[1790592553.917] scene stats: total=104.1MB, tex=53.4, blas=9.4, vert=36.7, idx=4.6
+[1790592556.646] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790592556.646] loading graph: scripts/NeuralRadiosity.py
+[1790592556.670] graph loaded
+[1790592556.670] camera=<falcor.falcor_ext.Camera object at 0x777b761d2ab0>, clock=<falcor.falcor_ext.Clock object at 0x777b761acd70>
+[1790592556.670] orig_callback=None, orig_cam_animated=True
+[1790592556.670] camera animation disabled
+[1790592556.670] clock playing
+[1790592556.671] VRAM sampler thread started
+[1790592556.671] callback installed
+[1790592556.671] benchmark started
+[1790592556.674] first callback: current_time=0.090, warmup_t0=1790592556.674
+[1790592586.676] warmup done, t_start=1790592586.676
+[1790592646.682] finish called, frames=5157
+[1790592646.694] scene stats: total=104.1MB, tex=53.4, blas=9.4, vert=36.7, idx=4.6
+[1790592944.562] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790592944.562] loading graph: scripts/OptixDenoiser.py
+[1790592944.640] graph loaded
+[1790592944.640] camera=<falcor.falcor_ext.Camera object at 0x7448341c41f0>, clock=<falcor.falcor_ext.Clock object at 0x744834196af0>
+[1790592944.640] orig_callback=None, orig_cam_animated=True
+[1790592944.640] camera animation disabled
+[1790592944.640] clock playing
+[1790592944.641] VRAM sampler thread started
+[1790592944.641] callback installed
+[1790592944.641] benchmark started
+[1790592944.790] first callback: current_time=0.088, warmup_t0=1790592944.790
+[1790592974.794] warmup done, t_start=1790592974.793
+[1790592979.800] finish called, frames=359
+[1790592979.803] scene stats: total=29.7MB, tex=21.2, blas=4.9, vert=2.7, idx=1.0
+[1790593015.849] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790593015.849] loading graph: scripts/OptixDenoiser.py
+[1790593015.924] graph loaded
+[1790593015.924] camera=<falcor.falcor_ext.Camera object at 0x746d9fbd72b0>, clock=<falcor.falcor_ext.Clock object at 0x746daa1acd70>
+[1790593015.924] orig_callback=None, orig_cam_animated=True
+[1790593015.924] camera animation disabled
+[1790593015.924] clock playing
+[1790593015.925] VRAM sampler thread started
+[1790593015.925] callback installed
+[1790593015.925] benchmark started
+[1790593016.075] first callback: current_time=0.087, warmup_t0=1790593016.075
+[1790593046.076] warmup done, t_start=1790593046.076
+[1790593106.089] finish called, frames=3036
+[1790593106.100] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790593108.964] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790593108.964] loading graph: scripts/PathTracerNRD_VK.py
+[1790593109.568] graph loaded
+[1790593109.568] camera=<falcor.falcor_ext.Camera object at 0x7898977ce4b0>, clock=<falcor.falcor_ext.Clock object at 0x7898977cda70>
+[1790593109.568] orig_callback=None, orig_cam_animated=True
+[1790593109.568] camera animation disabled
+[1790593109.568] clock playing
+[1790593109.569] VRAM sampler thread started
+[1790593109.569] callback installed
+[1790593109.569] benchmark started
+[1790593109.601] first callback: current_time=0.083, warmup_t0=1790593109.601
+[1790593139.608] warmup done, t_start=1790593139.608
+[1790593199.616] finish called, frames=2979
+[1790593199.623] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790593202.443] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790593202.443] loading graph: scripts/NeuralRadiosity.py
+[1790593202.467] graph loaded
+[1790593202.467] camera=<falcor.falcor_ext.Camera object at 0x708623fdbd30>, clock=<falcor.falcor_ext.Clock object at 0x708623fcda70>
+[1790593202.467] orig_callback=None, orig_cam_animated=True
+[1790593202.467] camera animation disabled
+[1790593202.468] clock playing
+[1790593202.468] VRAM sampler thread started
+[1790593202.469] callback installed
+[1790593202.469] benchmark started
+[1790593202.472] first callback: current_time=0.076, warmup_t0=1790593202.472
+[1790593232.483] warmup done, t_start=1790593232.483
+[1790593292.492] finish called, frames=4492
+[1790593292.505] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790593298.970] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790593298.970] loading graph: scripts/OptixDenoiser.py
+[1790593299.035] graph loaded
+[1790593299.035] camera=<falcor.falcor_ext.Camera object at 0x7755a11022b0>, clock=<falcor.falcor_ext.Clock object at 0x7755a97d1a70>
+[1790593299.035] orig_callback=None, orig_cam_animated=True
+[1790593299.035] camera animation disabled
+[1790593299.035] clock playing
+[1790593299.036] VRAM sampler thread started
+[1790593299.036] callback installed
+[1790593299.037] benchmark started
+[1790593299.182] first callback: current_time=0.113, warmup_t0=1790593299.181
+[1790593329.197] warmup done, t_start=1790593329.197
+[1790593389.233] finish called, frames=3510
+[1790593389.241] scene stats: total=98.7MB, tex=37.4, blas=30.7, vert=21.7, idx=8.8
+[1790593395.667] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790593395.667] loading graph: scripts/PathTracerNRD_VK.py
+[1790593396.293] graph loaded
+[1790593396.293] camera=<falcor.falcor_ext.Camera object at 0x7bd581729030>, clock=<falcor.falcor_ext.Clock object at 0x7bd58e1acd70>
+[1790593396.293] orig_callback=None, orig_cam_animated=True
+[1790593396.293] camera animation disabled
+[1790593396.293] clock playing
+[1790593396.294] VRAM sampler thread started
+[1790593396.294] callback installed
+[1790593396.294] benchmark started
+[1790593396.329] first callback: current_time=0.111, warmup_t0=1790593396.328
+[1790593426.332] warmup done, t_start=1790593426.332
+[1790593486.337] finish called, frames=3674
+[1790593486.346] scene stats: total=98.7MB, tex=37.4, blas=30.7, vert=21.7, idx=8.8
+[1790593492.746] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790593492.746] loading graph: scripts/NeuralRadiosity.py
+[1790593492.769] graph loaded
+[1790593492.769] camera=<falcor.falcor_ext.Camera object at 0x7cd9f15fe2b0>, clock=<falcor.falcor_ext.Clock object at 0x7cd9f35cda70>
+[1790593492.769] orig_callback=None, orig_cam_animated=True
+[1790593492.769] camera animation disabled
+[1790593492.769] clock playing
+[1790593492.770] VRAM sampler thread started
+[1790593492.770] callback installed
+[1790593492.771] benchmark started
+[1790593492.774] first callback: current_time=0.107, warmup_t0=1790593492.774
+[1790593522.783] warmup done, t_start=1790593522.783
+[1790593582.784] finish called, frames=5516
+[1790593582.796] scene stats: total=98.7MB, tex=37.4, blas=30.7, vert=21.7, idx=8.8
+[1790593584.912] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790593584.912] loading graph: scripts/OptixDenoiser.py
+[1790593584.991] graph loaded
+[1790593584.991] camera=<falcor.falcor_ext.Camera object at 0x75c96771f730>, clock=<falcor.falcor_ext.Clock object at 0x75c96771d8b0>
+[1790593584.991] orig_callback=None, orig_cam_animated=True
+[1790593584.991] camera animation disabled
+[1790593584.991] clock playing
+[1790593584.992] VRAM sampler thread started
+[1790593584.992] callback installed
+[1790593584.992] benchmark started
+[1790593585.136] first callback: current_time=0.094, warmup_t0=1790593585.136
+[1790593615.137] warmup done, t_start=1790593615.136
+[1790593675.138] finish called, frames=4898
+[1790593675.150] scene stats: total=29.7MB, tex=21.2, blas=4.9, vert=2.7, idx=1.0
+[1790593677.172] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790593677.172] loading graph: scripts/PathTracerNRD_VK.py
+[1790593677.775] graph loaded
+[1790593677.775] camera=<falcor.falcor_ext.Camera object at 0x7850377ff530>, clock=<falcor.falcor_ext.Clock object at 0x78503d7cda70>
+[1790593677.775] orig_callback=None, orig_cam_animated=True
+[1790593677.776] camera animation disabled
+[1790593677.776] clock playing
+[1790593677.777] VRAM sampler thread started
+[1790593677.777] callback installed
+[1790593677.777] benchmark started
+[1790593677.811] first callback: current_time=0.061, warmup_t0=1790593677.811
+[1790593707.817] warmup done, t_start=1790593707.817
+[1790593767.818] finish called, frames=6046
+[1790593767.831] scene stats: total=29.7MB, tex=21.2, blas=4.9, vert=2.7, idx=1.0
+[1790593769.852] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790593769.852] loading graph: scripts/NeuralRadiosity.py
+[1790593769.879] graph loaded
+[1790593769.879] camera=<falcor.falcor_ext.Camera object at 0x7993fe7022b0>, clock=<falcor.falcor_ext.Clock object at 0x79940b5d1a70>
+[1790593769.879] orig_callback=None, orig_cam_animated=True
+[1790593769.879] camera animation disabled
+[1790593769.879] clock playing
+[1790593769.880] VRAM sampler thread started
+[1790593769.880] callback installed
+[1790593769.881] benchmark started
+[1790593769.884] first callback: current_time=0.073, warmup_t0=1790593769.884
+[1790593799.891] warmup done, t_start=1790593799.891
+[1790593859.896] finish called, frames=5205
+[1790593859.907] scene stats: total=29.7MB, tex=21.2, blas=4.9, vert=2.7, idx=1.0
+[1790593863.345] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790593863.345] loading graph: scripts/OptixDenoiser.py
+[1790593863.411] graph loaded
+[1790593863.411] camera=<falcor.falcor_ext.Camera object at 0x7845c4129030>, clock=<falcor.falcor_ext.Clock object at 0x7845c75acd70>
+[1790593863.411] orig_callback=None, orig_cam_animated=True
+[1790593863.411] camera animation disabled
+[1790593863.411] clock playing
+[1790593863.412] VRAM sampler thread started
+[1790593863.412] callback installed
+[1790593863.412] benchmark started
+[1790593863.560] first callback: current_time=0.072, warmup_t0=1790593863.560
+[1790593893.573] warmup done, t_start=1790593893.573
+[1790593953.603] finish called, frames=2940
+[1790593953.610] scene stats: total=128.5MB, tex=49.0, blas=45.4, vert=25.4, idx=8.4
+[1790593956.873] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790593956.873] loading graph: scripts/PathTracerNRD_VK.py
+[1790593957.468] graph loaded
+[1790593957.468] camera=<falcor.falcor_ext.Camera object at 0x7b1a7371c1f0>, clock=<falcor.falcor_ext.Clock object at 0x7b1a7371d8b0>
+[1790593957.468] orig_callback=None, orig_cam_animated=True
+[1790593957.468] camera animation disabled
+[1790593957.468] clock playing
+[1790593957.469] VRAM sampler thread started
+[1790593957.469] callback installed
+[1790593957.470] benchmark started
+[1790593957.502] first callback: current_time=0.083, warmup_t0=1790593957.502
+[1790593987.516] warmup done, t_start=1790593987.516
+[1790594047.521] finish called, frames=2930
+[1790594047.528] scene stats: total=128.5MB, tex=49.0, blas=45.4, vert=25.4, idx=8.4
+[1790594050.824] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790594050.824] loading graph: scripts/NeuralRadiosity.py
+[1790594050.848] graph loaded
+[1790594050.848] camera=<falcor.falcor_ext.Camera object at 0x74534f71c1f0>, clock=<falcor.falcor_ext.Clock object at 0x74534f71d8b0>
+[1790594050.848] orig_callback=None, orig_cam_animated=True
+[1790594050.848] camera animation disabled
+[1790594050.848] clock playing
+[1790594050.849] VRAM sampler thread started
+[1790594050.849] callback installed
+[1790594050.849] benchmark started
+[1790594050.853] first callback: current_time=0.074, warmup_t0=1790594050.852
+[1790594080.857] warmup done, t_start=1790594080.857
+[1790594140.863] finish called, frames=4963
+[1790594140.874] scene stats: total=128.5MB, tex=49.0, blas=45.4, vert=25.4, idx=8.4
+[1790594143.029] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790594143.029] loading graph: scripts/OptixDenoiser.py
+[1790594143.101] graph loaded
+[1790594143.101] camera=<falcor.falcor_ext.Camera object at 0x7f0b4d5ff530>, clock=<falcor.falcor_ext.Clock object at 0x7f0b4fbcda70>
+[1790594143.101] orig_callback=None, orig_cam_animated=True
+[1790594143.101] camera animation disabled
+[1790594143.101] clock playing
+[1790594143.102] VRAM sampler thread started
+[1790594143.102] callback installed
+[1790594143.103] benchmark started
+[1790594143.247] first callback: current_time=0.085, warmup_t0=1790594143.246
+[1790594173.256] warmup done, t_start=1790594173.256
+[1790594233.270] finish called, frames=3130
+[1790594233.278] scene stats: total=128.5MB, tex=30.3, blas=4.0, vert=3.9, idx=0.9
+[1790594235.487] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790594235.487] loading graph: scripts/PathTracerNRD_VK.py
+[1790594236.100] graph loaded
+[1790594236.100] camera=<falcor.falcor_ext.Camera object at 0x7bd743f29030>, clock=<falcor.falcor_ext.Clock object at 0x7bd74ffacd70>
+[1790594236.100] orig_callback=None, orig_cam_animated=True
+[1790594236.100] camera animation disabled
+[1790594236.100] clock playing
+[1790594236.102] VRAM sampler thread started
+[1790594236.102] callback installed
+[1790594236.102] benchmark started
+[1790594236.137] first callback: current_time=0.079, warmup_t0=1790594236.137
+[1790594266.156] warmup done, t_start=1790594266.156
+[1790594326.171] finish called, frames=3149
+[1790594326.179] scene stats: total=128.5MB, tex=30.3, blas=4.0, vert=3.9, idx=0.9
+[1790594328.400] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790594328.401] loading graph: scripts/NeuralRadiosity.py
+[1790594328.426] graph loaded
+[1790594328.426] camera=<falcor.falcor_ext.Camera object at 0x735740103530>, clock=<falcor.falcor_ext.Clock object at 0x735743fd1a70>
+[1790594328.426] orig_callback=None, orig_cam_animated=True
+[1790594328.426] camera animation disabled
+[1790594328.426] clock playing
+[1790594328.427] VRAM sampler thread started
+[1790594328.428] callback installed
+[1790594328.428] benchmark started
+[1790594328.431] first callback: current_time=0.086, warmup_t0=1790594328.431
+[1790594358.431] warmup done, t_start=1790594358.431
+[1790594418.435] finish called, frames=4562
+[1790594418.446] scene stats: total=128.5MB, tex=30.3, blas=4.0, vert=3.9, idx=0.9
+[1790594420.593] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790594420.593] loading graph: scripts/OptixDenoiser.py
+[1790594420.670] graph loaded
+[1790594420.670] camera=<falcor.falcor_ext.Camera object at 0x72b68e7fbef0>, clock=<falcor.falcor_ext.Clock object at 0x72b68ffacd70>
+[1790594420.670] orig_callback=None, orig_cam_animated=True
+[1790594420.670] camera animation disabled
+[1790594420.670] clock playing
+[1790594420.672] VRAM sampler thread started
+[1790594420.672] callback installed
+[1790594420.673] benchmark started
+[1790594420.824] first callback: current_time=0.074, warmup_t0=1790594420.824
+[1790594450.833] warmup done, t_start=1790594450.833
+[1790594510.834] finish called, frames=5611
+[1790594510.847] scene stats: total=46.1MB, tex=0.1, blas=6.9, vert=4.0, idx=1.5
+[1790594512.937] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790594512.937] loading graph: scripts/PathTracerNRD_VK.py
+[1790594513.558] graph loaded
+[1790594513.558] camera=<falcor.falcor_ext.Camera object at 0x7809167ff530>, clock=<falcor.falcor_ext.Clock object at 0x780920bcda70>
+[1790594513.558] orig_callback=None, orig_cam_animated=True
+[1790594513.558] camera animation disabled
+[1790594513.558] clock playing
+[1790594513.559] VRAM sampler thread started
+[1790594513.559] callback installed
+[1790594513.560] benchmark started
+[1790594513.594] first callback: current_time=0.061, warmup_t0=1790594513.593
+[1790594543.595] warmup done, t_start=1790594543.595
+[1790594603.602] finish called, frames=7952
+[1790594603.620] scene stats: total=46.1MB, tex=0.1, blas=6.9, vert=4.0, idx=1.5
+[1790594605.779] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790594605.780] loading graph: scripts/NeuralRadiosity.py
+[1790594605.805] graph loaded
+[1790594605.805] camera=<falcor.falcor_ext.Camera object at 0x7dbba5ffbef0>, clock=<falcor.falcor_ext.Clock object at 0x7dbba7facd70>
+[1790594605.805] orig_callback=None, orig_cam_animated=True
+[1790594605.805] camera animation disabled
+[1790594605.805] clock playing
+[1790594605.806] VRAM sampler thread started
+[1790594605.807] callback installed
+[1790594605.807] benchmark started
+[1790594605.810] first callback: current_time=0.073, warmup_t0=1790594605.810
+[1790594635.819] warmup done, t_start=1790594635.819
+[1790594695.829] finish called, frames=5416
+[1790594695.841] scene stats: total=46.1MB, tex=0.1, blas=6.9, vert=4.0, idx=1.5
+[1790594698.548] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790594698.548] loading graph: scripts/OptixDenoiser.py
+[1790594698.612] graph loaded
+[1790594698.612] camera=<falcor.falcor_ext.Camera object at 0x7cf48dfaa430>, clock=<falcor.falcor_ext.Clock object at 0x7cf48371d8b0>
+[1790594698.612] orig_callback=None, orig_cam_animated=True
+[1790594698.612] camera animation disabled
+[1790594698.612] clock playing
+[1790594698.613] VRAM sampler thread started
+[1790594698.613] callback installed
+[1790594698.613] benchmark started
+[1790594698.757] first callback: current_time=0.079, warmup_t0=1790594698.756
+[1790594728.759] warmup done, t_start=1790594728.759
+[1790594788.761] finish called, frames=4151
+[1790594788.771] scene stats: total=104.1MB, tex=53.4, blas=9.4, vert=36.7, idx=4.6
+[1790594791.618] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790594791.618] loading graph: scripts/PathTracerNRD_VK.py
+[1790594792.218] graph loaded
+[1790594792.218] camera=<falcor.falcor_ext.Camera object at 0x72ec1d5aa430>, clock=<falcor.falcor_ext.Clock object at 0x72ec1231d8b0>
+[1790594792.218] orig_callback=None, orig_cam_animated=True
+[1790594792.218] camera animation disabled
+[1790594792.218] clock playing
+[1790594792.219] VRAM sampler thread started
+[1790594792.220] callback installed
+[1790594792.220] benchmark started
+[1790594792.254] first callback: current_time=0.101, warmup_t0=1790594792.253
+[1790594822.256] warmup done, t_start=1790594822.256
+[1790594882.269] finish called, frames=4321
+[1790594882.279] scene stats: total=104.1MB, tex=53.4, blas=9.4, vert=36.7, idx=4.6
+[1790594884.947] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790594884.947] loading graph: scripts/NeuralRadiosity.py
+[1790594884.970] graph loaded
+[1790594884.971] camera=<falcor.falcor_ext.Camera object at 0x77d44abff530>, clock=<falcor.falcor_ext.Clock object at 0x77d44bfcda70>
+[1790594884.971] orig_callback=None, orig_cam_animated=True
+[1790594884.971] camera animation disabled
+[1790594884.971] clock playing
+[1790594884.972] VRAM sampler thread started
+[1790594884.972] callback installed
+[1790594884.972] benchmark started
+[1790594884.976] first callback: current_time=0.071, warmup_t0=1790594884.976
+[1790594914.982] warmup done, t_start=1790594914.982
+[1790594974.985] finish called, frames=5207
+[1790594974.996] scene stats: total=104.1MB, tex=53.4, blas=9.4, vert=36.7, idx=4.6
+[1790595138.376] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790595138.377] loading graph: scripts/OptixDenoiser.py
+[1790595138.446] graph loaded
+[1790595138.446] camera=<falcor.falcor_ext.Camera object at 0x7834aefdbdb0>, clock=<falcor.falcor_ext.Clock object at 0x7834ae51d8b0>
+[1790595138.446] orig_callback=None, orig_cam_animated=True
+[1790595138.446] camera animation disabled
+[1790595138.446] clock playing
+[1790595138.447] VRAM sampler thread started
+[1790595138.447] callback installed
+[1790595138.448] benchmark started
+[1790595138.597] first callback: current_time=0.071, warmup_t0=1790595138.596
+[1790595168.610] warmup done, t_start=1790595168.610
+[1790595228.612] finish called, frames=2916
+[1790595228.620] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790595231.551] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790595231.551] loading graph: scripts/PathTracerNRD_VK.py
+[1790595232.156] graph loaded
+[1790595232.156] camera=<falcor.falcor_ext.Camera object at 0x7b89bc1dbdb0>, clock=<falcor.falcor_ext.Clock object at 0x7b89b371d8b0>
+[1790595232.156] orig_callback=None, orig_cam_animated=True
+[1790595232.156] camera animation disabled
+[1790595232.156] clock playing
+[1790595232.157] VRAM sampler thread started
+[1790595232.157] callback installed
+[1790595232.157] benchmark started
+[1790595232.191] first callback: current_time=0.080, warmup_t0=1790595232.191
+[1790595262.199] warmup done, t_start=1790595262.199
+[1790595322.204] finish called, frames=2903
+[1790595322.211] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790595325.133] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790595325.133] loading graph: scripts/NeuralRadiosity.py
+[1790595325.159] graph loaded
+[1790595325.159] camera=<falcor.falcor_ext.Camera object at 0x71e0ed7dbd30>, clock=<falcor.falcor_ext.Clock object at 0x71e0ed7cda70>
+[1790595325.159] orig_callback=None, orig_cam_animated=True
+[1790595325.159] camera animation disabled
+[1790595325.159] clock playing
+[1790595325.160] VRAM sampler thread started
+[1790595325.160] callback installed
+[1790595325.160] benchmark started
+[1790595325.163] first callback: current_time=0.097, warmup_t0=1790595325.163
+[1790595355.168] warmup done, t_start=1790595355.168
+[1790595415.173] finish called, frames=4514
+[1790595415.183] scene stats: total=126.1MB, tex=89.0, blas=21.2, vert=12.0, idx=3.5
+[1790595421.654] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790595421.654] loading graph: scripts/OptixDenoiser.py
+[1790595421.720] graph loaded
+[1790595421.720] camera=<falcor.falcor_ext.Camera object at 0x7e3c5e3a5b70>, clock=<falcor.falcor_ext.Clock object at 0x7e3c5371d8b0>
+[1790595421.720] orig_callback=None, orig_cam_animated=True
+[1790595421.720] camera animation disabled
+[1790595421.720] clock playing
+[1790595421.721] VRAM sampler thread started
+[1790595421.721] callback installed
+[1790595421.721] benchmark started
+[1790595421.865] first callback: current_time=0.103, warmup_t0=1790595421.865
+[1790595451.874] warmup done, t_start=1790595451.874
+[1790595511.885] finish called, frames=3002
+[1790595511.893] scene stats: total=98.7MB, tex=37.4, blas=30.7, vert=21.7, idx=8.8
+[1790595518.360] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790595518.360] loading graph: scripts/PathTracerNRD_VK.py
+[1790595518.978] graph loaded
+[1790595518.978] camera=<falcor.falcor_ext.Camera object at 0x709c35103530>, clock=<falcor.falcor_ext.Clock object at 0x709c3d7d1a70>
+[1790595518.978] orig_callback=None, orig_cam_animated=True
+[1790595518.978] camera animation disabled
+[1790595518.978] clock playing
+[1790595518.979] VRAM sampler thread started
+[1790595518.979] callback installed
+[1790595518.979] benchmark started
+[1790595519.014] first callback: current_time=0.091, warmup_t0=1790595519.013
+[1790595554.553] warmup done, t_start=1790595554.552
+[1790595614.569] finish called, frames=2997
+[1790595614.576] scene stats: total=98.7MB, tex=37.4, blas=30.7, vert=21.7, idx=8.8
+[1790595621.003] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790595621.004] loading graph: scripts/NeuralRadiosity.py
+[1790595621.027] graph loaded
+[1790595621.027] camera=<falcor.falcor_ext.Camera object at 0x7a660affe2b0>, clock=<falcor.falcor_ext.Clock object at 0x7a66117cda70>
+[1790595621.027] orig_callback=None, orig_cam_animated=True
+[1790595621.027] camera animation disabled
+[1790595621.027] clock playing
+[1790595621.028] VRAM sampler thread started
+[1790595621.029] callback installed
+[1790595621.030] benchmark started
+[1790595621.033] first callback: current_time=0.100, warmup_t0=1790595621.033
+[1790595651.035] warmup done, t_start=1790595651.035
+[1790595711.042] finish called, frames=5508
+[1790595711.055] scene stats: total=98.7MB, tex=37.4, blas=30.7, vert=21.7, idx=8.8
+[1790595713.142] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790595713.142] loading graph: scripts/OptixDenoiser.py
+[1790595713.218] graph loaded
+[1790595713.218] camera=<falcor.falcor_ext.Camera object at 0x726ce67fe2b0>, clock=<falcor.falcor_ext.Clock object at 0x726cf0bcda70>
+[1790595713.218] orig_callback=None, orig_cam_animated=True
+[1790595713.218] camera animation disabled
+[1790595713.218] clock playing
+[1790595713.219] VRAM sampler thread started
+[1790595713.220] callback installed
+[1790595713.220] benchmark started
+[1790595713.368] first callback: current_time=0.085, warmup_t0=1790595713.368
+[1790595743.371] warmup done, t_start=1790595743.371
+[1790595803.372] finish called, frames=4278
+[1790595803.382] scene stats: total=29.7MB, tex=21.2, blas=4.9, vert=2.7, idx=1.0
+[1790595805.449] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790595805.449] loading graph: scripts/PathTracerNRD_VK.py
+[1790595806.066] graph loaded
+[1790595806.066] camera=<falcor.falcor_ext.Camera object at 0x7d3d7f71f730>, clock=<falcor.falcor_ext.Clock object at 0x7d3d7f71d8b0>
+[1790595806.066] orig_callback=None, orig_cam_animated=True
+[1790595806.066] camera animation disabled
+[1790595806.066] clock playing
+[1790595806.067] VRAM sampler thread started
+[1790595806.067] callback installed
+[1790595806.067] benchmark started
+[1790595806.101] first callback: current_time=0.077, warmup_t0=1790595806.101
+[1790595840.544] warmup done, t_start=1790595840.544
+[1790595900.545] finish called, frames=5113
+[1790595900.557] scene stats: total=29.7MB, tex=21.2, blas=4.9, vert=2.7, idx=1.0
+[1790595902.639] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790595902.639] loading graph: scripts/NeuralRadiosity.py
+[1790595902.665] graph loaded
+[1790595902.665] camera=<falcor.falcor_ext.Camera object at 0x7add813fe2b0>, clock=<falcor.falcor_ext.Clock object at 0x7add837cda70>
+[1790595902.665] orig_callback=None, orig_cam_animated=True
+[1790595902.665] camera animation disabled
+[1790595902.665] clock playing
+[1790595902.666] VRAM sampler thread started
+[1790595902.666] callback installed
+[1790595902.666] benchmark started
+[1790595902.670] first callback: current_time=0.088, warmup_t0=1790595902.670
+[1790595932.671] warmup done, t_start=1790595932.671
+[1790595992.681] finish called, frames=5249
+[1790595992.693] scene stats: total=29.7MB, tex=21.2, blas=4.9, vert=2.7, idx=1.0
+[1790595995.964] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790595995.965] loading graph: scripts/OptixDenoiser.py
+[1790595996.030] graph loaded
+[1790595996.030] camera=<falcor.falcor_ext.Camera object at 0x7641a3fa9a70>, clock=<falcor.falcor_ext.Clock object at 0x7641a3fcda70>
+[1790595996.030] orig_callback=None, orig_cam_animated=True
+[1790595996.031] camera animation disabled
+[1790595996.031] clock playing
+[1790595996.032] VRAM sampler thread started
+[1790595996.032] callback installed
+[1790595996.032] benchmark started
+[1790595996.188] first callback: current_time=0.086, warmup_t0=1790595996.187
+[1790596026.197] warmup done, t_start=1790596026.197
+[1790596086.211] finish called, frames=2797
+[1790596086.222] scene stats: total=128.5MB, tex=49.0, blas=45.4, vert=25.4, idx=8.4
+[1790596089.595] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790596089.595] loading graph: scripts/PathTracerNRD_VK.py
+[1790596090.202] graph loaded
+[1790596090.202] camera=<falcor.falcor_ext.Camera object at 0x7c4a94f29030>, clock=<falcor.falcor_ext.Clock object at 0x7c4a9d7acd70>
+[1790596090.202] orig_callback=None, orig_cam_animated=True
+[1790596090.202] camera animation disabled
+[1790596090.202] clock playing
+[1790596090.203] VRAM sampler thread started
+[1790596090.203] callback installed
+[1790596090.203] benchmark started
+[1790596090.236] first callback: current_time=0.082, warmup_t0=1790596090.236
+[1790596123.190] warmup done, t_start=1790596123.190
+[1790596183.210] finish called, frames=2906
+[1790596183.217] scene stats: total=128.5MB, tex=49.0, blas=45.4, vert=25.4, idx=8.4
+[1790596186.581] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790596186.581] loading graph: scripts/NeuralRadiosity.py
+[1790596186.605] graph loaded
+[1790596186.605] camera=<falcor.falcor_ext.Camera object at 0x784201d29030>, clock=<falcor.falcor_ext.Clock object at 0x78420ebacd70>
+[1790596186.605] orig_callback=None, orig_cam_animated=True
+[1790596186.605] camera animation disabled
+[1790596186.605] clock playing
+[1790596186.606] VRAM sampler thread started
+[1790596186.606] callback installed
+[1790596186.607] benchmark started
+[1790596186.610] first callback: current_time=0.082, warmup_t0=1790596186.610
+[1790596216.616] warmup done, t_start=1790596216.616
+[1790596276.623] finish called, frames=5011
+[1790596276.635] scene stats: total=128.5MB, tex=49.0, blas=45.4, vert=25.4, idx=8.4
+[1790596278.839] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790596278.839] loading graph: scripts/OptixDenoiser.py
+[1790596278.915] graph loaded
+[1790596278.915] camera=<falcor.falcor_ext.Camera object at 0x73ebaf3ff530>, clock=<falcor.falcor_ext.Clock object at 0x73ebb57cda70>
+[1790596278.915] orig_callback=None, orig_cam_animated=True
+[1790596278.915] camera animation disabled
+[1790596278.915] clock playing
+[1790596278.916] VRAM sampler thread started
+[1790596278.916] callback installed
+[1790596278.917] benchmark started
+[1790596279.109] first callback: current_time=0.069, warmup_t0=1790596279.109
+[1790596309.129] warmup done, t_start=1790596309.129
+[1790596369.145] finish called, frames=2974
+[1790596369.152] scene stats: total=128.5MB, tex=30.3, blas=4.0, vert=3.9, idx=0.9
+[1790596371.315] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790596371.315] loading graph: scripts/PathTracerNRD_VK.py
+[1790596371.919] graph loaded
+[1790596371.919] camera=<falcor.falcor_ext.Camera object at 0x7ea4e7f03530>, clock=<falcor.falcor_ext.Clock object at 0x7ea4f3fd1a70>
+[1790596371.919] orig_callback=None, orig_cam_animated=True
+[1790596371.919] camera animation disabled
+[1790596371.919] clock playing
+[1790596371.920] VRAM sampler thread started
+[1790596371.921] callback installed
+[1790596371.921] benchmark started
+[1790596371.954] first callback: current_time=0.065, warmup_t0=1790596371.954
+[1790596403.488] warmup done, t_start=1790596403.487
+[1790596463.514] finish called, frames=3030
+[1790596463.522] scene stats: total=128.5MB, tex=30.3, blas=4.0, vert=3.9, idx=0.9
+[1790596465.726] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790596465.726] loading graph: scripts/NeuralRadiosity.py
+[1790596465.751] graph loaded
+[1790596465.751] camera=<falcor.falcor_ext.Camera object at 0x7b8478103530>, clock=<falcor.falcor_ext.Clock object at 0x7b84815d1a70>
+[1790596465.751] orig_callback=None, orig_cam_animated=True
+[1790596465.751] camera animation disabled
+[1790596465.751] clock playing
+[1790596465.752] VRAM sampler thread started
+[1790596465.752] callback installed
+[1790596465.752] benchmark started
+[1790596465.756] first callback: current_time=0.088, warmup_t0=1790596465.756
+[1790596495.766] warmup done, t_start=1790596495.766
+[1790596555.768] finish called, frames=4641
+[1790596555.778] scene stats: total=128.5MB, tex=30.3, blas=4.0, vert=3.9, idx=0.9
+[1790596557.884] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790596557.884] loading graph: scripts/OptixDenoiser.py
+[1790596557.956] graph loaded
+[1790596557.956] camera=<falcor.falcor_ext.Camera object at 0x717b38bfbef0>, clock=<falcor.falcor_ext.Clock object at 0x717b3abacd70>
+[1790596557.956] orig_callback=None, orig_cam_animated=True
+[1790596557.956] camera animation disabled
+[1790596557.956] clock playing
+[1790596557.957] VRAM sampler thread started
+[1790596557.957] callback installed
+[1790596557.958] benchmark started
+[1790596558.113] first callback: current_time=0.069, warmup_t0=1790596558.113
+[1790596588.120] warmup done, t_start=1790596588.120
+[1790596648.124] finish called, frames=5446
+[1790596648.136] scene stats: total=46.1MB, tex=0.1, blas=6.9, vert=4.0, idx=1.5
+[1790596650.309] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790596650.309] loading graph: scripts/PathTracerNRD_VK.py
+[1790596650.925] graph loaded
+[1790596650.925] camera=<falcor.falcor_ext.Camera object at 0x7c7d08d03530>, clock=<falcor.falcor_ext.Clock object at 0x7c7d117d1a70>
+[1790596650.926] orig_callback=None, orig_cam_animated=True
+[1790596650.926] camera animation disabled
+[1790596650.926] clock playing
+[1790596650.927] VRAM sampler thread started
+[1790596650.927] callback installed
+[1790596650.927] benchmark started
+[1790596650.961] first callback: current_time=0.081, warmup_t0=1790596650.961
+[1790596683.088] warmup done, t_start=1790596683.087
+[1790596743.109] finish called, frames=7051
+[1790596743.124] scene stats: total=46.1MB, tex=0.1, blas=6.9, vert=4.0, idx=1.5
+[1790596745.260] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790596745.261] loading graph: scripts/NeuralRadiosity.py
+[1790596745.286] graph loaded
+[1790596745.286] camera=<falcor.falcor_ext.Camera object at 0x768cfc1022b0>, clock=<falcor.falcor_ext.Clock object at 0x768cfffd1a70>
+[1790596745.286] orig_callback=None, orig_cam_animated=True
+[1790596745.286] camera animation disabled
+[1790596745.286] clock playing
+[1790596745.287] VRAM sampler thread started
+[1790596745.287] callback installed
+[1790596745.288] benchmark started
+[1790596745.291] first callback: current_time=0.098, warmup_t0=1790596745.291
+[1790596775.294] warmup done, t_start=1790596775.294
+[1790596835.302] finish called, frames=5514
+[1790596835.314] scene stats: total=46.1MB, tex=0.1, blas=6.9, vert=4.0, idx=1.5
+[1790596838.013] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790596838.013] loading graph: scripts/OptixDenoiser.py
+[1790596838.079] graph loaded
+[1790596838.079] camera=<falcor.falcor_ext.Camera object at 0x789a45dff530>, clock=<falcor.falcor_ext.Clock object at 0x789a47fcda70>
+[1790596838.079] orig_callback=None, orig_cam_animated=True
+[1790596838.079] camera animation disabled
+[1790596838.079] clock playing
+[1790596838.080] VRAM sampler thread started
+[1790596838.080] callback installed
+[1790596838.080] benchmark started
+[1790596838.222] first callback: current_time=0.074, warmup_t0=1790596838.222
+[1790596868.233] warmup done, t_start=1790596868.233
+[1790596928.243] finish called, frames=3674
+[1790596928.252] scene stats: total=104.1MB, tex=53.4, blas=9.4, vert=36.7, idx=4.6
+[1790596931.006] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790596931.006] loading graph: scripts/PathTracerNRD_VK.py
+[1790596931.608] graph loaded
+[1790596931.608] camera=<falcor.falcor_ext.Camera object at 0x7fb94ffd2ab0>, clock=<falcor.falcor_ext.Clock object at 0x7fb94ffacd70>
+[1790596931.608] orig_callback=None, orig_cam_animated=True
+[1790596931.608] camera animation disabled
+[1790596931.608] clock playing
+[1790596931.609] VRAM sampler thread started
+[1790596931.609] callback installed
+[1790596931.609] benchmark started
+[1790596931.642] first callback: current_time=0.091, warmup_t0=1790596931.642
+[1790596967.062] warmup done, t_start=1790596967.062
+[1790597027.066] finish called, frames=3864
+[1790597027.082] scene stats: total=104.1MB, tex=53.4, blas=9.4, vert=36.7, idx=4.6
+[1790597029.788] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790597029.788] loading graph: scripts/NeuralRadiosity.py
+[1790597029.812] graph loaded
+[1790597029.812] camera=<falcor.falcor_ext.Camera object at 0x7bcd96f03530>, clock=<falcor.falcor_ext.Clock object at 0x7bcda3fd1a70>
+[1790597029.812] orig_callback=None, orig_cam_animated=True
+[1790597029.812] camera animation disabled
+[1790597029.812] clock playing
+[1790597029.813] VRAM sampler thread started
+[1790597029.813] callback installed
+[1790597029.813] benchmark started
+[1790597029.816] first callback: current_time=0.094, warmup_t0=1790597029.816
+[1790597059.823] warmup done, t_start=1790597059.823
+[1790597119.829] finish called, frames=5224
+[1790597119.841] scene stats: total=104.1MB, tex=53.4, blas=9.4, vert=36.7, idx=4.6
+[1790601609.395] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790601609.395] loading graph: scripts/NeuralRadiosity.py
+[1790601609.423] graph loaded
+[1790601609.423] camera=<falcor.falcor_ext.Camera object at 0x77bebcb1ecb0>, clock=<falcor.falcor_ext.Clock object at 0x77bebeffab70>
+[1790601609.423] orig_callback=None, orig_cam_animated=True
+[1790601609.423] camera animation disabled
+[1790601609.423] clock playing
+[1790601609.424] VRAM sampler thread started
+[1790601609.424] callback installed
+[1790601609.424] benchmark started
+[1790601609.428] first callback: current_time=0.067, warmup_t0=1790601609.428
+[1790601639.433] warmup done, t_start=1790601639.433
+[1790601654.438] finish called, frames=1606
+[1790601654.444] scene stats: total=29.7MB, tex=21.2, blas=4.9, vert=2.7, idx=1.0
+[1790602452.867] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790602452.867] MemTotal = 128559 MB
+[1790602452.867] loading graph: scripts/NeuralRadiosity.py
+[1790602452.893] graph loaded
+[1790602452.893] camera=<falcor.falcor_ext.Camera object at 0x7ad1fff12bb0>, clock=<falcor.falcor_ext.Clock object at 0x7ad20abfab70>
+[1790602452.893] camera animation disabled
+[1790602452.893] clock playing
+[1790602452.894] mem sampler thread started
+[1790602452.894] callback installed
+[1790602452.894] benchmark started
+[1790602452.897] first callback: current_time=0.082, warmup_t0=1790602452.897
+[1790602482.903] warmup done, t_start=1790602482.903
+[1790602492.914] finish called, fps_samples=275, total_frames=949, mem_samples=0
+[1790602641.863] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790602641.863] MemTotal = 128559 MB
+[1790602641.863] loading graph: scripts/NeuralRadiosity.py
+[1790602641.889] graph loaded
+[1790602641.889] camera=<falcor.falcor_ext.Camera object at 0x748237f28670>, clock=<falcor.falcor_ext.Clock object at 0x748242796af0>
+[1790602641.889] camera animation disabled
+[1790602641.889] clock playing
+[1790602641.890] mem sampler thread started
+[1790602641.890] callback installed
+[1790602641.891] benchmark started
+[1790602641.894] first callback: current_time=0.078, warmup_t0=1790602641.894
+[1790602671.901] warmup done, t_start=1790602671.901
+[1790602681.904] finish called, fps_samples=275, total_frames=948, mem_samples=4
+[1790602772.134] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790602772.134] MemTotal = 128559 MB
+[1790602772.134] loading graph: scripts/OptixDenoiser.py
+[1790602772.208] graph loaded
+[1790602772.208] camera=<falcor.falcor_ext.Camera object at 0x766813fd1930>, clock=<falcor.falcor_ext.Clock object at 0x76681e1cda70>
+[1790602772.208] camera animation disabled
+[1790602772.208] clock playing
+[1790602772.209] mem sampler thread started
+[1790602772.209] callback installed
+[1790602772.209] benchmark started
+[1790602772.359] first callback: current_time=0.068, warmup_t0=1790602772.358
+[1790602802.368] warmup done, t_start=1790602802.368
+[1790602862.372] finish called, fps_samples=1547, total_frames=3095, mem_samples=27
+[1790602865.088] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790602865.088] MemTotal = 128559 MB
+[1790602865.088] loading graph: scripts/PathTracerNRD_VK.py
+[1790602865.706] graph loaded
+[1790602865.706] camera=<falcor.falcor_ext.Camera object at 0x7423427d5930>, clock=<falcor.falcor_ext.Clock object at 0x742343fd1a70>
+[1790602865.707] camera animation disabled
+[1790602865.707] clock playing
+[1790602865.708] mem sampler thread started
+[1790602865.708] callback installed
+[1790602865.708] benchmark started
+[1790602865.740] first callback: current_time=0.067, warmup_t0=1790602865.740
+[1790602895.754] warmup done, t_start=1790602895.754
+[1790602955.774] finish called, fps_samples=1515, total_frames=3032, mem_samples=27
+[1790602958.524] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790602958.524] MemTotal = 128559 MB
+[1790602958.524] loading graph: scripts/NeuralRadiosity.py
+[1790602958.550] graph loaded
+[1790602958.550] camera=<falcor.falcor_ext.Camera object at 0x72a1c33d5930>, clock=<falcor.falcor_ext.Clock object at 0x72a1c97d1a70>
+[1790602958.550] camera animation disabled
+[1790602958.550] clock playing
+[1790602958.551] mem sampler thread started
+[1790602958.551] callback installed
+[1790602958.551] benchmark started
+[1790602958.555] first callback: current_time=0.066, warmup_t0=1790602958.554
+[1790602988.560] warmup done, t_start=1790602988.560
+[1790603048.572] finish called, fps_samples=1602, total_frames=4850, mem_samples=27
+[1790603055.109] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790603055.109] MemTotal = 128559 MB
+[1790603055.109] loading graph: scripts/OptixDenoiser.py
+[1790603055.179] graph loaded
+[1790603055.179] camera=<falcor.falcor_ext.Camera object at 0x78316d5be370>, clock=<falcor.falcor_ext.Clock object at 0x78316d5d1a70>
+[1790603055.179] camera animation disabled
+[1790603055.179] clock playing
+[1790603055.180] mem sampler thread started
+[1790603055.181] callback installed
+[1790603055.181] benchmark started
+[1790603055.329] first callback: current_time=0.097, warmup_t0=1790603055.328
+[1790603085.338] warmup done, t_start=1790603085.338
+[1790603145.338] finish called, fps_samples=1716, total_frames=3653, mem_samples=27
+[1790603151.975] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790603151.975] MemTotal = 128559 MB
+[1790603151.975] loading graph: scripts/PathTracerNRD_VK.py
+[1790603152.590] graph loaded
+[1790603152.590] camera=<falcor.falcor_ext.Camera object at 0x73fc96bba370>, clock=<falcor.falcor_ext.Clock object at 0x73fc96bcda70>
+[1790603152.591] camera animation disabled
+[1790603152.591] clock playing
+[1790603152.592] mem sampler thread started
+[1790603152.592] callback installed
+[1790603152.593] benchmark started
+[1790603152.626] first callback: current_time=0.110, warmup_t0=1790603152.626
+[1790603182.641] warmup done, t_start=1790603182.641
+[1790603242.652] finish called, fps_samples=1580, total_frames=3874, mem_samples=27
+[1790603249.245] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790603249.245] MemTotal = 128559 MB
+[1790603249.245] loading graph: scripts/NeuralRadiosity.py
+[1790603249.270] graph loaded
+[1790603249.270] camera=<falcor.falcor_ext.Camera object at 0x7e29d1b29030>, clock=<falcor.falcor_ext.Clock object at 0x7e29de1acd70>
+[1790603249.271] camera animation disabled
+[1790603249.271] clock playing
+[1790603249.271] mem sampler thread started
+[1790603249.272] callback installed
+[1790603249.272] benchmark started
+[1790603249.275] first callback: current_time=0.101, warmup_t0=1790603249.275
+[1790603279.278] warmup done, t_start=1790603279.278
+[1790603339.280] finish called, fps_samples=1704, total_frames=6048, mem_samples=27
+[1790603341.222] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790603341.222] MemTotal = 128559 MB
+[1790603341.223] loading graph: scripts/OptixDenoiser.py
+[1790603341.317] graph loaded
+[1790603341.317] camera=<falcor.falcor_ext.Camera object at 0x7cd58a1be370>, clock=<falcor.falcor_ext.Clock object at 0x7cd58a1d1a70>
+[1790603341.317] camera animation disabled
+[1790603341.317] clock playing
+[1790603341.318] mem sampler thread started
+[1790603341.319] callback installed
+[1790603341.319] benchmark started
+[1790603341.477] first callback: current_time=0.072, warmup_t0=1790603341.476
+[1790603371.485] warmup done, t_start=1790603371.485
+[1790603431.494] finish called, fps_samples=1621, total_frames=5236, mem_samples=28
+[1790603433.401] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790603433.401] MemTotal = 128559 MB
+[1790603433.401] loading graph: scripts/PathTracerNRD_VK.py
+[1790603434.024] graph loaded
+[1790603434.024] camera=<falcor.falcor_ext.Camera object at 0x778f26729030>, clock=<falcor.falcor_ext.Clock object at 0x778f32bacd70>
+[1790603434.024] camera animation disabled
+[1790603434.024] clock playing
+[1790603434.025] mem sampler thread started
+[1790603434.025] callback installed
+[1790603434.025] benchmark started
+[1790603434.059] first callback: current_time=0.069, warmup_t0=1790603434.059
+[1790603464.065] warmup done, t_start=1790603464.065
+[1790603524.076] finish called, fps_samples=1724, total_frames=6647, mem_samples=27
+[1790603526.030] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790603526.030] MemTotal = 128559 MB
+[1790603526.030] loading graph: scripts/NeuralRadiosity.py
+[1790603526.058] graph loaded
+[1790603526.058] camera=<falcor.falcor_ext.Camera object at 0x76b2015be370>, clock=<falcor.falcor_ext.Clock object at 0x76b2015d1a70>
+[1790603526.058] camera animation disabled
+[1790603526.058] clock playing
+[1790603526.060] mem sampler thread started
+[1790603526.060] callback installed
+[1790603526.061] benchmark started
+[1790603526.064] first callback: current_time=0.067, warmup_t0=1790603526.064
+[1790603556.073] warmup done, t_start=1790603556.073
+[1790603616.075] finish called, fps_samples=1616, total_frames=5685, mem_samples=27
+[1790603619.260] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790603619.260] MemTotal = 128559 MB
+[1790603619.260] loading graph: scripts/OptixDenoiser.py
+[1790603619.329] graph loaded
+[1790603619.329] camera=<falcor.falcor_ext.Camera object at 0x742c00129030>, clock=<falcor.falcor_ext.Clock object at 0x742c035acd70>
+[1790603619.329] camera animation disabled
+[1790603619.329] clock playing
+[1790603619.330] mem sampler thread started
+[1790603619.330] callback installed
+[1790603619.331] benchmark started
+[1790603619.476] first callback: current_time=0.067, warmup_t0=1790603619.476
+[1790603649.485] warmup done, t_start=1790603649.485
+[1790603709.505] finish called, fps_samples=1500, total_frames=3002, mem_samples=27
+[1790603712.729] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790603712.729] MemTotal = 128559 MB
+[1790603712.729] loading graph: scripts/PathTracerNRD_VK.py
+[1790603713.360] graph loaded
+[1790603713.360] camera=<falcor.falcor_ext.Camera object at 0x74de75f71cf0>, clock=<falcor.falcor_ext.Clock object at 0x74de77facd70>
+[1790603713.360] camera animation disabled
+[1790603713.360] clock playing
+[1790603713.361] mem sampler thread started
+[1790603713.361] callback installed
+[1790603713.361] benchmark started
+[1790603713.395] first callback: current_time=0.083, warmup_t0=1790603713.394
+[1790603743.414] warmup done, t_start=1790603743.414
+[1790603803.433] finish called, fps_samples=1503, total_frames=3007, mem_samples=27
+[1790603806.670] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790603806.670] MemTotal = 128559 MB
+[1790603806.670] loading graph: scripts/NeuralRadiosity.py
+[1790603806.694] graph loaded
+[1790603806.694] camera=<falcor.falcor_ext.Camera object at 0x7161effac870>, clock=<falcor.falcor_ext.Clock object at 0x7161effd1a70>
+[1790603806.694] camera animation disabled
+[1790603806.694] clock playing
+[1790603806.695] mem sampler thread started
+[1790603806.695] callback installed
+[1790603806.695] benchmark started
+[1790603806.698] first callback: current_time=0.081, warmup_t0=1790603806.698
+[1790603836.699] warmup done, t_start=1790603836.698
+[1790603896.699] finish called, fps_samples=1643, total_frames=5377, mem_samples=27
+[1790603898.824] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790603898.824] MemTotal = 128559 MB
+[1790603898.824] loading graph: scripts/OptixDenoiser.py
+[1790603898.898] graph loaded
+[1790603898.898] camera=<falcor.falcor_ext.Camera object at 0x7bfabef022b0>, clock=<falcor.falcor_ext.Clock object at 0x7bfacbfd1a70>
+[1790603898.898] camera animation disabled
+[1790603898.898] clock playing
+[1790603898.899] mem sampler thread started
+[1790603898.900] callback installed
+[1790603898.900] benchmark started
+[1790603899.053] first callback: current_time=0.089, warmup_t0=1790603899.053
+[1790603929.065] warmup done, t_start=1790603929.065
+[1790603989.085] finish called, fps_samples=1590, total_frames=3186, mem_samples=26
+[1790603991.167] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790603991.167] MemTotal = 128559 MB
+[1790603991.168] loading graph: scripts/PathTracerNRD_VK.py
+[1790603991.784] graph loaded
+[1790603991.784] camera=<falcor.falcor_ext.Camera object at 0x7da8253fe2b0>, clock=<falcor.falcor_ext.Clock object at 0x7da8277cda70>
+[1790603991.784] camera animation disabled
+[1790603991.784] clock playing
+[1790603991.785] mem sampler thread started
+[1790603991.785] callback installed
+[1790603991.786] benchmark started
+[1790603991.819] first callback: current_time=0.064, warmup_t0=1790603991.819
+[1790604021.834] warmup done, t_start=1790604021.833
+[1790604081.844] finish called, fps_samples=1574, total_frames=3257, mem_samples=27
+[1790604083.968] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790604083.968] MemTotal = 128559 MB
+[1790604083.968] loading graph: scripts/NeuralRadiosity.py
+[1790604083.994] graph loaded
+[1790604083.994] camera=<falcor.falcor_ext.Camera object at 0x7b604ef022b0>, clock=<falcor.falcor_ext.Clock object at 0x7b605b5d1a70>
+[1790604083.994] camera animation disabled
+[1790604083.994] clock playing
+[1790604083.995] mem sampler thread started
+[1790604083.996] callback installed
+[1790604083.996] benchmark started
+[1790604083.999] first callback: current_time=0.094, warmup_t0=1790604083.999
+[1790604114.008] warmup done, t_start=1790604114.008
+[1790604174.019] finish called, fps_samples=1595, total_frames=4937, mem_samples=28
+[1790604176.099] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790604176.099] MemTotal = 128559 MB
+[1790604176.099] loading graph: scripts/OptixDenoiser.py
+[1790604176.175] graph loaded
+[1790604176.175] camera=<falcor.falcor_ext.Camera object at 0x73db9cbd9db0>, clock=<falcor.falcor_ext.Clock object at 0x73db9ebcda70>
+[1790604176.175] camera animation disabled
+[1790604176.176] clock playing
+[1790604176.176] mem sampler thread started
+[1790604176.177] callback installed
+[1790604176.177] benchmark started
+[1790604176.323] first callback: current_time=0.079, warmup_t0=1790604176.323
+[1790604206.325] warmup done, t_start=1790604206.325
+[1790604266.326] finish called, fps_samples=1577, total_frames=6006, mem_samples=27
+[1790604268.427] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790604268.427] MemTotal = 128559 MB
+[1790604268.427] loading graph: scripts/PathTracerNRD_VK.py
+[1790604269.050] graph loaded
+[1790604269.050] camera=<falcor.falcor_ext.Camera object at 0x77c2f27d9db0>, clock=<falcor.falcor_ext.Clock object at 0x77c2fd1cda70>
+[1790604269.050] camera animation disabled
+[1790604269.050] clock playing
+[1790604269.052] mem sampler thread started
+[1790604269.052] callback installed
+[1790604269.052] benchmark started
+[1790604269.084] first callback: current_time=0.088, warmup_t0=1790604269.084
+[1790604299.086] warmup done, t_start=1790604299.086
+[1790604359.087] finish called, fps_samples=1795, total_frames=8960, mem_samples=28
+[1790604361.117] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790604361.117] MemTotal = 128559 MB
+[1790604361.117] loading graph: scripts/NeuralRadiosity.py
+[1790604361.144] graph loaded
+[1790604361.144] camera=<falcor.falcor_ext.Camera object at 0x7e50ae529030>, clock=<falcor.falcor_ext.Clock object at 0x7e50babacd70>
+[1790604361.144] camera animation disabled
+[1790604361.144] clock playing
+[1790604361.145] mem sampler thread started
+[1790604361.145] callback installed
+[1790604361.145] benchmark started
+[1790604361.149] first callback: current_time=0.064, warmup_t0=1790604361.148
+[1790604391.156] warmup done, t_start=1790604391.156
+[1790604451.157] finish called, fps_samples=1660, total_frames=5897, mem_samples=28
+[1790604453.794] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790604453.794] MemTotal = 128559 MB
+[1790604453.794] loading graph: scripts/OptixDenoiser.py
+[1790604453.859] graph loaded
+[1790604453.859] camera=<falcor.falcor_ext.Camera object at 0x73b190b71cf0>, clock=<falcor.falcor_ext.Clock object at 0x73b192bacd70>
+[1790604453.859] camera animation disabled
+[1790604453.859] clock playing
+[1790604453.860] mem sampler thread started
+[1790604453.860] callback installed
+[1790604453.861] benchmark started
+[1790604454.005] first callback: current_time=0.094, warmup_t0=1790604454.005
+[1790604484.015] warmup done, t_start=1790604484.015
+[1790604544.022] finish called, fps_samples=1502, total_frames=4413, mem_samples=28
+[1790604546.762] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790604546.762] MemTotal = 128559 MB
+[1790604546.762] loading graph: scripts/PathTracerNRD_VK.py
+[1790604547.380] graph loaded
+[1790604547.380] camera=<falcor.falcor_ext.Camera object at 0x7ee64ab71cf0>, clock=<falcor.falcor_ext.Clock object at 0x7ee64bfacd70>
+[1790604547.380] camera animation disabled
+[1790604547.380] clock playing
+[1790604547.381] mem sampler thread started
+[1790604547.381] callback installed
+[1790604547.382] benchmark started
+[1790604547.414] first callback: current_time=0.087, warmup_t0=1790604547.414
+[1790604577.422] warmup done, t_start=1790604577.422
+[1790604637.422] finish called, fps_samples=1555, total_frames=4629, mem_samples=28
+[1790604640.007] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790604640.008] MemTotal = 128559 MB
+[1790604640.008] loading graph: scripts/NeuralRadiosity.py
+[1790604640.031] graph loaded
+[1790604640.031] camera=<falcor.falcor_ext.Camera object at 0x75a36bfba370>, clock=<falcor.falcor_ext.Clock object at 0x75a36bfcda70>
+[1790604640.031] camera animation disabled
+[1790604640.031] clock playing
+[1790604640.032] mem sampler thread started
+[1790604640.032] callback installed
+[1790604640.033] benchmark started
+[1790604640.036] first callback: current_time=0.067, warmup_t0=1790604640.036
+[1790604670.043] warmup done, t_start=1790604670.043
+[1790604730.049] finish called, fps_samples=1648, total_frames=5660, mem_samples=27
+[1790605015.881] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790605015.881] MemTotal = 128559 MB
+[1790605015.881] loading graph: scripts/OptixDenoiser.py
+[1790605015.956] graph loaded
+[1790605015.956] camera=<falcor.falcor_ext.Camera object at 0x7aadebfe0070>, clock=<falcor.falcor_ext.Clock object at 0x7aadebfacd70>
+[1790605015.956] camera animation disabled
+[1790605015.956] clock playing
+[1790605015.957] mem sampler thread started
+[1790605015.957] callback installed
+[1790605015.958] benchmark started
+[1790605016.118] first callback: current_time=0.072, warmup_t0=1790605016.118
+[1790605046.129] warmup done, t_start=1790605046.129
+[1790605106.150] finish called, fps_samples=1502, total_frames=3005, mem_samples=27
+[1790605108.958] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790605108.958] MemTotal = 128559 MB
+[1790605108.959] loading graph: scripts/PathTracerNRD_VK.py
+[1790605109.592] graph loaded
+[1790605109.592] camera=<falcor.falcor_ext.Camera object at 0x7f1cfffd1930>, clock=<falcor.falcor_ext.Clock object at 0x7f1d0abcda70>
+[1790605109.592] camera animation disabled
+[1790605109.592] clock playing
+[1790605109.593] mem sampler thread started
+[1790605109.593] callback installed
+[1790605109.594] benchmark started
+[1790605109.628] first callback: current_time=0.082, warmup_t0=1790605109.627
+[1790605139.636] warmup done, t_start=1790605139.635
+[1790605199.636] finish called, fps_samples=1500, total_frames=3002, mem_samples=26
+[1790605202.485] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790605202.485] MemTotal = 128559 MB
+[1790605202.485] loading graph: scripts/NeuralRadiosity.py
+[1790605202.512] graph loaded
+[1790605202.512] camera=<falcor.falcor_ext.Camera object at 0x72b3d0bd1930>, clock=<falcor.falcor_ext.Clock object at 0x72b3d2bcda70>
+[1790605202.512] camera animation disabled
+[1790605202.512] clock playing
+[1790605202.513] mem sampler thread started
+[1790605202.513] callback installed
+[1790605202.513] benchmark started
+[1790605202.517] first callback: current_time=0.097, warmup_t0=1790605202.516
+[1790605232.525] warmup done, t_start=1790605232.525
+[1790605292.526] finish called, fps_samples=1606, total_frames=4853, mem_samples=28
+[1790605298.974] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790605298.974] MemTotal = 128559 MB
+[1790605298.974] loading graph: scripts/OptixDenoiser.py
+[1790605299.042] graph loaded
+[1790605299.042] camera=<falcor.falcor_ext.Camera object at 0x799ac95ba370>, clock=<falcor.falcor_ext.Clock object at 0x799ac95cda70>
+[1790605299.042] camera animation disabled
+[1790605299.042] clock playing
+[1790605299.043] mem sampler thread started
+[1790605299.043] callback installed
+[1790605299.044] benchmark started
+[1790605299.195] first callback: current_time=0.120, warmup_t0=1790605299.194
+[1790605329.205] warmup done, t_start=1790605329.204
+[1790605389.225] finish called, fps_samples=1526, total_frames=3054, mem_samples=27
+[1790605395.746] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790605395.746] MemTotal = 128559 MB
+[1790605395.746] loading graph: scripts/PathTracerNRD_VK.py
+[1790605396.376] graph loaded
+[1790605396.376] camera=<falcor.falcor_ext.Camera object at 0x7b425b771cf0>, clock=<falcor.falcor_ext.Clock object at 0x7b42617acd70>
+[1790605396.376] camera animation disabled
+[1790605396.376] clock playing
+[1790605396.377] mem sampler thread started
+[1790605396.377] callback installed
+[1790605396.377] benchmark started
+[1790605396.411] first callback: current_time=0.095, warmup_t0=1790605396.411
+[1790605426.422] warmup done, t_start=1790605426.422
+[1790605486.422] finish called, fps_samples=1556, total_frames=3113, mem_samples=27
+[1790605492.895] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790605492.896] MemTotal = 128559 MB
+[1790605492.896] loading graph: scripts/NeuralRadiosity.py
+[1790605492.920] graph loaded
+[1790605492.920] camera=<falcor.falcor_ext.Camera object at 0x7fe4eabba370>, clock=<falcor.falcor_ext.Clock object at 0x7fe4eabcda70>
+[1790605492.920] camera animation disabled
+[1790605492.920] clock playing
+[1790605492.921] mem sampler thread started
+[1790605492.921] callback installed
+[1790605492.922] benchmark started
+[1790605492.926] first callback: current_time=0.115, warmup_t0=1790605492.925
+[1790605522.935] warmup done, t_start=1790605522.935
+[1790605582.936] finish called, fps_samples=1695, total_frames=6068, mem_samples=27
+[1790605584.921] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790605584.921] MemTotal = 128559 MB
+[1790605584.921] loading graph: scripts/OptixDenoiser.py
+[1790605584.997] graph loaded
+[1790605584.997] camera=<falcor.falcor_ext.Camera object at 0x790b13fba370>, clock=<falcor.falcor_ext.Clock object at 0x790b13fcda70>
+[1790605584.998] camera animation disabled
+[1790605584.998] clock playing
+[1790605584.999] mem sampler thread started
+[1790605584.999] callback installed
+[1790605584.999] benchmark started
+[1790605585.148] first callback: current_time=0.069, warmup_t0=1790605585.148
+[1790605615.148] warmup done, t_start=1790605615.148
+[1790605675.162] finish called, fps_samples=1569, total_frames=4594, mem_samples=27
+[1790605677.145] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790605677.145] MemTotal = 128559 MB
+[1790605677.145] loading graph: scripts/PathTracerNRD_VK.py
+[1790605677.759] graph loaded
+[1790605677.760] camera=<falcor.falcor_ext.Camera object at 0x79b2217be370>, clock=<falcor.falcor_ext.Clock object at 0x79b2217d1a70>
+[1790605677.760] camera animation disabled
+[1790605677.760] clock playing
+[1790605677.761] mem sampler thread started
+[1790605677.761] callback installed
+[1790605677.761] benchmark started
+[1790605677.795] first callback: current_time=0.072, warmup_t0=1790605677.794
+[1790605707.806] warmup done, t_start=1790605707.806
+[1790605767.806] finish called, fps_samples=1625, total_frames=5625, mem_samples=27
+[1790605769.954] scene=cornell-box  waypoints=11 from scene_waypoints.txt
+[1790605769.955] MemTotal = 128559 MB
+[1790605769.955] loading graph: scripts/NeuralRadiosity.py
+[1790605769.982] graph loaded
+[1790605769.982] camera=<falcor.falcor_ext.Camera object at 0x708b33fbe370>, clock=<falcor.falcor_ext.Clock object at 0x708b33fd1a70>
+[1790605769.982] camera animation disabled
+[1790605769.982] clock playing
+[1790605769.983] mem sampler thread started
+[1790605769.983] callback installed
+[1790605769.984] benchmark started
+[1790605769.987] first callback: current_time=0.093, warmup_t0=1790605769.987
+[1790605799.994] warmup done, t_start=1790605799.994
+[1790605860.007] finish called, fps_samples=1622, total_frames=5724, mem_samples=27
+[1790605863.320] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790605863.320] MemTotal = 128559 MB
+[1790605863.320] loading graph: scripts/OptixDenoiser.py
+[1790605863.392] graph loaded
+[1790605863.392] camera=<falcor.falcor_ext.Camera object at 0x75e67bfbe370>, clock=<falcor.falcor_ext.Clock object at 0x75e67bfd1a70>
+[1790605863.392] camera animation disabled
+[1790605863.392] clock playing
+[1790605863.393] mem sampler thread started
+[1790605863.393] callback installed
+[1790605863.394] benchmark started
+[1790605863.543] first callback: current_time=0.077, warmup_t0=1790605863.542
+[1790605893.547] warmup done, t_start=1790605893.547
+[1790605953.554] finish called, fps_samples=1459, total_frames=2919, mem_samples=27
+[1790605956.814] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790605956.814] MemTotal = 128559 MB
+[1790605956.814] loading graph: scripts/PathTracerNRD_VK.py
+[1790605957.431] graph loaded
+[1790605957.431] camera=<falcor.falcor_ext.Camera object at 0x7c4fcaba8870>, clock=<falcor.falcor_ext.Clock object at 0x7c4fcabcda70>
+[1790605957.431] camera animation disabled
+[1790605957.431] clock playing
+[1790605957.432] mem sampler thread started
+[1790605957.432] callback installed
+[1790605957.433] benchmark started
+[1790605957.467] first callback: current_time=0.088, warmup_t0=1790605957.466
+[1790605987.470] warmup done, t_start=1790605987.469
+[1790606047.471] finish called, fps_samples=1499, total_frames=3000, mem_samples=26
+[1790606050.720] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790606050.720] MemTotal = 128559 MB
+[1790606050.720] loading graph: scripts/NeuralRadiosity.py
+[1790606050.744] graph loaded
+[1790606050.744] camera=<falcor.falcor_ext.Camera object at 0x7a36f8f29030>, clock=<falcor.falcor_ext.Clock object at 0x7a37017acd70>
+[1790606050.744] camera animation disabled
+[1790606050.744] clock playing
+[1790606050.745] mem sampler thread started
+[1790606050.745] callback installed
+[1790606050.745] benchmark started
+[1790606050.749] first callback: current_time=0.079, warmup_t0=1790606050.749
+[1790606080.752] warmup done, t_start=1790606080.752
+[1790606140.754] finish called, fps_samples=1637, total_frames=5396, mem_samples=27
+[1790606142.895] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790606142.895] MemTotal = 128559 MB
+[1790606142.895] loading graph: scripts/OptixDenoiser.py
+[1790606142.972] graph loaded
+[1790606142.972] camera=<falcor.falcor_ext.Camera object at 0x76cd4d5fe2b0>, clock=<falcor.falcor_ext.Clock object at 0x76cd4f5cda70>
+[1790606142.972] camera animation disabled
+[1790606142.972] clock playing
+[1790606142.973] mem sampler thread started
+[1790606142.973] callback installed
+[1790606142.974] benchmark started
+[1790606143.125] first callback: current_time=0.078, warmup_t0=1790606143.125
+[1790606173.137] warmup done, t_start=1790606173.136
+[1790606233.156] finish called, fps_samples=1507, total_frames=3016, mem_samples=27
+[1790606235.294] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790606235.294] MemTotal = 128559 MB
+[1790606235.294] loading graph: scripts/PathTracerNRD_VK.py
+[1790606235.917] graph loaded
+[1790606235.917] camera=<falcor.falcor_ext.Camera object at 0x76231bf71cf0>, clock=<falcor.falcor_ext.Clock object at 0x7623261acd70>
+[1790606235.917] camera animation disabled
+[1790606235.917] clock playing
+[1790606235.918] mem sampler thread started
+[1790606235.918] callback installed
+[1790606235.918] benchmark started
+[1790606235.952] first callback: current_time=0.066, warmup_t0=1790606235.952
+[1790606265.959] warmup done, t_start=1790606265.959
+[1790606325.965] finish called, fps_samples=1541, total_frames=3086, mem_samples=27
+[1790606328.110] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790606328.110] MemTotal = 128559 MB
+[1790606328.110] loading graph: scripts/NeuralRadiosity.py
+[1790606328.137] graph loaded
+[1790606328.137] camera=<falcor.falcor_ext.Camera object at 0x7657eafd1cb0>, clock=<falcor.falcor_ext.Clock object at 0x7657ea31d8b0>
+[1790606328.137] camera animation disabled
+[1790606328.137] clock playing
+[1790606328.138] mem sampler thread started
+[1790606328.138] callback installed
+[1790606328.139] benchmark started
+[1790606328.143] first callback: current_time=0.070, warmup_t0=1790606328.143
+[1790606358.154] warmup done, t_start=1790606358.154
+[1790606418.161] finish called, fps_samples=1595, total_frames=4911, mem_samples=27
+[1790606420.293] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790606420.293] MemTotal = 128559 MB
+[1790606420.293] loading graph: scripts/OptixDenoiser.py
+[1790606420.367] graph loaded
+[1790606420.367] camera=<falcor.falcor_ext.Camera object at 0x79e585d29030>, clock=<falcor.falcor_ext.Clock object at 0x79e5921acd70>
+[1790606420.367] camera animation disabled
+[1790606420.367] clock playing
+[1790606420.368] mem sampler thread started
+[1790606420.368] callback installed
+[1790606420.368] benchmark started
+[1790606420.515] first callback: current_time=0.084, warmup_t0=1790606420.514
+[1790606450.520] warmup done, t_start=1790606450.520
+[1790606510.527] finish called, fps_samples=1773, total_frames=5821, mem_samples=27
+[1790606512.605] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790606512.605] MemTotal = 128559 MB
+[1790606512.605] loading graph: scripts/PathTracerNRD_VK.py
+[1790606513.234] graph loaded
+[1790606513.234] camera=<falcor.falcor_ext.Camera object at 0x7439f41d9db0>, clock=<falcor.falcor_ext.Clock object at 0x7439f6bcda70>
+[1790606513.234] camera animation disabled
+[1790606513.234] clock playing
+[1790606513.235] mem sampler thread started
+[1790606513.235] callback installed
+[1790606513.236] benchmark started
+[1790606513.270] first callback: current_time=0.065, warmup_t0=1790606513.269
+[1790606543.270] warmup done, t_start=1790606543.270
+[1790606603.276] finish called, fps_samples=1750, total_frames=7754, mem_samples=27
+[1790606605.391] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790606605.391] MemTotal = 128559 MB
+[1790606605.391] loading graph: scripts/NeuralRadiosity.py
+[1790606605.417] graph loaded
+[1790606605.417] camera=<falcor.falcor_ext.Camera object at 0x77ea86fda4b0>, clock=<falcor.falcor_ext.Clock object at 0x77ea8d5cda70>
+[1790606605.417] camera animation disabled
+[1790606605.417] clock playing
+[1790606605.418] mem sampler thread started
+[1790606605.419] callback installed
+[1790606605.419] benchmark started
+[1790606605.422] first callback: current_time=0.098, warmup_t0=1790606605.422
+[1790606635.431] warmup done, t_start=1790606635.431
+[1790606695.438] finish called, fps_samples=1662, total_frames=5900, mem_samples=28
+[1790606698.076] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790606698.076] MemTotal = 128559 MB
+[1790606698.076] loading graph: scripts/OptixDenoiser.py
+[1790606698.139] graph loaded
+[1790606698.139] camera=<falcor.falcor_ext.Camera object at 0x76732ffbe370>, clock=<falcor.falcor_ext.Clock object at 0x76732ffd1a70>
+[1790606698.139] camera animation disabled
+[1790606698.139] clock playing
+[1790606698.140] mem sampler thread started
+[1790606698.140] callback installed
+[1790606698.140] benchmark started
+[1790606698.296] first callback: current_time=0.076, warmup_t0=1790606698.295
+[1790606728.309] warmup done, t_start=1790606728.308
+[1790606788.319] finish called, fps_samples=1565, total_frames=3855, mem_samples=27
+[1790606790.992] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790606790.992] MemTotal = 128559 MB
+[1790606790.992] loading graph: scripts/PathTracerNRD_VK.py
+[1790606791.593] graph loaded
+[1790606791.593] camera=<falcor.falcor_ext.Camera object at 0x759ebcbbabb0>, clock=<falcor.falcor_ext.Clock object at 0x759ebcbcda70>
+[1790606791.593] camera animation disabled
+[1790606791.593] clock playing
+[1790606791.594] mem sampler thread started
+[1790606791.594] callback installed
+[1790606791.595] benchmark started
+[1790606791.628] first callback: current_time=0.076, warmup_t0=1790606791.627
+[1790606821.637] warmup done, t_start=1790606821.637
+[1790606881.643] finish called, fps_samples=1500, total_frames=4093, mem_samples=27
+[1790606884.381] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790606884.381] MemTotal = 128559 MB
+[1790606884.381] loading graph: scripts/NeuralRadiosity.py
+[1790606884.414] graph loaded
+[1790606884.414] camera=<falcor.falcor_ext.Camera object at 0x75da42fba370>, clock=<falcor.falcor_ext.Clock object at 0x75da42fcda70>
+[1790606884.414] camera animation disabled
+[1790606884.414] clock playing
+[1790606884.415] mem sampler thread started
+[1790606884.415] callback installed
+[1790606884.415] benchmark started
+[1790606884.418] first callback: current_time=0.102, warmup_t0=1790606884.418
+[1790606914.427] warmup done, t_start=1790606914.427
+[1790606974.427] finish called, fps_samples=1658, total_frames=5645, mem_samples=27
+[1790662495.227] scene=cornell-box  waypoints=8 from scene_waypoints.txt
+[1790662495.227] MemTotal = 128559 MB
+[1790662495.227] loading graph: scripts/OptixDenoiser.py
+[1790662495.305] graph loaded
+[1790662495.305] camera=<falcor.falcor_ext.Camera object at 0x720030fce1b0>, clock=<falcor.falcor_ext.Clock object at 0x720030fc0370>
+[1790662495.306] camera animation disabled
+[1790662495.306] clock playing
+[1790662495.307] mem sampler thread started
+[1790662495.307] callback installed
+[1790662495.307] benchmark started
+[1790662495.452] first callback: current_time=0.064, warmup_t0=1790662495.452
+[1790662525.457] warmup done, t_start=1790662525.457
+[1790662585.475] finish called, fps_samples=1335, total_frames=2672, mem_samples=27
+[1790662587.669] scene=cornell-box  waypoints=8 from scene_waypoints.txt
+[1790662587.669] MemTotal = 128559 MB
+[1790662587.669] loading graph: scripts/PathTracerNRD_VK.py
+[1790662588.341] graph loaded
+[1790662588.341] camera=<falcor.falcor_ext.Camera object at 0x722bd17b27f0>, clock=<falcor.falcor_ext.Clock object at 0x722bd17b1330>
+[1790662588.341] camera animation disabled
+[1790662588.341] clock playing
+[1790662588.342] mem sampler thread started
+[1790662588.342] callback installed
+[1790662588.342] benchmark started
+[1790662588.431] first callback: current_time=0.103, warmup_t0=1790662588.431
+[1790662618.436] warmup done, t_start=1790662618.436
+[1790662678.449] finish called, fps_samples=1399, total_frames=2823, mem_samples=26
+[1790662680.683] scene=cornell-box  waypoints=8 from scene_waypoints.txt
+[1790662680.683] MemTotal = 128559 MB
+[1790662680.684] loading graph: scripts/NeuralRadiosity.py
+[1790662680.712] graph loaded
+[1790662680.712] camera=<falcor.falcor_ext.Camera object at 0x7cb1bb5d22f0>, clock=<falcor.falcor_ext.Clock object at 0x7cb1bb5c4370>
+[1790662680.712] camera animation disabled
+[1790662680.712] clock playing
+[1790662680.713] mem sampler thread started
+[1790662680.713] callback installed
+[1790662680.714] benchmark started
+[1790662680.723] first callback: current_time=0.105, warmup_t0=1790662680.722
+[1790662710.725] warmup done, t_start=1790662710.725
+[1790662770.725] finish called, fps_samples=1553, total_frames=3773, mem_samples=27
+[1790662773.701] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790662773.702] MemTotal = 128559 MB
+[1790662773.702] loading graph: scripts/OptixDenoiser.py
+[1790662773.773] graph loaded
+[1790662773.773] camera=<falcor.falcor_ext.Camera object at 0x72ade2bdfcf0>, clock=<falcor.falcor_ext.Clock object at 0x72ade2bc4370>
+[1790662773.773] camera animation disabled
+[1790662773.773] clock playing
+[1790662773.774] mem sampler thread started
+[1790662773.775] callback installed
+[1790662773.775] benchmark started
+[1790662773.962] first callback: current_time=0.081, warmup_t0=1790662773.961
+[1790662803.969] warmup done, t_start=1790662803.969
+[1790662863.974] finish called, fps_samples=1396, total_frames=3415, mem_samples=27
+[1790662867.281] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790662867.281] MemTotal = 128559 MB
+[1790662867.281] loading graph: scripts/PathTracerNRD_VK.py
+[1790662867.948] graph loaded
+[1790662867.948] camera=<falcor.falcor_ext.Camera object at 0x789476bdbcf0>, clock=<falcor.falcor_ext.Clock object at 0x789476bc0370>
+[1790662867.948] camera animation disabled
+[1790662867.948] clock playing
+[1790662867.949] mem sampler thread started
+[1790662867.949] callback installed
+[1790662867.949] benchmark started
+[1790662868.062] first callback: current_time=0.129, warmup_t0=1790662868.062
+[1790662898.072] warmup done, t_start=1790662898.072
+[1790662958.074] finish called, fps_samples=1196, total_frames=2402, mem_samples=26
+[1790662960.775] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790662960.775] MemTotal = 128559 MB
+[1790662960.775] loading graph: scripts/NeuralRadiosity.py
+[1790662960.799] graph loaded
+[1790662960.799] camera=<falcor.falcor_ext.Camera object at 0x7ac77ffe3f70>, clock=<falcor.falcor_ext.Clock object at 0x7ac77e7c0370>
+[1790662960.799] camera animation disabled
+[1790662960.799] clock playing
+[1790662960.800] mem sampler thread started
+[1790662960.800] callback installed
+[1790662960.801] benchmark started
+[1790662960.804] first callback: current_time=0.082, warmup_t0=1790662960.804
+[1790662990.808] warmup done, t_start=1790662990.808
+[1790663050.821] finish called, fps_samples=1532, total_frames=3270, mem_samples=27
+[1790663257.516] scene=cornell-box  waypoints=8 from scene_waypoints.txt
+[1790663257.516] MemTotal = 128559 MB
+[1790663257.516] loading graph: scripts/OptixDenoiser.py
+[1790663257.646] graph loaded
+[1790663257.646] camera=<falcor.falcor_ext.Camera object at 0x7d6cbffb1c30>, clock=<falcor.falcor_ext.Clock object at 0x7d6cbffb1330>
+[1790663257.646] camera animation disabled
+[1790663257.646] clock playing
+[1790663257.648] mem sampler thread started
+[1790663257.648] callback installed
+[1790663257.648] benchmark started
+[1790663257.900] first callback: current_time=0.102, warmup_t0=1790663257.900
+[1790663287.917] warmup done, t_start=1790663287.916
+[1790663347.923] finish called, fps_samples=1286, total_frames=2136, mem_samples=26
+[1790663350.531] scene=cornell-box  waypoints=8 from scene_waypoints.txt
+[1790663350.531] MemTotal = 128559 MB
+[1790663350.531] loading graph: scripts/PathTracerNRD_VK.py
+[1790663351.208] graph loaded
+[1790663351.208] camera=<falcor.falcor_ext.Camera object at 0x76e4d67dac70>, clock=<falcor.falcor_ext.Clock object at 0x76e4e11c0370>
+[1790663351.208] camera animation disabled
+[1790663351.208] clock playing
+[1790663351.209] mem sampler thread started
+[1790663351.209] callback installed
+[1790663351.209] benchmark started
+[1790663351.319] first callback: current_time=0.112, warmup_t0=1790663351.318
+[1790663381.338] warmup done, t_start=1790663381.338
+[1790663441.347] finish called, fps_samples=1220, total_frames=2312, mem_samples=26
+[1790663443.645] scene=cornell-box  waypoints=8 from scene_waypoints.txt
+[1790663443.645] MemTotal = 128559 MB
+[1790663443.645] loading graph: scripts/NeuralRadiosity.py
+[1790663443.674] graph loaded
+[1790663443.674] camera=<falcor.falcor_ext.Camera object at 0x7c88ca1d22f0>, clock=<falcor.falcor_ext.Clock object at 0x7c88ca1c4370>
+[1790663443.674] camera animation disabled
+[1790663443.674] clock playing
+[1790663443.675] mem sampler thread started
+[1790663443.676] callback installed
+[1790663443.677] benchmark started
+[1790663443.693] first callback: current_time=0.132, warmup_t0=1790663443.692
+[1790663473.698] warmup done, t_start=1790663473.698
+[1790663533.707] finish called, fps_samples=1247, total_frames=2614, mem_samples=26
+[1790663536.631] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790663536.631] MemTotal = 128559 MB
+[1790663536.631] loading graph: scripts/OptixDenoiser.py
+[1790663536.699] graph loaded
+[1790663536.699] camera=<falcor.falcor_ext.Camera object at 0x7e98cebdfcf0>, clock=<falcor.falcor_ext.Clock object at 0x7e98cebc4370>
+[1790663536.699] camera animation disabled
+[1790663536.699] clock playing
+[1790663536.700] mem sampler thread started
+[1790663536.700] callback installed
+[1790663536.700] benchmark started
+[1790663536.847] first callback: current_time=0.088, warmup_t0=1790663536.847
+[1790663566.859] warmup done, t_start=1790663566.859
+[1790663626.867] finish called, fps_samples=1497, total_frames=2995, mem_samples=27
+[1790663630.225] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790663630.225] MemTotal = 128559 MB
+[1790663630.225] loading graph: scripts/PathTracerNRD_VK.py
+[1790663630.924] graph loaded
+[1790663630.925] camera=<falcor.falcor_ext.Camera object at 0x74636d92c070>, clock=<falcor.falcor_ext.Clock object at 0x74637a1b1330>
+[1790663630.925] camera animation disabled
+[1790663630.925] clock playing
+[1790663630.926] mem sampler thread started
+[1790663630.926] callback installed
+[1790663630.926] benchmark started
+[1790663630.971] first callback: current_time=0.077, warmup_t0=1790663630.971
+[1790663660.978] warmup done, t_start=1790663660.978
+[1790663720.994] finish called, fps_samples=1491, total_frames=2983, mem_samples=26
+[1790663724.077] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790663724.077] MemTotal = 128559 MB
+[1790663724.077] loading graph: scripts/NeuralRadiosity.py
+[1790663724.105] graph loaded
+[1790663724.105] camera=<falcor.falcor_ext.Camera object at 0x73fc42bd0670>, clock=<falcor.falcor_ext.Clock object at 0x73fc42bb1330>
+[1790663724.105] camera animation disabled
+[1790663724.105] clock playing
+[1790663724.107] mem sampler thread started
+[1790663724.107] callback installed
+[1790663724.107] benchmark started
+[1790663724.114] first callback: current_time=0.098, warmup_t0=1790663724.114
+[1790663754.123] warmup done, t_start=1790663754.123
+[1790663814.137] finish called, fps_samples=1574, total_frames=3794, mem_samples=27
+[1790675126.702] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790675126.702] MemTotal = 128559 MB
+[1790675126.702] loading graph: scripts/OptixDenoiser.py
+[1790675126.771] graph loaded
+[1790675126.771] camera=<falcor.falcor_ext.Camera object at 0x7d59aab3d670>, clock=<falcor.falcor_ext.Clock object at 0x7d599ffd9cf0>
+[1790675126.772] camera animation disabled
+[1790675126.772] clock playing
+[1790675126.772] mem sampler thread started
+[1790675126.773] callback installed
+[1790675126.773] benchmark started
+[1790675126.921] first callback: current_time=0.082, warmup_t0=1790675126.921
+[1790675156.931] warmup done, t_start=1790675156.930
+[1790675216.933] finish called, fps_samples=1553, total_frames=3107, mem_samples=27
+[1790675219.837] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790675219.837] MemTotal = 128559 MB
+[1790675219.837] loading graph: scripts/PathTracerNRD_VK.py
+[1790675220.454] graph loaded
+[1790675220.454] camera=<falcor.falcor_ext.Camera object at 0x7b3e35bd94f0>, clock=<falcor.falcor_ext.Clock object at 0x7b3e35bd9cf0>
+[1790675220.454] camera animation disabled
+[1790675220.454] clock playing
+[1790675220.455] mem sampler thread started
+[1790675220.456] callback installed
+[1790675220.456] benchmark started
+[1790675220.490] first callback: current_time=0.099, warmup_t0=1790675220.490
+[1790675250.505] warmup done, t_start=1790675250.505
+[1790675310.525] finish called, fps_samples=1522, total_frames=3045, mem_samples=27
+[1790675313.435] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790675313.436] MemTotal = 128559 MB
+[1790675313.436] loading graph: scripts/NeuralRadiosity.py
+[1790675313.460] graph loaded
+[1790675313.461] camera=<falcor.falcor_ext.Camera object at 0x737cc53080f0>, clock=<falcor.falcor_ext.Clock object at 0x737cc5dd9cf0>
+[1790675313.461] camera animation disabled
+[1790675313.461] clock playing
+[1790675313.462] mem sampler thread started
+[1790675313.462] callback installed
+[1790675313.462] benchmark started
+[1790675313.465] first callback: current_time=0.104, warmup_t0=1790675313.465
+[1790675343.473] warmup done, t_start=1790675343.473
+[1790675403.484] finish called, fps_samples=1602, total_frames=4854, mem_samples=27
+[1790675410.072] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790675410.072] MemTotal = 128559 MB
+[1790675410.072] loading graph: scripts/OptixDenoiser.py
+[1790675410.142] graph loaded
+[1790675410.142] camera=<falcor.falcor_ext.Camera object at 0x77b9cb5bccf0>, clock=<falcor.falcor_ext.Clock object at 0x77b9c91ddcf0>
+[1790675410.142] camera animation disabled
+[1790675410.142] clock playing
+[1790675410.143] mem sampler thread started
+[1790675410.144] callback installed
+[1790675410.144] benchmark started
+[1790675410.290] first callback: current_time=0.135, warmup_t0=1790675410.290
+[1790675440.292] warmup done, t_start=1790675440.292
+[1790675500.311] finish called, fps_samples=1717, total_frames=3665, mem_samples=27
+[1790675506.950] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790675506.950] MemTotal = 128559 MB
+[1790675506.950] loading graph: scripts/PathTracerNRD_VK.py
+[1790675507.552] graph loaded
+[1790675507.553] camera=<falcor.falcor_ext.Camera object at 0x7f9591fd94f0>, clock=<falcor.falcor_ext.Clock object at 0x7f9591fd9cf0>
+[1790675507.553] camera animation disabled
+[1790675507.553] clock playing
+[1790675507.554] mem sampler thread started
+[1790675507.554] callback installed
+[1790675507.554] benchmark started
+[1790675507.587] first callback: current_time=0.109, warmup_t0=1790675507.587
+[1790675537.595] warmup done, t_start=1790675537.595
+[1790675597.601] finish called, fps_samples=1602, total_frames=3877, mem_samples=27
+[1790675604.256] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790675604.257] MemTotal = 128559 MB
+[1790675604.257] loading graph: scripts/NeuralRadiosity.py
+[1790675604.280] graph loaded
+[1790675604.280] camera=<falcor.falcor_ext.Camera object at 0x7993ee1bccf0>, clock=<falcor.falcor_ext.Clock object at 0x7993e3fddcf0>
+[1790675604.280] camera animation disabled
+[1790675604.280] clock playing
+[1790675604.281] mem sampler thread started
+[1790675604.282] callback installed
+[1790675604.282] benchmark started
+[1790675604.286] first callback: current_time=0.133, warmup_t0=1790675604.285
+[1790675634.290] warmup done, t_start=1790675634.290
+[1790675694.296] finish called, fps_samples=1687, total_frames=6098, mem_samples=27
+[1790675696.412] scene=cornell-box  waypoints=8 from scene_waypoints.txt
+[1790675696.412] MemTotal = 128559 MB
+[1790675696.412] loading graph: scripts/OptixDenoiser.py
+[1790675696.487] graph loaded
+[1790675696.487] camera=<falcor.falcor_ext.Camera object at 0x7a3743fb35b0>, clock=<falcor.falcor_ext.Clock object at 0x7a3741d1eef0>
+[1790675696.487] camera animation disabled
+[1790675696.487] clock playing
+[1790675696.488] mem sampler thread started
+[1790675696.489] callback installed
+[1790675696.489] benchmark started
+[1790675696.635] first callback: current_time=0.084, warmup_t0=1790675696.635
+[1790675726.638] warmup done, t_start=1790675726.638
+[1790675786.640] finish called, fps_samples=1566, total_frames=4762, mem_samples=28
+[1790675788.685] scene=cornell-box  waypoints=8 from scene_waypoints.txt
+[1790675788.685] MemTotal = 128559 MB
+[1790675788.685] loading graph: scripts/PathTracerNRD_VK.py
+[1790675789.297] graph loaded
+[1790675789.297] camera=<falcor.falcor_ext.Camera object at 0x73d4d6fdaef0>, clock=<falcor.falcor_ext.Clock object at 0x73d4d41d9cf0>
+[1790675789.297] camera animation disabled
+[1790675789.297] clock playing
+[1790675789.298] mem sampler thread started
+[1790675789.298] callback installed
+[1790675789.299] benchmark started
+[1790675789.331] first callback: current_time=0.070, warmup_t0=1790675789.331
+[1790675819.333] warmup done, t_start=1790675819.333
+[1790675879.336] finish called, fps_samples=1735, total_frames=5641, mem_samples=27
+[1790675881.403] scene=cornell-box  waypoints=8 from scene_waypoints.txt
+[1790675881.403] MemTotal = 128559 MB
+[1790675881.403] loading graph: scripts/NeuralRadiosity.py
+[1790675881.431] graph loaded
+[1790675881.431] camera=<falcor.falcor_ext.Camera object at 0x7ffb877b35b0>, clock=<falcor.falcor_ext.Clock object at 0x7ffb8511eef0>
+[1790675881.431] camera animation disabled
+[1790675881.431] clock playing
+[1790675881.432] mem sampler thread started
+[1790675881.432] callback installed
+[1790675881.432] benchmark started
+[1790675881.436] first callback: current_time=0.069, warmup_t0=1790675881.436
+[1790675911.442] warmup done, t_start=1790675911.442
+[1790675971.452] finish called, fps_samples=1662, total_frames=5781, mem_samples=27
+[1790675974.775] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790675974.775] MemTotal = 128559 MB
+[1790675974.775] loading graph: scripts/OptixDenoiser.py
+[1790675974.843] graph loaded
+[1790675974.843] camera=<falcor.falcor_ext.Camera object at 0x70c4eafb35b0>, clock=<falcor.falcor_ext.Clock object at 0x70c4e811eef0>
+[1790675974.843] camera animation disabled
+[1790675974.843] clock playing
+[1790675974.844] mem sampler thread started
+[1790675974.844] callback installed
+[1790675974.844] benchmark started
+[1790675974.993] first callback: current_time=0.079, warmup_t0=1790675974.993
+[1790676004.996] warmup done, t_start=1790676004.995
+[1790676065.015] finish called, fps_samples=1501, total_frames=3003, mem_samples=27
+[1790676068.345] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790676068.346] MemTotal = 128559 MB
+[1790676068.346] loading graph: scripts/PathTracerNRD_VK.py
+[1790676068.954] graph loaded
+[1790676068.954] camera=<falcor.falcor_ext.Camera object at 0x796f8abe90b0>, clock=<falcor.falcor_ext.Clock object at 0x796f7ffd9cf0>
+[1790676068.954] camera animation disabled
+[1790676068.954] clock playing
+[1790676068.955] mem sampler thread started
+[1790676068.955] callback installed
+[1790676068.956] benchmark started
+[1790676068.990] first callback: current_time=0.070, warmup_t0=1790676068.989
+[1790676099.005] warmup done, t_start=1790676099.005
+[1790676159.025] finish called, fps_samples=1500, total_frames=3002, mem_samples=27
+[1790676162.426] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790676162.426] MemTotal = 128559 MB
+[1790676162.426] loading graph: scripts/NeuralRadiosity.py
+[1790676162.451] graph loaded
+[1790676162.451] camera=<falcor.falcor_ext.Camera object at 0x7074657ed0b0>, clock=<falcor.falcor_ext.Clock object at 0x70745f3ddcf0>
+[1790676162.451] camera animation disabled
+[1790676162.451] clock playing
+[1790676162.452] mem sampler thread started
+[1790676162.452] callback installed
+[1790676162.452] benchmark started
+[1790676162.455] first callback: current_time=0.082, warmup_t0=1790676162.455
+[1790676192.463] warmup done, t_start=1790676192.463
+[1790676252.464] finish called, fps_samples=1643, total_frames=5392, mem_samples=27
+[1790676254.682] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790676254.682] MemTotal = 128559 MB
+[1790676254.682] loading graph: scripts/OptixDenoiser.py
+[1790676254.755] graph loaded
+[1790676254.755] camera=<falcor.falcor_ext.Camera object at 0x72ae041e61f0>, clock=<falcor.falcor_ext.Clock object at 0x72ae041c68b0>
+[1790676254.755] camera animation disabled
+[1790676254.755] clock playing
+[1790676254.756] mem sampler thread started
+[1790676254.756] callback installed
+[1790676254.757] benchmark started
+[1790676254.902] first callback: current_time=0.063, warmup_t0=1790676254.901
+[1790676284.917] warmup done, t_start=1790676284.917
+[1790676344.937] finish called, fps_samples=1591, total_frames=3188, mem_samples=27
+[1790676347.151] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790676347.151] MemTotal = 128559 MB
+[1790676347.151] loading graph: scripts/PathTracerNRD_VK.py
+[1790676347.762] graph loaded
+[1790676347.762] camera=<falcor.falcor_ext.Camera object at 0x79f9a910bef0>, clock=<falcor.falcor_ext.Clock object at 0x79f9a9dd9cf0>
+[1790676347.762] camera animation disabled
+[1790676347.762] clock playing
+[1790676347.763] mem sampler thread started
+[1790676347.763] callback installed
+[1790676347.763] benchmark started
+[1790676347.795] first callback: current_time=0.080, warmup_t0=1790676347.795
+[1790676377.815] warmup done, t_start=1790676377.815
+[1790676437.815] finish called, fps_samples=1578, total_frames=3243, mem_samples=27
+[1790676440.019] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790676440.020] MemTotal = 128559 MB
+[1790676440.020] loading graph: scripts/NeuralRadiosity.py
+[1790676440.046] graph loaded
+[1790676440.046] camera=<falcor.falcor_ext.Camera object at 0x7215655f98b0>, clock=<falcor.falcor_ext.Clock object at 0x72156411eef0>
+[1790676440.046] camera animation disabled
+[1790676440.046] clock playing
+[1790676440.047] mem sampler thread started
+[1790676440.047] callback installed
+[1790676440.047] benchmark started
+[1790676440.052] first callback: current_time=0.075, warmup_t0=1790676440.051
+[1790676470.064] warmup done, t_start=1790676470.064
+[1790676530.075] finish called, fps_samples=1591, total_frames=4916, mem_samples=28
+[1790676532.282] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790676532.282] MemTotal = 128559 MB
+[1790676532.282] loading graph: scripts/OptixDenoiser.py
+[1790676532.364] graph loaded
+[1790676532.364] camera=<falcor.falcor_ext.Camera object at 0x736cba50bef0>, clock=<falcor.falcor_ext.Clock object at 0x736cc4bd9cf0>
+[1790676532.364] camera animation disabled
+[1790676532.364] clock playing
+[1790676532.365] mem sampler thread started
+[1790676532.365] callback installed
+[1790676532.365] benchmark started
+[1790676532.510] first callback: current_time=0.095, warmup_t0=1790676532.510
+[1790676562.520] warmup done, t_start=1790676562.519
+[1790676622.520] finish called, fps_samples=1591, total_frames=6015, mem_samples=28
+[1790676624.710] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790676624.710] MemTotal = 128559 MB
+[1790676624.710] loading graph: scripts/PathTracerNRD_VK.py
+[1790676625.333] graph loaded
+[1790676625.333] camera=<falcor.falcor_ext.Camera object at 0x77788c1c6c30>, clock=<falcor.falcor_ext.Clock object at 0x77788c1c68b0>
+[1790676625.333] camera animation disabled
+[1790676625.333] clock playing
+[1790676625.334] mem sampler thread started
+[1790676625.335] callback installed
+[1790676625.335] benchmark started
+[1790676625.369] first callback: current_time=0.071, warmup_t0=1790676625.369
+[1790676655.373] warmup done, t_start=1790676655.373
+[1790676715.381] finish called, fps_samples=1797, total_frames=8981, mem_samples=28
+[1790676717.545] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790676717.545] MemTotal = 128559 MB
+[1790676717.545] loading graph: scripts/NeuralRadiosity.py
+[1790676717.571] graph loaded
+[1790676717.571] camera=<falcor.falcor_ext.Camera object at 0x7eaf0bf8f430>, clock=<falcor.falcor_ext.Clock object at 0x7eaf0811eef0>
+[1790676717.571] camera animation disabled
+[1790676717.571] clock playing
+[1790676717.572] mem sampler thread started
+[1790676717.572] callback installed
+[1790676717.573] benchmark started
+[1790676717.576] first callback: current_time=0.060, warmup_t0=1790676717.576
+[1790676747.576] warmup done, t_start=1790676747.576
+[1790676807.578] finish called, fps_samples=1658, total_frames=5905, mem_samples=28
+[1790676810.342] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790676810.343] MemTotal = 128559 MB
+[1790676810.343] loading graph: scripts/OptixDenoiser.py
+[1790676810.408] graph loaded
+[1790676810.408] camera=<falcor.falcor_ext.Camera object at 0x7e5c2d541670>, clock=<falcor.falcor_ext.Clock object at 0x7e5c26fddcf0>
+[1790676810.408] camera animation disabled
+[1790676810.408] clock playing
+[1790676810.409] mem sampler thread started
+[1790676810.409] callback installed
+[1790676810.409] benchmark started
+[1790676810.556] first callback: current_time=0.083, warmup_t0=1790676810.555
+[1790676840.567] warmup done, t_start=1790676840.567
+[1790676900.570] finish called, fps_samples=1500, total_frames=4441, mem_samples=28
+[1790676903.318] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790676903.319] MemTotal = 128559 MB
+[1790676903.319] loading graph: scripts/PathTracerNRD_VK.py
+[1790676903.929] graph loaded
+[1790676903.929] camera=<falcor.falcor_ext.Camera object at 0x7a0f3dfa8430>, clock=<falcor.falcor_ext.Clock object at 0x7a0f3c1c68b0>
+[1790676903.929] camera animation disabled
+[1790676903.929] clock playing
+[1790676903.930] mem sampler thread started
+[1790676903.930] callback installed
+[1790676903.931] benchmark started
+[1790676903.965] first callback: current_time=0.093, warmup_t0=1790676903.964
+[1790676933.967] warmup done, t_start=1790676933.967
+[1790676993.976] finish called, fps_samples=1546, total_frames=4622, mem_samples=28
+[1790676996.718] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790676996.718] MemTotal = 128559 MB
+[1790676996.718] loading graph: scripts/NeuralRadiosity.py
+[1790676996.742] graph loaded
+[1790676996.742] camera=<falcor.falcor_ext.Camera object at 0x7c51895a8430>, clock=<falcor.falcor_ext.Clock object at 0x7c517efc68b0>
+[1790676996.742] camera animation disabled
+[1790676996.742] clock playing
+[1790676996.743] mem sampler thread started
+[1790676996.743] callback installed
+[1790676996.744] benchmark started
+[1790676996.747] first callback: current_time=0.069, warmup_t0=1790676996.747
+[1790677026.752] warmup done, t_start=1790677026.751
+[1790677086.760] finish called, fps_samples=1606, total_frames=6039, mem_samples=27
+[1790677301.446] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790677301.446] MemTotal = 128559 MB
+[1790677301.446] loading graph: scripts/OptixDenoiser.py
+[1790677301.517] graph loaded
+[1790677301.517] camera=<falcor.falcor_ext.Camera object at 0x79406bfdfdf0>, clock=<falcor.falcor_ext.Clock object at 0x794069bddcf0>
+[1790677301.517] camera animation disabled
+[1790677301.517] clock playing
+[1790677301.518] mem sampler thread started
+[1790677301.518] callback installed
+[1790677301.518] benchmark started
+[1790677301.663] first callback: current_time=0.070, warmup_t0=1790677301.662
+[1790677331.670] warmup done, t_start=1790677331.669
+[1790677391.672] finish called, fps_samples=1501, total_frames=3003, mem_samples=27
+[1790677394.649] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790677394.649] MemTotal = 128559 MB
+[1790677394.649] loading graph: scripts/PathTracerNRD_VK.py
+[1790677395.279] graph loaded
+[1790677395.279] camera=<falcor.falcor_ext.Camera object at 0x7a8c36396170>, clock=<falcor.falcor_ext.Clock object at 0x7a8c341c68b0>
+[1790677395.279] camera animation disabled
+[1790677395.279] clock playing
+[1790677395.280] mem sampler thread started
+[1790677395.280] callback installed
+[1790677395.280] benchmark started
+[1790677395.314] first callback: current_time=0.066, warmup_t0=1790677395.313
+[1790677425.326] warmup done, t_start=1790677425.326
+[1790677485.347] finish called, fps_samples=1502, total_frames=3005, mem_samples=27
+[1790677488.222] scene=bathroom  waypoints=10 from scene_waypoints.txt
+[1790677488.222] MemTotal = 128559 MB
+[1790677488.222] loading graph: scripts/NeuralRadiosity.py
+[1790677488.246] graph loaded
+[1790677488.246] camera=<falcor.falcor_ext.Camera object at 0x78d929d080f0>, clock=<falcor.falcor_ext.Clock object at 0x78d92bfd9cf0>
+[1790677488.246] camera animation disabled
+[1790677488.246] clock playing
+[1790677488.247] mem sampler thread started
+[1790677488.248] callback installed
+[1790677488.248] benchmark started
+[1790677488.252] first callback: current_time=0.070, warmup_t0=1790677488.251
+[1790677518.256] warmup done, t_start=1790677518.256
+[1790677578.267] finish called, fps_samples=1609, total_frames=4854, mem_samples=27
+[1790677584.951] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790677584.951] MemTotal = 128559 MB
+[1790677584.951] loading graph: scripts/OptixDenoiser.py
+[1790677585.020] graph loaded
+[1790677585.020] camera=<falcor.falcor_ext.Camera object at 0x74e50ffbccf0>, clock=<falcor.falcor_ext.Clock object at 0x74e50e7ddcf0>
+[1790677585.020] camera animation disabled
+[1790677585.020] clock playing
+[1790677585.021] mem sampler thread started
+[1790677585.021] callback installed
+[1790677585.021] benchmark started
+[1790677585.167] first callback: current_time=0.126, warmup_t0=1790677585.167
+[1790677615.174] warmup done, t_start=1790677615.174
+[1790677675.194] finish called, fps_samples=1540, total_frames=3081, mem_samples=27
+[1790677681.721] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790677681.721] MemTotal = 128559 MB
+[1790677681.722] loading graph: scripts/PathTracerNRD_VK.py
+[1790677682.328] graph loaded
+[1790677682.328] camera=<falcor.falcor_ext.Camera object at 0x7cca98bb35b0>, clock=<falcor.falcor_ext.Clock object at 0x7cca8e51eef0>
+[1790677682.329] camera animation disabled
+[1790677682.329] clock playing
+[1790677682.330] mem sampler thread started
+[1790677682.330] callback installed
+[1790677682.330] benchmark started
+[1790677682.363] first callback: current_time=0.116, warmup_t0=1790677682.363
+[1790677712.371] warmup done, t_start=1790677712.371
+[1790677772.390] finish called, fps_samples=1560, total_frames=3121, mem_samples=27
+[1790677779.036] scene=bathroom2  waypoints=12 from scene_waypoints.txt
+[1790677779.036] MemTotal = 128559 MB
+[1790677779.037] loading graph: scripts/NeuralRadiosity.py
+[1790677779.060] graph loaded
+[1790677779.060] camera=<falcor.falcor_ext.Camera object at 0x7f4123fb8cf0>, clock=<falcor.falcor_ext.Clock object at 0x7f4121fd9cf0>
+[1790677779.060] camera animation disabled
+[1790677779.060] clock playing
+[1790677779.061] mem sampler thread started
+[1790677779.061] callback installed
+[1790677779.062] benchmark started
+[1790677779.066] first callback: current_time=0.094, warmup_t0=1790677779.065
+[1790677809.069] warmup done, t_start=1790677809.068
+[1790677869.069] finish called, fps_samples=1695, total_frames=6089, mem_samples=27
+[1790677871.223] scene=cornell-box  waypoints=8 from scene_waypoints.txt
+[1790677871.223] MemTotal = 128559 MB
+[1790677871.224] loading graph: scripts/OptixDenoiser.py
+[1790677871.298] graph loaded
+[1790677871.299] camera=<falcor.falcor_ext.Camera object at 0x7ba4fcbb35b0>, clock=<falcor.falcor_ext.Clock object at 0x7ba4f271eef0>
+[1790677871.299] camera animation disabled
+[1790677871.299] clock playing
+[1790677871.300] mem sampler thread started
+[1790677871.300] callback installed
+[1790677871.300] benchmark started
+[1790677871.446] first callback: current_time=0.068, warmup_t0=1790677871.445
+[1790677901.446] warmup done, t_start=1790677901.446
+[1790677961.448] finish called, fps_samples=1518, total_frames=4155, mem_samples=27
+[1790677963.616] scene=cornell-box  waypoints=8 from scene_waypoints.txt
+[1790677963.616] MemTotal = 128559 MB
+[1790677963.616] loading graph: scripts/PathTracerNRD_VK.py
+[1790677964.243] graph loaded
+[1790677964.243] camera=<falcor.falcor_ext.Camera object at 0x76b950bdaef0>, clock=<falcor.falcor_ext.Clock object at 0x76b9465d9cf0>
+[1790677964.243] camera animation disabled
+[1790677964.243] clock playing
+[1790677964.244] mem sampler thread started
+[1790677964.244] callback installed
+[1790677964.244] benchmark started
+[1790677964.279] first callback: current_time=0.089, warmup_t0=1790677964.279
+[1790677994.287] warmup done, t_start=1790677994.287
+[1790678054.288] finish called, fps_samples=1564, total_frames=4841, mem_samples=27
+[1790678056.443] scene=cornell-box  waypoints=8 from scene_waypoints.txt
+[1790678056.443] MemTotal = 128559 MB
+[1790678056.443] loading graph: scripts/NeuralRadiosity.py
+[1790678056.472] graph loaded
+[1790678056.473] camera=<falcor.falcor_ext.Camera object at 0x70bceffed0b0>, clock=<falcor.falcor_ext.Clock object at 0x70bceebddcf0>
+[1790678056.473] camera animation disabled
+[1790678056.473] clock playing
+[1790678056.474] mem sampler thread started
+[1790678056.474] callback installed
+[1790678056.474] benchmark started
+[1790678056.478] first callback: current_time=0.087, warmup_t0=1790678056.477
+[1790678086.482] warmup done, t_start=1790678086.481
+[1790678146.485] finish called, fps_samples=1659, total_frames=5798, mem_samples=27
+[1790678149.824] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790678149.824] MemTotal = 128559 MB
+[1790678149.825] loading graph: scripts/OptixDenoiser.py
+[1790678149.892] graph loaded
+[1790678149.892] camera=<falcor.falcor_ext.Camera object at 0x7be31b7b35b0>, clock=<falcor.falcor_ext.Clock object at 0x7be31911eef0>
+[1790678149.892] camera animation disabled
+[1790678149.892] clock playing
+[1790678149.893] mem sampler thread started
+[1790678149.893] callback installed
+[1790678149.893] benchmark started
+[1790678150.043] first callback: current_time=0.069, warmup_t0=1790678150.043
+[1790678180.063] warmup done, t_start=1790678180.062
+[1790678240.064] finish called, fps_samples=1458, total_frames=2918, mem_samples=27
+[1790678243.438] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790678243.438] MemTotal = 128559 MB
+[1790678243.438] loading graph: scripts/PathTracerNRD_VK.py
+[1790678244.056] graph loaded
+[1790678244.057] camera=<falcor.falcor_ext.Camera object at 0x7d3e33fed0b0>, clock=<falcor.falcor_ext.Clock object at 0x7d3e31fddcf0>
+[1790678244.057] camera animation disabled
+[1790678244.057] clock playing
+[1790678244.058] mem sampler thread started
+[1790678244.058] callback installed
+[1790678244.058] benchmark started
+[1790678244.093] first callback: current_time=0.071, warmup_t0=1790678244.092
+[1790678274.107] warmup done, t_start=1790678274.107
+[1790678334.127] finish called, fps_samples=1500, total_frames=3002, mem_samples=27
+[1790678337.543] scene=kitchen  waypoints=12 from scene_waypoints.txt
+[1790678337.543] MemTotal = 128559 MB
+[1790678337.543] loading graph: scripts/NeuralRadiosity.py
+[1790678337.567] graph loaded
+[1790678337.567] camera=<falcor.falcor_ext.Camera object at 0x76906e7b35b0>, clock=<falcor.falcor_ext.Clock object at 0x769063f1eef0>
+[1790678337.567] camera animation disabled
+[1790678337.567] clock playing
+[1790678337.568] mem sampler thread started
+[1790678337.568] callback installed
+[1790678337.569] benchmark started
+[1790678337.573] first callback: current_time=0.066, warmup_t0=1790678337.572
+[1790678367.573] warmup done, t_start=1790678367.573
+[1790678427.581] finish called, fps_samples=1639, total_frames=5381, mem_samples=27
+[1790678429.858] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790678429.858] MemTotal = 128559 MB
+[1790678429.858] loading graph: scripts/OptixDenoiser.py
+[1790678429.935] graph loaded
+[1790678429.935] camera=<falcor.falcor_ext.Camera object at 0x7d6a7330bef0>, clock=<falcor.falcor_ext.Clock object at 0x7d6a73fd9cf0>
+[1790678429.935] camera animation disabled
+[1790678429.935] clock playing
+[1790678429.936] mem sampler thread started
+[1790678429.936] callback installed
+[1790678429.936] benchmark started
+[1790678430.091] first callback: current_time=0.075, warmup_t0=1790678430.090
+[1790678460.108] warmup done, t_start=1790678460.107
+[1790678520.109] finish called, fps_samples=1513, total_frames=3027, mem_samples=27
+[1790678522.366] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790678522.366] MemTotal = 128559 MB
+[1790678522.366] loading graph: scripts/PathTracerNRD_VK.py
+[1790678522.989] graph loaded
+[1790678522.989] camera=<falcor.falcor_ext.Camera object at 0x71ee17f0fef0>, clock=<falcor.falcor_ext.Clock object at 0x71ee227ddcf0>
+[1790678522.990] camera animation disabled
+[1790678522.990] clock playing
+[1790678522.991] mem sampler thread started
+[1790678522.991] callback installed
+[1790678522.991] benchmark started
+[1790678523.024] first callback: current_time=0.061, warmup_t0=1790678523.023
+[1790678553.025] warmup done, t_start=1790678553.025
+[1790678613.025] finish called, fps_samples=1538, total_frames=3077, mem_samples=27
+[1790678615.311] scene=living-room  waypoints=11 from scene_waypoints.txt
+[1790678615.311] MemTotal = 128559 MB
+[1790678615.311] loading graph: scripts/NeuralRadiosity.py
+[1790678615.338] graph loaded
+[1790678615.338] camera=<falcor.falcor_ext.Camera object at 0x7c4a06f0fef0>, clock=<falcor.falcor_ext.Clock object at 0x7c4a119ddcf0>
+[1790678615.338] camera animation disabled
+[1790678615.339] clock playing
+[1790678615.340] mem sampler thread started
+[1790678615.340] callback installed
+[1790678615.341] benchmark started
+[1790678615.344] first callback: current_time=0.079, warmup_t0=1790678615.344
+[1790678645.346] warmup done, t_start=1790678645.346
+[1790678705.358] finish called, fps_samples=1597, total_frames=4936, mem_samples=27
+[1790678707.622] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790678707.622] MemTotal = 128559 MB
+[1790678707.622] loading graph: scripts/OptixDenoiser.py
+[1790678707.697] graph loaded
+[1790678707.697] camera=<falcor.falcor_ext.Camera object at 0x708f8010fef0>, clock=<falcor.falcor_ext.Clock object at 0x708f81bddcf0>
+[1790678707.697] camera animation disabled
+[1790678707.697] clock playing
+[1790678707.698] mem sampler thread started
+[1790678707.698] callback installed
+[1790678707.699] benchmark started
+[1790678707.852] first callback: current_time=0.075, warmup_t0=1790678707.852
+[1790678737.858] warmup done, t_start=1790678737.858
+[1790678797.858] finish called, fps_samples=1766, total_frames=5836, mem_samples=27
+[1790678800.082] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790678800.082] MemTotal = 128559 MB
+[1790678800.082] loading graph: scripts/PathTracerNRD_VK.py
+[1790678800.709] graph loaded
+[1790678800.709] camera=<falcor.falcor_ext.Camera object at 0x7f0f9efc6c30>, clock=<falcor.falcor_ext.Clock object at 0x7f0f9efc68b0>
+[1790678800.709] camera animation disabled
+[1790678800.709] clock playing
+[1790678800.710] mem sampler thread started
+[1790678800.710] callback installed
+[1790678800.710] benchmark started
+[1790678800.743] first callback: current_time=0.066, warmup_t0=1790678800.743
+[1790678830.751] warmup done, t_start=1790678830.751
+[1790678890.757] finish called, fps_samples=1756, total_frames=7870, mem_samples=27
+[1790678893.010] scene=teapot  waypoints=12 from scene_waypoints.txt
+[1790678893.010] MemTotal = 128559 MB
+[1790678893.010] loading graph: scripts/NeuralRadiosity.py
+[1790678893.037] graph loaded
+[1790678893.037] camera=<falcor.falcor_ext.Camera object at 0x78187dd0c0f0>, clock=<falcor.falcor_ext.Clock object at 0x78187ffddcf0>
+[1790678893.037] camera animation disabled
+[1790678893.037] clock playing
+[1790678893.038] mem sampler thread started
+[1790678893.038] callback installed
+[1790678893.038] benchmark started
+[1790678893.043] first callback: current_time=0.065, warmup_t0=1790678893.042
+[1790678923.055] warmup done, t_start=1790678923.055
+[1790678983.058] finish called, fps_samples=1658, total_frames=5899, mem_samples=28
+[1790678985.843] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790678985.843] MemTotal = 128559 MB
+[1790678985.843] loading graph: scripts/OptixDenoiser.py
+[1790678985.909] graph loaded
+[1790678985.909] camera=<falcor.falcor_ext.Camera object at 0x7fe52af28230>, clock=<falcor.falcor_ext.Clock object at 0x7fe52af1eef0>
+[1790678985.909] camera animation disabled
+[1790678985.909] clock playing
+[1790678985.910] mem sampler thread started
+[1790678985.911] callback installed
+[1790678985.911] benchmark started
+[1790678986.058] first callback: current_time=0.091, warmup_t0=1790678986.058
+[1790679016.072] warmup done, t_start=1790679016.072
+[1790679076.072] finish called, fps_samples=1549, total_frames=3883, mem_samples=27
+[1790679078.886] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790679078.886] MemTotal = 128559 MB
+[1790679078.886] loading graph: scripts/PathTracerNRD_VK.py
+[1790679079.500] graph loaded
+[1790679079.500] camera=<falcor.falcor_ext.Camera object at 0x71916ddd94f0>, clock=<falcor.falcor_ext.Clock object at 0x71916ddd9cf0>
+[1790679079.500] camera animation disabled
+[1790679079.500] clock playing
+[1790679079.501] mem sampler thread started
+[1790679079.501] callback installed
+[1790679079.502] benchmark started
+[1790679079.536] first callback: current_time=0.087, warmup_t0=1790679079.535
+[1790679109.538] warmup done, t_start=1790679109.538
+[1790679169.552] finish called, fps_samples=1499, total_frames=4112, mem_samples=27
+[1790679172.330] scene=veach-ajar  waypoints=12 from scene_waypoints.txt
+[1790679172.330] MemTotal = 128559 MB
+[1790679172.330] loading graph: scripts/NeuralRadiosity.py
+[1790679172.354] graph loaded
+[1790679172.354] camera=<falcor.falcor_ext.Camera object at 0x7f754773d670>, clock=<falcor.falcor_ext.Clock object at 0x7f75451d9cf0>
+[1790679172.354] camera animation disabled
+[1790679172.354] clock playing
+[1790679172.355] mem sampler thread started
+[1790679172.355] callback installed
+[1790679172.355] benchmark started
+[1790679172.358] first callback: current_time=0.086, warmup_t0=1790679172.358
+[1790679202.363] warmup done, t_start=1790679202.363
+[1790679262.364] finish called, fps_samples=1618, total_frames=6043, mem_samples=27

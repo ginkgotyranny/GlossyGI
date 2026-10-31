@@ -605,6 +605,19 @@ def parse_scene(path: Path) -> SceneData:
         elif keyword == "Film":
             stream.pop()
             scene.film_params = stream.parse_param_list()
+        elif keyword == "Translate":
+            # PBRT: Translate x y z  ->  state.transform = T * state.transform
+            # (row-vector convention; applied to current transform like Transform)
+            tx = float(stream.pop())
+            ty = float(stream.pop())
+            tz = float(stream.pop())
+            translate = [
+                [1.0, 0.0, 0.0, tx],
+                [0.0, 1.0, 0.0, ty],
+                [0.0, 0.0, 1.0, tz],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+            state.transform = mat_mul(translate, state.transform)
         elif keyword == "Transform":
             stream.expect("[")
             values = []

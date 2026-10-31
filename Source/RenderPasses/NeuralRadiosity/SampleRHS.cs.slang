@@ -122,6 +122,7 @@ struct SampleRHS
         path.origin = lPos;
         path.dir = lDir;
         path.setHit(lHit);
+        bool pathActive = true;  // Local tracking to work around Slang bitfield bug
 
         // Prepare ray query structures.
         SceneRayQuery<kUseAlphaTest> sceneRayQuery;
@@ -197,6 +198,7 @@ struct SampleRHS
                         color = gScene.envMap.eval(ray.dir) * path.thp;
                     }
                     path.terminate();
+                    pathActive = false;
                     break;
                 }
 
@@ -227,6 +229,7 @@ struct SampleRHS
                 {
                     color = bsdfProperties.emission * path.thp;
                     path.terminate();
+                    pathActive = false;
                     break;
                 }
 
@@ -234,6 +237,7 @@ struct SampleRHS
                 if (!sd.mtl.isDoubleSided() && !sd.frontFacing)
                 {
                     path.terminate();
+                    pathActive = false;
                     break;
                 }
 
@@ -260,6 +264,7 @@ struct SampleRHS
                 if (!valid)
                 {
                     path.terminate();
+                    pathActive = false;
                     break;
                 }
 
@@ -270,6 +275,7 @@ struct SampleRHS
         else
         {
             path.terminate();
+            pathActive = false;
         }
 
         // MIS evaluation
@@ -277,8 +283,8 @@ struct SampleRHS
         float misBSDF = bsdfValid ? (bs.pdf / (bs.pdf + pEdB)) : 0.f;
 
         // Active mask
-        uint diffAct = (path.isActive() && (roughness > kSpecularRoughnessThreshold)) ? 1 : 0;
-        uint specAct = (path.isActive() && (roughness <= kSpecularRoughnessThreshold)) ? 1 : 0;
+        uint diffAct = (pathActive && (roughness > kSpecularRoughnessThreshold)) ? 1 : 0;
+        uint specAct = (pathActive && (roughness <= kSpecularRoughnessThreshold)) ? 1 : 0;
 
         // Write outputs
         rhsColor[rayIdx] = float4(color * misBSDF, 0.f);
