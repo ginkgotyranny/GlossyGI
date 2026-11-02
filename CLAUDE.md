@@ -30,6 +30,7 @@ cmake --build build\windows-vs2022 --config Release
 
 - Resulting app: `build\windows-vs2022\bin\Release\Mogwai.exe`. Shaders compile at runtime, so Slang-only edits need no rebuild.
 - `setup_vs2022.bat` prefers `external/packman/cuda` if present; otherwise the system CUDA (12.9 here) is used via the toolset string.
+- **Charset vs the precompiled header**: Falcor's PCH in `build/windows-vs2022` was compiled while the system ANSI code page was 936; the machine now reports 1252, so any Falcor.dll recompile (every commit regenerates `Core/Version.cpp`) fails with C2855 "/source-charset inconsistent with precompiled header". Either build with `MSYS_NO_PATHCONV=1 CL="-source-charset:.936 -execution-charset:.936"` in the environment (dash prefix, or Git Bash rewrites the option into a path), or delete `Source/Falcor/Falcor.dir/Release/cmake_pch.pch` once to rebuild the PCH under the current code page (full Falcor rebuild).
 
 ## Run
 
