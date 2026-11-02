@@ -83,6 +83,11 @@ namespace
     const char kEnablePostFilter[] = "enablePostFilter";
     const char kEnableFXAA[] = "enableFXAA";
     const char kEnableMirrorAlbedo[] = "enableMirrorAlbedo";
+    // Headless / scripted control: initial render mode, checkpoint auto-load, training schedule.
+    const char kRenderMode[] = "renderMode";
+    const char kLoadModelPath[] = "loadModelPath";
+    const char kTotalTrainSteps[] = "totalTrainSteps";
+    const char kSaveCkptInterval[] = "saveCkptInterval";
 
     float3 parseFloat3(const nlohmann::json& value, std::string_view key)
     {
@@ -170,6 +175,24 @@ NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) :
             mClusterUnlockStreak = value;
         else if (key == kEnablePostFilter)
             mEnablePostFilter = value;
+        else if (key == kRenderMode)
+        {
+            const std::string mode = value;
+            if (mode == "train") mRenderMode = RenderMode::Train;
+            else if (mode == "onlineTrain") mRenderMode = RenderMode::OnlineTrain;
+            else if (mode == "render") mRenderMode = RenderMode::Render;
+            else if (mode == "idle") mRenderMode = RenderMode::Idle;
+            else logWarning("Unknown renderMode '{}' (expected train|onlineTrain|render|idle).", mode);
+        }
+        else if (key == kLoadModelPath)
+        {
+            const std::string path = value;
+            mLoadModelPath = path;
+        }
+        else if (key == kTotalTrainSteps)
+            mTotalTrainSteps = value;
+        else if (key == kSaveCkptInterval)
+            mSaveCKPTInterval = value;
         else
             logWarning("Unknown property '{}' in NeuralRadiosity properties.", key);
     }
@@ -197,6 +220,9 @@ Properties NeuralRadiosity::getProperties() const
     props[kEnablePostFilter] = mEnablePostFilter;
     props[kEnableFXAA] = mEnableFXAA;
     props[kEnableMirrorAlbedo] = mEnableMirrorAlbedo;
+    props[kTotalTrainSteps] = mTotalTrainSteps;
+    props[kSaveCkptInterval] = mSaveCKPTInterval;
+    if (!mLoadModelPath.empty()) props[kLoadModelPath] = mLoadModelPath;
     return props;
 }
 
@@ -1383,6 +1409,20 @@ void NeuralRadiosity::updatePrograms(RenderContext* pRenderContext, const Render
     if (!mpNRModel)
     {
         mpNRModel = std::make_unique<NRModel>();
+        mpNRModel->setOnline(mRenderMode != RenderMode::Train);
+
+        if (!mLoadModelPath.empty())
+        {
+            logInfo("NeuralRadiosity: loading model state from '{}'", mLoadModelPath);
+            try
+            {
+                mpNRModel->loadState(mLoadModelPath);
+            }
+            catch (const std::exception& e)
+            {
+                logError("NeuralRadiosity: failed to load model state '{}': {}", mLoadModelPath, e.what());
+            }
+        }
     }
 
     const auto modelEndTime = std::chrono::steady_clock::now();

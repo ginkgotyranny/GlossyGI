@@ -1,5 +1,8 @@
 add_plugin(NeuralRadiosity)
-set_property(TARGET NeuralRadiosity PROPERTY CUDA_ARCHITECTURES 86)
+# Per-machine CUDA arch: 86 = Ampere (Linux box, default), 120 = Blackwell RTX 50 (Windows laptop).
+# Override with -DNCR_CUDA_ARCH=<arch> at configure time; sm_86 SASS cannot load on Blackwell.
+set(NCR_CUDA_ARCH 86 CACHE STRING "CUDA architecture for the NeuralRadiosity plugin")
+set_property(TARGET NeuralRadiosity PROPERTY CUDA_ARCHITECTURES ${NCR_CUDA_ARCH})
 
 file(GLOB_RECURSE NR_SOURCES
     "*.cpp"

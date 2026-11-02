@@ -494,3 +494,126 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
         mpPrimGridOpt->step(mTrainStream, lossScale, mpPrimGridsFull->data(), mpPrimGrids->data(), mpPrimGridsGradient->data());
     }
 }
+
+// ============================================================================
+// Checkpoint save / load.
+//
+// Layout ("NRCK" v2): header, then 8 raw blocks in fixed order:
+//   4 x f32 master weights  (primary grid, cluster grid, DiffNet, SpecNet)
+//   4 x f16 EMA inference copies, same order.
+// The f16 working copies are rebuilt from the masters on load. Adam moments are
+// not stored; resuming training restarts the moment estimates. The element
+// counts in the header are validated on load so a checkpoint produced with a
+// different NCRConfig.h fails loudly instead of loading garbage.
+// ============================================================================
+
+namespace {
+
+struct CheckpointHeader {
+    char magic[4];           // 'N','R','C','K'
+    uint32_t version;        // 2
+    uint32_t primGridElems;
+    uint32_t clsGridElems;
+    uint32_t diffParamElems;
+    uint32_t specParamElems;
+};
+
+void writeDeviceBlock(std::ofstream& f, const void* devPtr, size_t bytes) {
+    std::vector<char> host(bytes);
+    if (bytes > 0) CUDA_CHECK_THROW(cudaMemcpy(host.data(), devPtr, bytes, cudaMemcpyDeviceToHost));
+    f.write(host.data(), (std::streamsize)bytes);
+}
+
+void readDeviceBlock(std::ifstream& f, void* devPtr, size_t bytes) {
+    std::vector<char> host(bytes);
+    f.read(host.data(), (std::streamsize)bytes);
+    CHECK_THROW(f.good());
+    if (bytes > 0) CUDA_CHECK_THROW(cudaMemcpy(devPtr, host.data(), bytes, cudaMemcpyHostToDevice));
+}
+
+void castFullToHalf(cudaStream_t stream, const float* src, precision_t* dst, uint32_t count) {
+    if (count == 0) return;
+    tcnn::parallel_for_gpu(stream, count, [src, dst] __device__ (size_t i) {
+        dst[i] = (precision_t)src[i];
+    });
+}
+
+} // namespace
+
+void NRModel::saveState(const std::string& path) {
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mTrainStream));
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mInferenceStream));
+
+    CheckpointHeader h = {};
+    h.magic[0] = 'N'; h.magic[1] = 'R'; h.magic[2] = 'C'; h.magic[3] = 'K';
+    h.version = 2;
+    h.primGridElems = (uint32_t)mpPrimGrids->size();
+    h.clsGridElems = (uint32_t)mpClsGrids->size();
+    h.diffParamElems = (uint32_t)mpDiffParams->size();
+    h.specParamElems = (uint32_t)mpSpecParams->size();
+
+    std::ofstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("NRModel::saveState: cannot open '" + path + "' for writing");
+    f.write(reinterpret_cast<const char*>(&h), sizeof(h));
+
+    writeDeviceBlock(f, mpPrimGridsFull->data(), mpPrimGridsFull->bytes());
+    writeDeviceBlock(f, mpClsGridsFull->data(), mpClsGridsFull->bytes());
+    writeDeviceBlock(f, mpDiffParamsFull->data(), mpDiffParamsFull->bytes());
+    writeDeviceBlock(f, mpSpecParamsFull->data(), mpSpecParamsFull->bytes());
+
+    writeDeviceBlock(f, mpPrimGridsInference, mpPrimGrids->bytes());
+    writeDeviceBlock(f, mpClsGridsInference, mpClsGrids->bytes());
+    writeDeviceBlock(f, mpDiffParamsInference, mpDiffParams->bytes());
+    writeDeviceBlock(f, mpSpecParamsInference, mpSpecParams->bytes());
+
+    CHECK_THROW(f.good());
+    fmt::print("NRModel::saveState: wrote {} bytes to {}\n", (size_t)f.tellp(), path);
+}
+
+void NRModel::loadState(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("NRModel::loadState: cannot open '" + path + "' for reading");
+
+    CheckpointHeader h = {};
+    f.read(reinterpret_cast<char*>(&h), sizeof(h));
+    CHECK_THROW(f.good());
+    if (!(h.magic[0] == 'N' && h.magic[1] == 'R' && h.magic[2] == 'C' && h.magic[3] == 'K')) {
+        throw std::runtime_error("NRModel::loadState: '" + path + "' is not an NRCK checkpoint");
+    }
+    if (h.version != 2) {
+        throw std::runtime_error(fmt::format("NRModel::loadState: unsupported checkpoint version {}", h.version));
+    }
+    auto checkCount = [&](const char* name, uint32_t fileCount, size_t modelCount) {
+        if (fileCount != modelCount) {
+            throw std::runtime_error(fmt::format(
+                "NRModel::loadState: {} element count mismatch (file {}, model {}); NCRConfig.h differs from the one the checkpoint was trained with",
+                name, fileCount, modelCount));
+        }
+    };
+    checkCount("primary grid", h.primGridElems, mpPrimGrids->size());
+    checkCount("cluster grid", h.clsGridElems, mpClsGrids->size());
+    checkCount("DiffNet", h.diffParamElems, mpDiffParams->size());
+    checkCount("SpecNet", h.specParamElems, mpSpecParams->size());
+
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mTrainStream));
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mInferenceStream));
+
+    // f32 masters, then rebuild the f16 working copies the optimizers operate on.
+    readDeviceBlock(f, mpPrimGridsFull->data(), mpPrimGridsFull->bytes());
+    readDeviceBlock(f, mpClsGridsFull->data(), mpClsGridsFull->bytes());
+    readDeviceBlock(f, mpDiffParamsFull->data(), mpDiffParamsFull->bytes());
+    readDeviceBlock(f, mpSpecParamsFull->data(), mpSpecParamsFull->bytes());
+    castFullToHalf(mInferenceStream, mpPrimGridsFull->data(), mpPrimGrids->data(), (uint32_t)mpPrimGrids->size());
+    castFullToHalf(mInferenceStream, mpClsGridsFull->data(), mpClsGrids->data(), (uint32_t)mpClsGrids->size());
+    castFullToHalf(mInferenceStream, mpDiffParamsFull->data(), mpDiffParams->data(), (uint32_t)mpDiffParams->size());
+    castFullToHalf(mInferenceStream, mpSpecParamsFull->data(), mpSpecParams->data(), (uint32_t)mpSpecParams->size());
+
+    // EMA inference copies (what inference() actually reads).
+    readDeviceBlock(f, mpPrimGridsInference, mpPrimGrids->bytes());
+    readDeviceBlock(f, mpClsGridsInference, mpClsGrids->bytes());
+    readDeviceBlock(f, mpDiffParamsInference, mpDiffParams->bytes());
+    readDeviceBlock(f, mpSpecParamsInference, mpSpecParams->bytes());
+
+    CUDA_CHECK_THROW(cudaDeviceSynchronize());
+    fmt::print("NRModel::loadState: loaded {}\n", path);
+}

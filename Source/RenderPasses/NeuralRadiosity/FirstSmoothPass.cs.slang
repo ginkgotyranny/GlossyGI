@@ -65,6 +65,10 @@ struct FirstSmoothPass
 
     void generatePath(const uint2 pixel, out PathState path)
     {
+        // `out` parameters are undefined on entry; the caller's `= {}` does not carry
+        // over. Fully initialize before touching the flag bits (DXIL otherwise folds
+        // the undefined flags and isActive() reads back false).
+        path = {};
         path.setActive();
         path.id = pixel.x | (pixel.y << 12);  // | (sampleIdx << 24);
         path.thp = float3(1.f);

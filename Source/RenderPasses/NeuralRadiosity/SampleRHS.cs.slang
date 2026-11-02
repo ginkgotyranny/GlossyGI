@@ -79,6 +79,10 @@ struct SampleRHS
 
     void generatePath(const uint idx, out PathState path)
     {
+        // `out` parameters are undefined on entry; the caller's `= {}` does not carry
+        // over. Fully initialize before touching the flag bits (DXIL otherwise folds
+        // the undefined flags and isActive() reads back false).
+        path = {};
         path.setActive();
         path.id = idx;
         path.thp = float3(1.f);

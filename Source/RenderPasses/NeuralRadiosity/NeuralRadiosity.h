@@ -413,4 +413,6 @@ private:
     uint32_t mSaveCKPTInterval = 1000;
     bool mAdaptiveRHS = true;
     uint32_t mAdaptiveRHSStage = 0;
+    /// Checkpoint to load right after the model is created (property `loadModelPath`).
+    std::string mLoadModelPath;
 };
