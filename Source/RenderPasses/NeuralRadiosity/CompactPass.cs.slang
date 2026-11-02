@@ -12,6 +12,7 @@ RWTexture2D<float4> gDir;
 RWTexture2D<float4> gNormal;
 RWTexture2D<float4> gAlbedo;
 RWTexture2D<float> gRoughness;
+RWTexture2D<float4> gPrimaryPos;
 
 // First smooth buffers
 RWStructuredBuffer<uint> diffActive;
@@ -22,11 +23,7 @@ RWStructuredBuffer<DiffNetInput> diffInput;
 RWStructuredBuffer<uint> specActive;
 RWStructuredBuffer<uint> specIndex;
 RWStructuredBuffer<SpecNetInput> specInput;
-RWStructuredBuffer<PackedHitInfo> specVBuffer;
-RWStructuredBuffer<uint2> specPixel;
-RWStructuredBuffer<float4> specPos;
-RWStructuredBuffer<float4> specDir;
-RWStructuredBuffer<float> specRoughness;
+RWStructuredBuffer<uint> specSrc;
 
 
 struct CompactPass
@@ -60,11 +57,7 @@ struct CompactPass
         if (specActive[pixIdx] != 0)
         {
             const uint specIdx = specIndex[pixIdx];
-            specVBuffer[specIdx] = gVBuffer[pixel];
-            specPixel[specIdx] = pixel;
-            specPos[specIdx] = gPos[pixel];
-            specDir[specIdx] = gDir[pixel];
-            specRoughness[specIdx] = gRoughness[pixel];
+            specSrc[specIdx] = pixIdx;
             writeSpecInputGBuffer(
                 specInput, specIdx,
                 (Real3) (gPos[pixel].xyz),

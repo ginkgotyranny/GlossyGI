@@ -1,5 +1,7 @@
+#include "NCRConfig.h"
+
 #ifndef NR_USE_FP16
-#define NR_USE_FP16 1
+#define NR_USE_FP16 NCR_USE_FP16
 #endif
 
 #if NR_USE_FP16
@@ -15,27 +17,27 @@ typealias Real4 = float4;
 #endif
 
 #ifndef N_LEVELS
-#define N_LEVELS 6
+#define N_LEVELS NCR_N_LEVELS
 #endif
 
 #ifndef N_FEATURES_PER_LEVEL
-#define N_FEATURES_PER_LEVEL 2
+#define N_FEATURES_PER_LEVEL NCR_N_FEATURES_PER_LEVEL
 #endif
 
 #ifndef N_LEVELS_SPEC
-#define N_LEVELS_SPEC 6
+#define N_LEVELS_SPEC NCR_N_LEVELS_SPEC
 #endif
 
 #ifndef N_FEATURES_PER_LEVEL_SPEC
-#define N_FEATURES_PER_LEVEL_SPEC 4
+#define N_FEATURES_PER_LEVEL_SPEC NCR_N_FEATURES_PER_LEVEL_SPEC
 #endif
 
 #ifndef NUM_CLUSTERS
-#define NUM_CLUSTERS 4
+#define NUM_CLUSTERS NCR_NUM_CLUSTERS
 #endif
 
 #ifndef OUTPUT_DIM
-#define OUTPUT_DIM 16
+#define OUTPUT_DIM NCR_OUTPUT_DIM
 #endif
 
 

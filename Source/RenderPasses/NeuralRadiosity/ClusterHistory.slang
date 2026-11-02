@@ -348,16 +348,12 @@ int allocateClusterSlot(inout ClusterSet cs, float weakWeight, float tanLobe, fl
     int mj = (kClusterCount > 1) ? 1 : 0;
     float bestD = FLT_MAX;
 
-    // Constant trip counts: DXC's unroller cannot deduce the bound of a loop
-    // whose start depends on an outer induction variable (j = i + 1), so we
-    // iterate the full range and guard with j > i instead. Same pairs visited.
     [unroll]
-    for (uint i = 0; i < kClusterCount; ++i)
+    for (uint i = 0; i + 1 < kClusterCount; ++i)
     {
         [unroll]
-        for (uint j = 0; j < kClusterCount; ++j)
+        for (uint j = i + 1; j < kClusterCount; ++j)
         {
-            if (j <= i) continue;
             float denom = cs.sigma[i] + cs.sigma[j] + 0.5f * tanLobe * (cs.t[i] + cs.t[j]);
             float d = abs(cs.t[i] - cs.t[j]) / max(denom, epsScene);
             if (d < bestD)

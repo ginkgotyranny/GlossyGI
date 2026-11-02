@@ -16,6 +16,7 @@ RWTexture2D<float4> gDir;
 RWTexture2D<float4> gNormal;
 RWTexture2D<float4> gAlbedo;
 RWTexture2D<float> gRoughness;
+RWTexture2D<float4> gPrimaryPos;
 
 // Active buffers
 RWStructuredBuffer<uint> diffActive;
@@ -42,16 +43,10 @@ RWStructuredBuffer<uint> specIndex;
 #define RAY_FLAGS true
 #endif
 
+#include "NCRConfig.h"
+
 #ifndef SPECULAR_ROUGHNESS_THRESHOLD
-#define SPECULAR_ROUGHNESS_THRESHOLD 0.5f
-#endif
-
-#ifndef DEBUG_RENDER_DIFFUSE_ONLY
-#define DEBUG_RENDER_DIFFUSE_ONLY 0
-#endif
-
-#ifndef DEBUG_RENDER_SPECULAR_ONLY
-#define DEBUG_RENDER_SPECULAR_ONLY 0
+#define SPECULAR_ROUGHNESS_THRESHOLD NCR_SPECULAR_ROUGHNESS_THRESHOLD
 #endif
 
 struct FirstSmoothPass
@@ -64,8 +59,6 @@ struct FirstSmoothPass
     static const int kMaxRecursionDepth = 16;
     static const float kSpecularRoughnessThreshold = SPECULAR_ROUGHNESS_THRESHOLD;
     static const uint kRandomBase = 2654435761u;
-    static const bool kDebugDiffuseOnly = (DEBUG_RENDER_DIFFUSE_ONLY != 0);
-    static const bool kDebugSpecularOnly = (DEBUG_RENDER_SPECULAR_ONLY != 0);
 
     uint2 frameDim = {};
     uint frameCount = 0;
@@ -106,10 +99,15 @@ struct FirstSmoothPass
         float3 albedo = float3(0.f);
         float roughness = 1.f;
 
+        // World position of the primary hit. The loop below recurses through delta specular
+        // surfaces, so `pos` can end up behind a mirror and is not a valid reprojection
+        // address. Temporal reuse addresses history with the primary hit instead.
+        float3 primaryPos = float3(0.f);
+        float primaryValid = 0.f;
+
         // Initialize path state.
         PathState path = {};
         generatePath(pixel, path);
-        bool pathActive = true;  // Local tracking to work around Slang bitfield bug
 
         for (int i = 0; i < kMaxRecursionDepth; i++)
         {
@@ -124,12 +122,17 @@ struct FirstSmoothPass
                     color = gScene.envMap.eval(ray.dir) * path.thp;
                 }
                 path.terminate();
-                pathActive = false;
                 break;
             }
 
             // Load shading data. This is a long latency operation.
             ShadingData sd = loadShadingData(hit, ray.origin, ray.dir);
+
+            if (i == 0)
+            {
+                primaryPos = sd.posW;
+                primaryValid = 1.f;
+            }
 
             // Create material instance.
             let lod = ExplicitLodTextureSampler(0.f);
@@ -149,7 +152,6 @@ struct FirstSmoothPass
             {
                 color = bsdfProperties.emission * path.thp;
                 path.terminate();
-                pathActive = false;
                 break;
             }
 
@@ -157,7 +159,6 @@ struct FirstSmoothPass
             if (!sd.mtl.isDoubleSided() && !sd.frontFacing)
             {
                 path.terminate();
-                pathActive = false;
                 break;
             }
 
@@ -168,7 +169,7 @@ struct FirstSmoothPass
                 dir = path.dir;
                 normal = sd.frame.N;
                 roughness = bsdfProperties.roughness;
-                albedo = all(bsdfProperties.diffuseReflectionAlbedo < 0.01f) ?
+                albedo = all(bsdfProperties.diffuseReflectionAlbedo < 0.01f) ? 
                     bsdfProperties.specularReflectionAlbedo : bsdfProperties.diffuseReflectionAlbedo;
 
                 color = path.thp;
@@ -184,7 +185,6 @@ struct FirstSmoothPass
             if (!valid)
             {
                 path.terminate();
-                pathActive = false;
                 break;
             }
 
@@ -193,16 +193,13 @@ struct FirstSmoothPass
         }
 
         // Active mask
-        uint diffAct = (pathActive && (roughness > kSpecularRoughnessThreshold)) ? 1 : 0;
-        uint specAct = (pathActive && (roughness <= kSpecularRoughnessThreshold)) ? 1 : 0;
-        // Debug isolation: zero out the component that should not be rendered.
-        if (kDebugDiffuseOnly) specAct = 0;
-        if (kDebugSpecularOnly) diffAct = 0;
+        uint diffAct = (path.isActive() && (roughness > kSpecularRoughnessThreshold)) ? 1 : 0;
+        uint specAct = (path.isActive() && (roughness <= kSpecularRoughnessThreshold)) ? 1 : 0;
 
         // Write outputs
         gColor[pixel] = float4(color, 0.f);
         gVBuffer[pixel] = hit.pack();
-        gActive[pixel] = pathActive ? 1u : 0u;
+        gActive[pixel] = path.isActive();
 
         // Write G-Buffer
         gPos[pixel] = float4(pos, 1.f);
@@ -210,6 +207,7 @@ struct FirstSmoothPass
         gNormal[pixel] = float4(normal, 0.f);
         gAlbedo[pixel] = float4(albedo, 0.f);
         gRoughness[pixel] = roughness;
+        gPrimaryPos[pixel] = float4(primaryPos, primaryValid);
 
         // Write active mask
         diffActive[pixIdx] = diffAct;

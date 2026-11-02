@@ -20,6 +20,7 @@ RWTexture2D<float4> gDir;
 RWTexture2D<float4> gNormal;
 RWTexture2D<float4> gAlbedo;
 RWTexture2D<float> gRoughness;
+RWTexture2D<float4> gPrimaryPos;
 
 // First smooth buffers
 RWStructuredBuffer<uint> diffActive;

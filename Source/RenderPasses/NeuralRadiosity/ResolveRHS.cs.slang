@@ -23,23 +23,21 @@ RWStructuredBuffer<uint> specActive;
 RWStructuredBuffer<uint> specIndex;
 RWStructuredBuffer<SpecNetInput> specInput;
 RWStructuredBuffer<NetworkOutput> specColor;
-RWStructuredBuffer<PackedHitInfo> specVBuffer;
-RWStructuredBuffer<uint2> specPixel;
-RWStructuredBuffer<float4> specPos;
-RWStructuredBuffer<float4> specDir;
-RWStructuredBuffer<float> specRoughness;
+RWStructuredBuffer<uint> specSrc;
 
 
 #ifndef RAY_FLAGS
 #define RAY_FLAGS true
 #endif
 
+#include "NCRConfig.h"
+
 #ifndef NUM_CLUSTERS
-#define NUM_CLUSTERS 4
+#define NUM_CLUSTERS NCR_NUM_CLUSTERS
 #endif
 
 #ifndef NUM_RHS
-#define NUM_RHS 32
+#define NUM_RHS NCR_NUM_RHS_INIT
 #endif
 
 struct ResolveRHS
@@ -52,6 +50,8 @@ struct ResolveRHS
     uint batchCount = 0;
     uint diffSize = 0;
     uint specSize = 0;
+    uint enableDiff = 1;
+    uint enableSpec = 1;
 
     void execute(const uint idx)
     {
@@ -67,13 +67,13 @@ struct ResolveRHS
         lhsColor /= numRHS;
         lhsColor = select(isnan(lhsColor) | !isfinite(lhsColor), float4(0.f), lhsColor);
 
-        if (specActive[idx] != 0)
+        if (enableSpec != 0 && specActive[idx] != 0)
         {
             const uint specIdx = specIndex[idx];
             specColor[specIdx].clear();
             specColor[specIdx].fromFloat4(lhsColor);
         }
-        else if (diffActive[idx] != 0)
+        if (enableDiff != 0 && diffActive[idx] != 0)
         {
             const uint diffIdx = diffIndex[idx];
             diffColor[diffIdx].clear();

@@ -20,11 +20,7 @@ RWStructuredBuffer<uint> specActive;
 RWStructuredBuffer<uint> specIndex;
 RWStructuredBuffer<SpecNetInput> specInput;
 RWStructuredBuffer<NetworkOutput> specColor;
-RWStructuredBuffer<PackedHitInfo> specVBuffer;
-RWStructuredBuffer<uint2> specPixel;
-RWStructuredBuffer<float4> specPos;
-RWStructuredBuffer<float4> specDir;
-RWStructuredBuffer<float> specRoughness;
+RWStructuredBuffer<uint> specSrc;
 
 
 struct CompactBatch
@@ -33,6 +29,8 @@ struct CompactBatch
     uint batchCount = 0;
     uint diffSize = 0;
     uint specSize = 0;
+    uint enableDiff = 1;
+    uint enableSpec = 1;
 
     float3 bboxMin;
     float3 bboxMax;
@@ -41,7 +39,7 @@ struct CompactBatch
     {
         if (any(idx >= batchSize)) return;
 
-        if (diffActive[idx] != 0)
+        if (enableDiff != 0 && diffActive[idx] != 0)
         {
             const uint diffIdx = diffIndex[idx];
             writeDiffInputGBuffer(
@@ -54,14 +52,10 @@ struct CompactBatch
             );
         }
 
-        if (specActive[idx] != 0)
+        if (enableSpec != 0 && specActive[idx] != 0)
         {
             const uint specIdx = specIndex[idx];
-            specVBuffer[specIdx] = allVBuffer[idx];
-            specPixel[specIdx] = uint2(idx & 0xFFFu, idx >> 12);
-            specPos[specIdx] = allPos[idx];
-            specDir[specIdx] = allDir[idx];
-            specRoughness[specIdx] = allRoughness[idx];
+            specSrc[specIdx] = idx;
             writeSpecInputGBuffer(
                 specInput, specIdx,
                 (Real3) allPos[idx].xyz,

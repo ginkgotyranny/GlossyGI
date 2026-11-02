@@ -2,8 +2,6 @@
 
 #include "Utils/Math/VectorJson.h"
 
-#include <imgui.h>
-
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -29,7 +27,7 @@ namespace
     const std::string kOutputNormal = "normal";
     const std::string kOutputAlbedo = "albedo";
     const std::string kOutputRoughness = "roughness";
-
+    const std::string kOutputPrimaryPos = "primaryPos";
     const Falcor::ChannelList kOutputChannels =
     {
         { kOutputColor,         "gColor",       "Output color",                       false,  ResourceFormat::RGBA32Float },
@@ -40,6 +38,7 @@ namespace
         { kOutputNormal,        "gNormal",      "Output normal",                      false,  ResourceFormat::RGBA32Float },
         { kOutputAlbedo,        "gAlbedo",      "Output albedo",                      false,  ResourceFormat::RGBA32Float },
         { kOutputRoughness,     "gRoughness",   "Output roughness",                   false,  ResourceFormat::R32Float },
+        { kOutputPrimaryPos,    "gPrimaryPos",  "Primary hit position (xyz), valid flag (w)", false, ResourceFormat::RGBA32Float },
     };
 
     // Program files.
@@ -55,8 +54,14 @@ namespace
     const std::string kResolveBatchFile = "RenderPasses/NeuralRadiosity/ResolveBatch.cs.slang";
     
     const std::string kConeTraceFile = "RenderPasses/NeuralRadiosity/ConeTrace.cs.slang";
+    const std::string kSpecPrimaryFile = "RenderPasses/NeuralRadiosity/SpecPrimary.cs.slang";
+    const std::string kClusterReprojectFile = "RenderPasses/NeuralRadiosity/ClusterReproject.cs.slang";
+    const std::string kConeTraceScreenFile = "RenderPasses/NeuralRadiosity/ConeTraceScreen.cs.slang";
+    const std::string kClusterSpatialReuseFile = "RenderPasses/NeuralRadiosity/ClusterSpatialReuse.cs.slang";
     const std::string kPrefiltEnvCubemapFile = "RenderPasses/NeuralRadiosity/PrefiltEnvCubemap.slang";
-    const std::string kDebugDumpPassFile = "RenderPasses/NeuralRadiosity/DebugDumpPass.cs.slang";
+
+    /// Thread group size of the two compacted-index cluster passes.
+    constexpr uint32_t kClusterGroupSize = 64;
 
     const FileDialogFilterVec kCameraJsonFilters = {
         {"json", "JSON Files"},
@@ -67,11 +72,17 @@ namespace
     };
 
     const char kEnableTemporalSpecReuse[] = "enableTemporalSpecReuse";
-    const char kConeTraceReuseMode[] = "coneTraceReuseMode";
-    const char kTemporalSpecClusterMode[] = "temporalSpecClusterMode";
+    const char kEnableClusterSpatialReuse[] = "enableClusterSpatialReuse";
+    const char kUseReferenceConeTrace[] = "useReferenceConeTrace";
+    const char kClusterMaxRays[] = "clusterMaxRays";
+    const char kClusterSigmaPriorScale[] = "clusterSigmaPriorScale";
+    const char kClusterAssignThreshold[] = "clusterAssignThreshold";
+    const char kClusterAlphaWeight[] = "clusterAlphaWeight";
+    const char kClusterLockCount[] = "clusterLockCount";
+    const char kClusterUnlockStreak[] = "clusterUnlockStreak";
+    const char kEnablePostFilter[] = "enablePostFilter";
     const char kEnableFXAA[] = "enableFXAA";
-    const char kLoadModelPath[] = "loadModelPath";
-    const char kRenderMode[] = "renderMode";
+    const char kEnableMirrorAlbedo[] = "enableMirrorAlbedo";
 
     float3 parseFloat3(const nlohmann::json& value, std::string_view key)
     {
@@ -98,6 +109,13 @@ namespace
         FALCOR_ASSERT(pEnvMap);
         const uint32_t angularSize = std::max(1u, std::min(pEnvMap->getWidth() / 4u, pEnvMap->getHeight() / 2u));
         return floorPowerOfTwo(angularSize);
+    }
+
+    /// Scene-scale epsilon guarding the cluster residual denominators. All three
+    /// cluster passes must agree on this value or their gates disagree.
+    float clusterSceneEpsilon(const AABB& aabb)
+    {
+        return 1e-4f * std::max(length(aabb.extent()), 1e-3f);
     }
 
     uint32_t computeMipCount(uint32_t faceSize)
@@ -132,25 +150,26 @@ NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) :
             mEnableRenderSpecTemporalReuse = value;
         else if (key == kEnableFXAA)
             mEnableFXAA = value;
-        else if (key == kConeTraceReuseMode || key == kTemporalSpecClusterMode)
-            mConeTraceReuseMode = value;
-        else if (key == kLoadModelPath)
-        {
-            std::string path = value;
-            mLoadModelPath = path;
-        }
-        else if (key == kRenderMode)
-        {
-            std::string mode = value;
-            if (mode == "train")
-                mRenderMode = RenderMode::Train;
-            else if (mode == "onlineTrain")
-                mRenderMode = RenderMode::OnlineTrain;
-            else if (mode == "render")
-                mRenderMode = RenderMode::Render;
-            else if (mode == "idle")
-                mRenderMode = RenderMode::Idle;
-        }
+        else if (key == kEnableMirrorAlbedo)
+            mEnableMirrorAlbedo = value;
+        else if (key == kEnableClusterSpatialReuse)
+            mEnableClusterSpatialReuse = value;
+        else if (key == kUseReferenceConeTrace)
+            mUseReferenceConeTrace = value;
+        else if (key == kClusterMaxRays)
+            mClusterMaxRays = value;
+        else if (key == kClusterSigmaPriorScale)
+            mClusterSigmaPriorScale = value;
+        else if (key == kClusterAssignThreshold)
+            mClusterAssignThreshold = value;
+        else if (key == kClusterAlphaWeight)
+            mClusterAlphaWeight = value;
+        else if (key == kClusterLockCount)
+            mClusterLockCount = value;
+        else if (key == kClusterUnlockStreak)
+            mClusterUnlockStreak = value;
+        else if (key == kEnablePostFilter)
+            mEnablePostFilter = value;
         else
             logWarning("Unknown property '{}' in NeuralRadiosity properties.", key);
     }
@@ -158,23 +177,26 @@ NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) :
     // Create random engine
     mpSampleGenerator = SampleGenerator::create(mpDevice, SAMPLE_GENERATOR_DEFAULT);
 
-    // Environment-variable-driven debug switches (for headless/CI runs).
-    if (const char* v = std::getenv("NCR_HASH_STATS"))
-    {
-        mEnableHashCollisionStats = (v[0] == '1');
-    }
-    if (const char* v = std::getenv("NCR_DUMP_DEBUG"))
-    {
-        mDebugDumpRequested = (v[0] == '1');
-    }
+    // Pick the ConeTrace specialization that matches who still uses it. Must run
+    // after the properties above, which can change who that is.
+    setConeParameters(mRenderMode == RenderMode::Train);
 }
 
 Properties NeuralRadiosity::getProperties() const
 {
     Properties props;
     props[kEnableTemporalSpecReuse] = mEnableRenderSpecTemporalReuse;
-    props[kConeTraceReuseMode] = mConeTraceReuseMode;
+    props[kEnableClusterSpatialReuse] = mEnableClusterSpatialReuse;
+    props[kUseReferenceConeTrace] = mUseReferenceConeTrace;
+    props[kClusterMaxRays] = mClusterMaxRays;
+    props[kClusterSigmaPriorScale] = mClusterSigmaPriorScale;
+    props[kClusterAssignThreshold] = mClusterAssignThreshold;
+    props[kClusterAlphaWeight] = mClusterAlphaWeight;
+    props[kClusterLockCount] = mClusterLockCount;
+    props[kClusterUnlockStreak] = mClusterUnlockStreak;
+    props[kEnablePostFilter] = mEnablePostFilter;
     props[kEnableFXAA] = mEnableFXAA;
+    props[kEnableMirrorAlbedo] = mEnableMirrorAlbedo;
     return props;
 }
 
@@ -217,67 +239,18 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
     // Prepare resources.
     prepareResources(pRenderContext, renderData);
 
-    if (mEnableRenderSpecTemporalReuse && (mRenderMode == RenderMode::Render || mRenderMode == RenderMode::OnlineTrain))
-    {
-        updateRenderTemporalHistory(pRenderContext);
-    }
-
     mVarsChanged = false;
-
-    // Debug: reset hash collision counters at frame start.
-    if (mEnableHashCollisionStats && mpNRModel)
-    {
-        mpNRModel->resetCollisionStats();
-    }
 
     // Train the model.
     if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
     {
-        train(pRenderContext);
+        train(pRenderContext, renderData);
     }
 
     // Render the scene.
     if (mRenderMode == RenderMode::Render || mRenderMode == RenderMode::OnlineTrain)
     {
         render(pRenderContext, renderData);
-    }
-
-    // Debug: read back hash collision counters and log.
-    if (mEnableHashCollisionStats && mpNRModel)
-    {
-        // Sync both CUDA streams so counter writes are visible to host.
-        pRenderContext->waitForCuda(mpNRModel->stream(false));
-        pRenderContext->waitForCuda(mpNRModel->stream(true));
-        const auto stats = mpNRModel->getCollisionStats();
-        const uint32_t primCollisions = (stats.primTotalQueries > stats.primUniqueSlots)
-            ? (stats.primTotalQueries - stats.primUniqueSlots) : 0u;
-        const uint32_t clsCollisions = (stats.clsTotalQueries > stats.clsUniqueSlots)
-            ? (stats.clsTotalQueries - stats.clsUniqueSlots) : 0u;
-        NCR_LOG(this, "[NCR hash collisions] frame={} prim: hashQueries={} uniqueSlots={} collisions={} | "
-                "cls: hashQueries={} uniqueSlots={} collisions={}",
-                mFrameCount,
-                stats.primTotalQueries, stats.primUniqueSlots, primCollisions,
-                stats.clsTotalQueries, stats.clsUniqueSlots, clsCollisions);
-
-        // Specular level-usage histogram: (upperLevel, lowerLevel) pair counts.
-        // Diffuse (HashGrid) always concatenates all levels, so only spec is logged.
-        std::vector<uint32_t> hist;
-        mpNRModel->getLevelHistogram(hist);
-        const uint32_t nLevels = mpNRModel->getNumLevels();
-        uint64_t totalQueries = 0;
-        for (auto c : hist) totalQueries += c;
-        std::string histStr;
-        for (uint32_t u = 0; u < nLevels; ++u) {
-            for (uint32_t l = 0; l < nLevels; ++l) {
-                const uint32_t cnt = hist[u * nLevels + l];
-                if (cnt > 0) {
-                    if (!histStr.empty()) histStr += ", ";
-                    histStr += fmt::format("U{}L{}={}", u, l, cnt);
-                }
-            }
-        }
-        NCR_LOG(this, "[NCR spec level usage] frame={} totalQueries={} pairs=[{}]",
-                mFrameCount, totalQueries, histStr.empty() ? "none" : histStr);
     }
 
     mFrameCount++;
@@ -366,22 +339,96 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
     {
         mVarsChanged = true;
     }
+    widget.checkbox("Mirror Albedo", mEnableMirrorAlbedo);
+    widget.tooltip("Trace one mirror ray and replace the environment color with the hit albedo.");
 
-    if (widget.checkbox("Temporal Spec Reuse", mEnableRenderSpecTemporalReuse))
+    if (auto group = widget.group("Spatiotemporal Cluster Reuse", true))
     {
-        mVarsChanged = true;
-        if (mpRenderSpecTemporalHistory)
+        if (group.checkbox("Enable", mEnableRenderSpecTemporalReuse))
+        {
+            // Toggling changes whether ConeTrace is still on the render path, which
+            // in turn changes its NUM_SPEC_RAYS specialization.
+            setConeParameters(mRenderMode == RenderMode::Train);
+            clearRenderTemporalHistory(mpDevice->getRenderContext());
+            mVarsChanged = true;
+        }
+        group.tooltip(
+            "On: 1 ray/pixel baseline with world-anchored cluster history.\n"
+            "Off: original per-frame group-wide K-Means cone trace."
+        );
+
+        if (group.button("Clear History"))
         {
             clearRenderTemporalHistory(mpDevice->getRenderContext());
         }
-    }
 
-    if (widget.dropdown("Cone Trace Reuse Mode", mConeTraceReuseMode))
-    {
-        mVarsChanged = true;
-        if (mpRenderSpecTemporalHistory)
+        if (!mEnableRenderSpecTemporalReuse)
         {
-            clearRenderTemporalHistory(mpDevice->getRenderContext());
+            if (group.checkbox("Reference T=128", mUseReferenceConeTrace))
+            {
+                setConeParameters(mRenderMode == RenderMode::Train);
+            }
+            group.tooltip(
+                "Run the render path at the training ray count so its (t_k, sigma_k, w_k)\n"
+                "can be compared per pixel against the T=128 reference. Very slow."
+            );
+        }
+
+        group.checkbox("Spatial Reuse", mEnableClusterSpatialReuse);
+
+        group.checkbox("Clear On Geometry Moved", mClearHistoryOnGeometryMoved);
+        group.tooltip(
+            "Off by default. A scene with a playing animation raises GeometryMoved\n"
+            "every frame, and clearing on it would keep the history permanently empty\n"
+            "(1 unfiltered ray per pixel). Moved geometry is handled per cluster by\n"
+            "the cone test and the outlier path instead."
+        );
+
+        group.var("Max Rays / Pixel", mClusterMaxRays, 1u, 4u);
+        group.tooltip("Hard cap. Extra rays are only traced when a sample is an outlier.");
+
+        group.var("Assign Threshold (lambda)", mClusterAssignThreshold, 0.05f, 8.f, 0.01f);
+        group.tooltip(
+            "How finely the cone is partitioned into depth modes.\n"
+            "Lower = more, narrower modes = closer to the K-Means reference."
+        );
+        group.var("Lock Count (N_lock)", mClusterLockCount, 1.f, 255.f, 1.f);
+        group.tooltip(
+            "Accumulate random GGX samples with alpha = 1/(n+1) until this many\n"
+            "observations, then freeze the mixture. Matches the old T=32 one-shot."
+        );
+        group.var("Unlock Streak (M)", mClusterUnlockStreak, 1u, 8u);
+        group.tooltip(
+            "Locked pixels unlock only after M consecutive residual outliers.\n"
+            "A single near/far coin-flip on a silhouette does not reopen the mix.\n"
+            "Cone-fail empties the pixel immediately via reprojection."
+        );
+        group.var("Weight EMA (alpha_w)", mClusterAlphaWeight, 0.01f, 1.f, 0.005f);
+        group.tooltip("Unused: weights use 1/(n+1) until lock. Kept for property compatibility.");
+        group.var("Max Count (N_max)", mClusterMaxCount, 1.f, 255.f, 1.f);
+        group.tooltip("Per-mode (mu, sigma) count cap during the accumulation window.");
+        group.var("Release Weight", mClusterWeakWeight, 0.f, 0.5f, 0.005f);
+        group.var("Sigma Prior Scale", mClusterSigmaPriorScale, 0.f, 2.f, 0.01f);
+        group.tooltip(
+            "Newborn sigma = scale * tanLobe * t. 0 reproduces the training path's\n"
+            "singleton clsScale exactly; Welford grows sigma from later hits."
+        );
+
+        if (auto reproj = group.group("Reprojection"))
+        {
+            reproj.var("Normal Threshold", mClusterNormalThreshold, 0.f, 1.f, 0.005f);
+            reproj.var("Roughness Threshold", mClusterRoughnessThreshold, 0.f, 1.f, 0.005f);
+            reproj.var("Position Tolerance", mClusterPosThresholdRel, 0.f, 0.5f, 0.001f);
+        }
+
+        if (auto spatial = group.group("Spatial Gather"))
+        {
+            spatial.var("Taps", mClusterNumTaps, 0u, 16u);
+            spatial.var("Radius Scale", mClusterGatherRadiusScale, 0.f, 8.f, 0.05f);
+            spatial.var("Max Radius (px)", mClusterMaxGatherRadius, 1.f, 32.f, 0.5f);
+            spatial.var("Gamma Max", mClusterGammaMax, 0.f, 1.f, 0.01f);
+            spatial.var("Gamma Min", mClusterGammaMin, 0.f, 1.f, 0.01f);
+            spatial.var("Confidence Count", mClusterConfidenceCount, 1.f, 255.f, 1.f);
         }
     }
 
@@ -393,288 +440,44 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
     {
         mVarsChanged = true;
     }
-
-    if (auto debugGroup = widget.group("Debug: isolate / freeze", false))
-    {
-        debugGroup.text("Render only one lobe (rebuilds shaders on toggle)");
-        if (debugGroup.checkbox("Render Diffuse Only", mDebugRenderDiffuseOnly))
-        {
-            if (mDebugRenderDiffuseOnly) mDebugRenderSpecularOnly = false;
-            mVarsChanged = true;
-        }
-        if (debugGroup.checkbox("Render Specular Only", mDebugRenderSpecularOnly))
-        {
-            if (mDebugRenderSpecularOnly) mDebugRenderDiffuseOnly = false;
-            mVarsChanged = true;
-        }
-
-        debugGroup.separator();
-
-        debugGroup.text("Freeze training updates (network still inferred)");
-        if (debugGroup.checkbox("Disable Diffuse Update", mDisableDiffUpdate))
-        {
-            mVarsChanged = true;
-        }
-        if (debugGroup.checkbox("Disable Specular Update", mDisableSpecUpdate))
-        {
-            mVarsChanged = true;
-        }
-
-        debugGroup.separator();
-
-        debugGroup.text("Freeze individual optimizer step (fwd/bwd still run)");
-        if (debugGroup.checkbox("Freeze PrimGrid Opt", mFreezePrimGridOpt))
-        {
-            if (mpNRModel) mpNRModel->setFreezePrimGridOpt(mFreezePrimGridOpt);
-        }
-        if (debugGroup.checkbox("Freeze ClsGrid Opt", mFreezeClsGridOpt))
-        {
-            if (mpNRModel) mpNRModel->setFreezeClsGridOpt(mFreezeClsGridOpt);
-        }
-        if (debugGroup.checkbox("Freeze DiffNet Opt", mFreezeDiffNetOpt))
-        {
-            if (mpNRModel) mpNRModel->setFreezeDiffNetOpt(mFreezeDiffNetOpt);
-        }
-        if (debugGroup.checkbox("Freeze SpecNet Opt", mFreezeSpecNetOpt))
-        {
-            if (mpNRModel) mpNRModel->setFreezeSpecNetOpt(mFreezeSpecNetOpt);
-        }
-
-        debugGroup.separator();
-
-        if (debugGroup.checkbox("Verbose Scene Log", mEnableDebugLog))
-        {
-            // No shader rebuild needed; next frame will re-emit logs.
-        }
-        if (debugGroup.checkbox("Hash Collision Stats", mEnableHashCollisionStats))
-        {
-            if (mpNRModel) mpNRModel->setCollisionStatsEnabled(mEnableHashCollisionStats);
-        }
-        if (debugGroup.checkbox("Show Spec Level", mDebugShowSpecLevel))
-        {
-            mVarsChanged = true;
-        }
-
-        debugGroup.separator();
-        debugGroup.text("One-shot: dump debug images (spec level, material, normal, tanLobe, cluster mean) to debug_dump_<frame>/");
-        if (debugGroup.button("Dump Debug Images"))
-        {
-            mDebugDumpRequested = true;
-            mVarsChanged = true; // rebuild shaders with DEBUG_DUMP=1 next frame
-        }
-    }
-
-    // --- Training Parameters tab (raw ImGui for DragFloat support) ---
-    if (ImGui::CollapsingHeader("Training Parameters", ImGuiTreeNodeFlags_DefaultOpen))
-    {
-        if (!mpNRModel)
-        {
-            ImGui::TextDisabled("No model loaded");
-            return;
-        }
-
-        // Optimizer step count
-        ImGui::Text("Optimizer step: %u", mpNRModel->getOptimizerStep());
-        ImGui::Separator();
-
-        // --- Learning rates ---
-        ImGui::Text("Learning Rate (Adam)");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Sync All"))
-        {
-            float lr = mpNRModel->getDiffNetLr();
-            mpNRModel->setPrimGridLr(lr);
-            mpNRModel->setClsGridLr(lr);
-            mpNRModel->setDiffNetLr(lr);
-            mpNRModel->setSpecNetLr(lr);
-        }
-
-        ImGui::PushItemWidth(80);
-        if (ImGui::DragFloat("##PrimGridLr", &mParamPrimGridLr, 1e-4f, 1e-6f, 1.f, "%.6f"))
-        {
-            mpNRModel->setPrimGridLr(mParamPrimGridLr);
-        }
-        ImGui::SameLine();
-        ImGui::Text("PrimGrid");
-
-        if (ImGui::DragFloat("##ClsGridLr", &mParamClsGridLr, 1e-4f, 1e-6f, 1.f, "%.6f"))
-        {
-            mpNRModel->setClsGridLr(mParamClsGridLr);
-        }
-        ImGui::SameLine();
-        ImGui::Text("ClsGrid");
-
-        if (ImGui::DragFloat("##DiffNetLr", &mParamDiffNetLr, 1e-4f, 1e-6f, 1.f, "%.6f"))
-        {
-            mpNRModel->setDiffNetLr(mParamDiffNetLr);
-        }
-        ImGui::SameLine();
-        ImGui::Text("DiffNet");
-
-        if (ImGui::DragFloat("##SpecNetLr", &mParamSpecNetLr, 1e-4f, 1e-6f, 1.f, "%.6f"))
-        {
-            mpNRModel->setSpecNetLr(mParamSpecNetLr);
-        }
-        ImGui::SameLine();
-        ImGui::Text("SpecNet");
-        ImGui::PopItemWidth();
-
-        ImGui::Separator();
-
-        // --- EMA decay ---
-        ImGui::Text("EMA Decay");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Sync All EMA"))
-        {
-            float d = mpNRModel->getDiffNetEmaDecay();
-            mpNRModel->setPrimGridEmaDecay(d);
-            mpNRModel->setClsGridEmaDecay(d);
-            mpNRModel->setDiffNetEmaDecay(d);
-            mpNRModel->setSpecNetEmaDecay(d);
-        }
-
-        ImGui::PushItemWidth(80);
-        if (ImGui::DragFloat("##PrimGridEma", &mParamPrimGridEmaDecay, 0.001f, 0.f, 1.f, "%.4f"))
-        {
-            mpNRModel->setPrimGridEmaDecay(mParamPrimGridEmaDecay);
-        }
-        ImGui::SameLine();
-        ImGui::Text("PrimGrid EMA");
-
-        if (ImGui::DragFloat("##ClsGridEma", &mParamClsGridEmaDecay, 0.001f, 0.f, 1.f, "%.4f"))
-        {
-            mpNRModel->setClsGridEmaDecay(mParamClsGridEmaDecay);
-        }
-        ImGui::SameLine();
-        ImGui::Text("ClsGrid EMA");
-
-        if (ImGui::DragFloat("##DiffNetEma", &mParamDiffNetEmaDecay, 0.001f, 0.f, 1.f, "%.4f"))
-        {
-            mpNRModel->setDiffNetEmaDecay(mParamDiffNetEmaDecay);
-        }
-        ImGui::SameLine();
-        ImGui::Text("DiffNet EMA");
-
-        if (ImGui::DragFloat("##SpecNetEma", &mParamSpecNetEmaDecay, 0.001f, 0.f, 1.f, "%.4f"))
-        {
-            mpNRModel->setSpecNetEmaDecay(mParamSpecNetEmaDecay);
-        }
-        ImGui::SameLine();
-        ImGui::Text("SpecNet EMA");
-        ImGui::PopItemWidth();
-
-        ImGui::Separator();
-
-        // --- Algorithm parameters ---
-        ImGui::Text("Algorithm Parameters");
-
-        ImGui::PushItemWidth(80);
-        if (ImGui::DragInt("##NumSpecRays", (int*)&mNumSpecRays, 1, 1, 512))
-        {
-            mVarsChanged = true;
-        }
-        ImGui::SameLine();
-        ImGui::Text("Num Spec Rays (%d)", mNumSpecRays);
-
-        if (ImGui::DragInt("##NumKMeansIters", (int*)&mNumKMeansIters, 1, 1, 50))
-        {
-            mVarsChanged = true;
-        }
-        ImGui::SameLine();
-        ImGui::Text("KMeans Iters (%d)", mNumKMeansIters);
-
-        if (ImGui::DragFloat("##InterpRatio", &mParamInterpRatio, 0.01f, 0.01f, 10.f, "%.4f"))
-        {
-            mpNRModel->setInterpRatio(mParamInterpRatio);
-            mVarsChanged = true; // grid scales changed
-        }
-        ImGui::SameLine();
-        ImGui::Text("InterpRatio (%.4f)", mParamInterpRatio);
-
-        if (ImGui::DragFloat("##RoughnessThreshold", &mSpecularRoughnessThreshold, 0.01f, 0.f, 1.f, "%.3f"))
-        {
-            mVarsChanged = true;
-        }
-        ImGui::SameLine();
-        ImGui::Text("Roughness Threshold (%.3f)", mSpecularRoughnessThreshold);
-
-        if (ImGui::DragFloat("##RSRRProb", &mRSRRProb, 0.01f, 0.f, 1.f, "%.3f"))
-        {
-            mVarsChanged = true;
-        }
-        ImGui::SameLine();
-        ImGui::Text("Russian Roulette Prob (%.3f)", mRSRRProb);
-        ImGui::PopItemWidth();
-    }
 }
 
 void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
 {
     mpScene = pScene;
+    if (mpScene)
+      mpScene->getCamera()->setIsAnimated(false);
     mpFirstSmoothPass = nullptr;
     mpConeTrace = nullptr;
+    mpSpecPrimary = nullptr;
+    mpClusterReproject = nullptr;
+    mpConeTraceScreen = nullptr;
+    mpClusterSpatialReuse = nullptr;
     mpResolvePass = nullptr;
     mpPostFilterPass = nullptr;
     mpPostFXAAPass = nullptr;
     mpPrefiltEnvInitPass = nullptr;
     mpPrefiltEnvDownsamplePass = nullptr;
     mpPrefiltEnvCubemap = nullptr;
-    mpRenderSpecTemporalHistory = nullptr;
-    mRenderSpecTemporalHistoryValid = false;
-    mHasRenderCameraViewProj = false;
+    mpClusterHistory[0] = nullptr;
+    mpClusterHistory[1] = nullptr;
+    mClusterHistoryValid = false;
     mPrefiltEnvDirty = true;
     mVarsChanged = true;
-
-    // Verbose scene dump for cross-scene parameter comparison.
-    NCR_LOG(this, "================ NCR setScene ================");
-    if (mpScene)
-    {
-        const AABB& bb = mpScene->getSceneBounds();
-        NCR_LOG(this, "  scene AABB min = ({}, {}, {})", bb.minPoint.x, bb.minPoint.y, bb.minPoint.z);
-        NCR_LOG(this, "  scene AABB max = ({}, {}, {})", bb.maxPoint.x, bb.maxPoint.y, bb.maxPoint.z);
-        const float3 diag = bb.maxPoint - bb.minPoint;
-        NCR_LOG(this, "  scene AABB diag = ({}, {}, {})", diag.x, diag.y, diag.z);
-        NCR_LOG(this, "  useEmissiveLights = {}", mpScene->useEmissiveLights());
-        NCR_LOG(this, "  useEnvLight       = {}", mpScene->useEnvLight());
-        NCR_LOG(this, "  scene light count = {}", mpScene->getLightCount());
-        const auto& pEnvMap = mpScene->getEnvMap();
-        if (pEnvMap && pEnvMap->getEnvMap())
-        {
-            NCR_LOG(this, "  envMap size       = {}x{}", pEnvMap->getEnvMap()->getWidth(), pEnvMap->getEnvMap()->getHeight());
-            NCR_LOG(this, "  envMap intensity  = {}", pEnvMap->getIntensity());
-            NCR_LOG(this, "  envMap rotation   = ({}, {}, {})", pEnvMap->getRotation().x, pEnvMap->getRotation().y, pEnvMap->getRotation().z);
-        }
-        else
-        {
-            NCR_LOG(this, "  envMap            = <none>");
-        }
-        const auto& pCam = mpScene->getCamera();
-        if (pCam)
-        {
-            const float3& pos = pCam->getPosition();
-            const float3& tgt = pCam->getTarget();
-            NCR_LOG(this, "  camera pos        = ({}, {}, {})", pos.x, pos.y, pos.z);
-            NCR_LOG(this, "  camera target     = ({}, {}, {})", tgt.x, tgt.y, tgt.z);
-            NCR_LOG(this, "  camera focalLen   = {}", pCam->getFocalLength());
-            NCR_LOG(this, "  camera aspect     = {}", pCam->getAspectRatio());
-        }
-    }
-    else
-    {
-        NCR_LOG(this, "  scene = <null>");
-    }
-    NCR_LOG(this, "  mNumClusters      = {}", mNumClusters);
-    NCR_LOG(this, "  mNumSpecRays      = {}", mNumSpecRays);
-    NCR_LOG(this, "  mNumKMeansIters   = {}", mNumKMeansIters);
-    NCR_LOG(this, "  mSpecularRoughnessThreshold = {}", mSpecularRoughnessThreshold);
-    NCR_LOG(this, "  mBatchSize        = {}", mBatchSize);
-    NCR_LOG(this, "  mNumRHS           = {}", mNumRHS);
-    NCR_LOG(this, "=============================================");
 }
 
 void NeuralRadiosity::onSceneUpdates(RenderContext* pRenderContext, IScene::UpdateFlags sceneUpdates)
 {
-    if (is_set(sceneUpdates, IScene::UpdateFlags::GeometryMoved))
+    // Neither camera nor geometry motion invalidates history wholesale. Clusters
+    // carry world anchors that are validated one at a time against the current
+    // cone, and a mode whose object moved but stayed in the cone is replaced by
+    // the outlier path within a frame or two.
+    //
+    // This deliberately does *not* clear on GeometryMoved: any scene with a
+    // playing animation raises that flag every single frame, which would wipe the
+    // history continuously and silently reduce the render path to one unfiltered
+    // ray per pixel. That is exactly the failure mode this design replaces.
+    if (mClearHistoryOnGeometryMoved && is_set(sceneUpdates, IScene::UpdateFlags::GeometryMoved))
     {
         clearRenderTemporalHistory(pRenderContext);
     }
@@ -697,29 +500,20 @@ void NeuralRadiosity::render(RenderContext* pRenderContext, const RenderData& re
     firstSmoothPass(pRenderContext, renderData);
     // Compact pass.
     compactPass(pRenderContext, renderData);
-
-    // Cone tracing pass.
-    coneTrace(pRenderContext, mpRenderBatch);
+    // Cone tracing: either the spatiotemporal cluster reuse pipeline or the
+    // original per-frame group-wide K-Means.
+    coneTrace(pRenderContext, renderData, mpRenderBatch);
     // Model querying: CUDA kernel.
     modelInferenceCUDA(pRenderContext, mpRenderBatch);
     // Resolve pass.
     resolvePass(pRenderContext, renderData);
     // Post-process filtering pass.
     postFilterPass(pRenderContext, renderData);
-
-    // Debug image dump: one-shot. After ConeTrace wrote debug buffers (with
-    // DEBUG_DUMP=1), run DebugDumpPass to copy buffers into textures, then
-    // save all images to disk. Then request shader rebuild to restore
-    // DEBUG_DUMP=0 for normal rendering.
-    if (mDebugDumpRequested)
-    {
-        dumpDebugImages(pRenderContext, renderData);
-        mDebugDumpRequested = false;
-        mVarsChanged = true; // rebuild shaders without DEBUG_DUMP next frame
-    }
+    // Snapshot the G-Buffer for next frame's reprojection.
+    if (useClusterReuse()) savePrevGBuffer(pRenderContext, renderData);
 }
 
-void NeuralRadiosity::train(RenderContext* pRenderContext)
+void NeuralRadiosity::train(RenderContext* pRenderContext, const RenderData& renderData)
 {
     // Sample random smooth points (LHS)
     randomSmooth(pRenderContext, mpTrainLHSBatch);
@@ -730,8 +524,9 @@ void NeuralRadiosity::train(RenderContext* pRenderContext)
     {
         // 1. Compaction
         compactBatch(pRenderContext, mpTrainRHSBatch);
-        // 2. Cone tracing
-        coneTrace(pRenderContext, mpTrainRHSBatch);
+        // 2. Cone tracing (RHS is diffuse-only, so this is a no-op).
+        if (mpTrainRHSBatch->needSpec)
+            coneTraceBatch(pRenderContext, mpTrainRHSBatch, renderData);
         // 3. Model inference
         modelInferenceCUDA(pRenderContext, mpTrainRHSBatch);
         // 4. Resolve
@@ -743,7 +538,7 @@ void NeuralRadiosity::train(RenderContext* pRenderContext)
         // 1. Compaction
         compactBatch(pRenderContext, mpTrainLHSBatch);
         // 2. Cone tracing
-        coneTrace(pRenderContext, mpTrainLHSBatch);
+        coneTraceBatch(pRenderContext, mpTrainLHSBatch, renderData);
         // 3. Resolve RHS color (write to lhs->diffColor/specColor)
         resolveRHS(pRenderContext);
         // 4. Model forward (target should be written to diffColor/specColor)
@@ -828,11 +623,7 @@ void NeuralRadiosity::compactPass(RenderContext* pRenderContext, const RenderDat
     var["specActive"] = mpRenderBatch->specActive;
     var["specIndex"] = mpRenderBatch->specIndex;
     var["specInput"] = mpRenderBatch->specInput;
-    var["specVBuffer"] = mpRenderBatch->specVBuffer;
-    var["specPixel"] = mpRenderBatch->specPixel;
-    var["specPos"] = mpRenderBatch->specPos;
-    var["specDir"] = mpRenderBatch->specDir;
-    var["specRoughness"] = mpRenderBatch->specRoughness;
+    var["specSrc"] = mpRenderBatch->specSrc;
 
     mpCompactPass->execute(pRenderContext, uint3(mFrameDim, 1));
 }
@@ -855,17 +646,8 @@ void NeuralRadiosity::resolvePass(RenderContext* pRenderContext, const RenderDat
     var["specActive"] = mpRenderBatch->specActive;
     var["specIndex"] = mpRenderBatch->specIndex;
     var["specColor"] = mpRenderBatch->specColor;
-    var["specVBuffer"] = mpRenderBatch->specVBuffer;
 
-    // var["temporalHistory"] = mpRenderSpecTemporalHistory;
     var["tempColor"] = mpRenderTempColor;
-
-    // Debug: per-spec-pixel grid level visualization buffer (read by ResolvePass
-    // when DEBUG_SHOW_SPEC_LEVEL is on to color-code spec regions by grid level).
-    if (mDebugShowSpecLevel && mpSpecLevelBuffer)
-    {
-        var["gSpecLevel"] = mpSpecLevelBuffer;
-    }
 
     if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
         var["debug"] = mpTrainRHSBatch->emission;
@@ -967,8 +749,6 @@ void NeuralRadiosity::sampleRHS(RenderContext* pRenderContext)
 
         var["rhsDiffActive"] = mpTrainRHSBatch->diffActive;
         var["rhsDiffIndex"] = mpTrainRHSBatch->diffIndex;
-        var["rhsSpecActive"] = mpTrainRHSBatch->specActive;
-        var["rhsSpecIndex"] = mpTrainRHSBatch->specIndex;
     }
 
     var[name]["useNEE"] = false;
@@ -1007,19 +787,33 @@ void NeuralRadiosity::compactBatch(RenderContext* pRenderContext, std::shared_pt
     FALCOR_PROFILE(pRenderContext, "CompactBatch");
 
     // Prefix sum from active mask to index
-    mpPrefixSum->execute(
-        pRenderContext,
-        pRayBatch->diffIndex,
-        pRayBatch->size,
-        &pRayBatch->diffSize
-    );
+    if (pRayBatch->needDiff)
+    {
+        mpPrefixSum->execute(
+            pRenderContext,
+            pRayBatch->diffIndex,
+            pRayBatch->size,
+            &pRayBatch->diffSize
+        );
+    }
+    else
+    {
+        pRayBatch->diffSize = 0;
+    }
 
-    mpPrefixSum->execute(
-        pRenderContext,
-        pRayBatch->specIndex,
-        pRayBatch->size,
-        &pRayBatch->specSize
-    );
+    if (pRayBatch->needSpec)
+    {
+        mpPrefixSum->execute(
+            pRenderContext,
+            pRayBatch->specIndex,
+            pRayBatch->size,
+            &pRayBatch->specSize
+        );
+    }
+    else
+    {
+        pRayBatch->specSize = 0;
+    }
 
     ShaderVar var = mpCompactBatch->getRootVar();
     const auto name = "gCompactBatch";
@@ -1042,200 +836,265 @@ void NeuralRadiosity::resolveBatch(RenderContext* pRenderContext, std::shared_pt
     mpResolveBatch->execute(pRenderContext, uint3(pRayBatch->size, 1, 1));
 }
 
-void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
+bool NeuralRadiosity::useClusterReuse() const
 {
-    FALCOR_PROFILE(pRenderContext, "ConeTrace");
+    return mEnableRenderSpecTemporalReuse && mpClusterHistory[0] && mpClusterHistory[1] &&
+        mpResidualStreak[0] && mpResidualStreak[1] && mpPrevPos;
+}
 
-    ShaderVar var = mpConeTrace->getRootVar();
-    const auto name = "gConeTrace";
-    // Bind parameters
-    var[name]["batchSize"] = pRayBatch->size;
-    var[name]["batchCount"] = mFrameCount;
-    var[name]["diffSize"] = pRayBatch->diffSize;
+void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, const RenderData& renderData, std::shared_ptr<RayBatchBuffer> pRayBatch)
+{
+    // Dispatch by batch type: the training batches keep the original T=128
+    // group-wide K-Means (their specInput must stay bit-compatible with existing
+    // checkpoints), while the render batch goes through the screen-space
+    // spatiotemporal cluster reuse pipeline.
+    if (pRayBatch == mpRenderBatch && useClusterReuse())
+    {
+        clusterReuse(pRenderContext, renderData);
+        return;
+    }
+
+    coneTraceBatch(pRenderContext, pRayBatch, renderData);
+}
+
+void NeuralRadiosity::coneTraceBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, const RenderData& renderData)
+{
+    if (!pRayBatch->needSpec || pRayBatch->specSize == 0) return;
+
+    {
+        FALCOR_PROFILE(pRenderContext, "ConeTrace");
+
+        ShaderVar var = mpConeTrace->getRootVar();
+        const auto name = "gConeTrace";
+        // Bind parameters
+        var[name]["batchSize"] = pRayBatch->size;
+        var[name]["batchCount"] = mFrameCount;
+        var[name]["diffSize"] = pRayBatch->diffSize;
+        var[name]["specSize"] = pRayBatch->specSize;
+        var[name]["frameDim"] = mFrameDim;
+        var[name]["useScreenGBuffer"] = pRayBatch->needAll ? 0u : 1u;
+
+        const AABB& aabb = mpScene->getSceneBounds();
+        var[name]["bboxMin"] = aabb.minPoint;
+        var[name]["bboxMax"] = aabb.maxPoint;
+
+        var["specSrc"] = pRayBatch->specSrc;
+        var["specInput"] = pRayBatch->specInput;
+
+        var["allPos"] = pRayBatch->pos ? pRayBatch->pos : mpBindDummyBatch->pos;
+        var["allDir"] = pRayBatch->dir ? pRayBatch->dir : mpBindDummyBatch->dir;
+        var["allRoughness"] = pRayBatch->roughness ? pRayBatch->roughness : mpBindDummyBatch->roughness;
+        var["allVBuffer"] = pRayBatch->vbuffer ? pRayBatch->vbuffer : mpBindDummyBatch->vbuffer;
+
+        var["gVBuffer"] = renderData.getTexture(kOutputVBuffer);
+        var["gPos"] = renderData.getTexture(kOutputPos);
+        var["gDir"] = renderData.getTexture(kOutputDir);
+        var["gRoughness"] = renderData.getTexture(kOutputRoughness);
+
+        mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
+
+        mpConeTrace->execute(pRenderContext, uint3(pRayBatch->specSize * mNumSpecRays, 1, 1));
+    }
+
+    // Cluster slots and the envColor slot are different fields of the same element.
+    pRenderContext->uavBarrier(pRayBatch->specInput.get());
+    specPrimaryPass(pRenderContext, pRayBatch, renderData);
+}
+
+void NeuralRadiosity::specPrimaryPass(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "SpecPrimary");
+
+    ShaderVar var = mpSpecPrimary->getRootVar();
+    const auto name = "gSpecPrimary";
     var[name]["specSize"] = pRayBatch->specSize;
+    var[name]["frameDim"] = mFrameDim;
+    var[name]["useScreenGBuffer"] = pRayBatch->needAll ? 0u : 1u;
+    var[name]["enableMirrorAlbedo"] = mEnableMirrorAlbedo ? 1u : 0u;
 
     const AABB& aabb = mpScene->getSceneBounds();
     var[name]["bboxMin"] = aabb.minPoint;
     var[name]["bboxMax"] = aabb.maxPoint;
 
-    var["specPixel"] = pRayBatch->specPixel;
-    var["specPos"] = pRayBatch->specPos;
-    var["specDir"] = pRayBatch->specDir;
-    var["specRoughness"] = pRayBatch->specRoughness;
-    var["specVBuffer"] = pRayBatch->specVBuffer;
+    var["specSrc"] = pRayBatch->specSrc;
     var["specInput"] = pRayBatch->specInput;
-    // var["temporalHistory"] = mpRenderSpecTemporalHistory;
-    var[name]["enableTemporalHistory"] = (pRayBatch == mpRenderBatch && mEnableRenderSpecTemporalReuse) ? 1u : 0u;
-    var[name]["useTemporalReuse"] = (pRayBatch == mpRenderBatch && mEnableRenderSpecTemporalReuse && mRenderSpecTemporalHistoryValid) ? 1u : 0u;
-    var[name]["coneTraceReuseMode"] = (uint32_t)mConeTraceReuseMode;
 
-    // Debug: per-spec-pixel grid level visualization and dump. Bind gridScales
-    // array and output buffer when either mode is active (both need the buffer
-    // written by ConeTrace; shader defines guard the actual writes).
-    if ((mDebugShowSpecLevel || mDebugDumpRequested) && mpNRModel && mpSpecLevelBuffer)
-    {
-        const std::vector<float> scales = mpNRModel->getClusterGridScales();
-        const uint32_t n = std::min<uint32_t>((uint32_t)scales.size(), 64u);
-        float scalesArr[64];
-        for (uint32_t i = 0; i < n; ++i) scalesArr[i] = scales[i];
-        var[name]["gridScales"].setBlob(scalesArr, n * sizeof(float));
-        var["gSpecLevel"] = mpSpecLevelBuffer;
-    }
+    var["allPos"] = pRayBatch->pos ? pRayBatch->pos : mpBindDummyBatch->pos;
+    var["allDir"] = pRayBatch->dir ? pRayBatch->dir : mpBindDummyBatch->dir;
+    var["allRoughness"] = pRayBatch->roughness ? pRayBatch->roughness : mpBindDummyBatch->roughness;
+    var["allVBuffer"] = pRayBatch->vbuffer ? pRayBatch->vbuffer : mpBindDummyBatch->vbuffer;
 
-    // Debug dump: bind per-spec-pixel debug buffers. The shader only writes
-    // to these when DEBUG_DUMP is defined (one-shot, see dumpDebugImages).
-    if (mDebugDumpRequested)
-    {
-        if (mpSpecLevelBuffer)          var["gSpecLevel"]          = mpSpecLevelBuffer;
-        if (mpSpecTanLobeBuffer)        var["gSpecTanLobe"]        = mpSpecTanLobeBuffer;
-        if (mpSpecClusterMeanBuffer)    var["gSpecClusterMean"]    = mpSpecClusterMeanBuffer;
-        if (mpSpecClusterScaleBuffer)   var["gSpecClusterScale"]   = mpSpecClusterScaleBuffer;
-        if (mpSpecClusterWeightBuffer)  var["gSpecClusterWeight"]  = mpSpecClusterWeightBuffer;
-        if (mpSpecClusterPosXBuffer)    var["gSpecClusterPosX"]    = mpSpecClusterPosXBuffer;
-        if (mpSpecClusterPosYBuffer)    var["gSpecClusterPosY"]    = mpSpecClusterPosYBuffer;
-        if (mpSpecClusterPosZBuffer)    var["gSpecClusterPosZ"]    = mpSpecClusterPosZBuffer;
-        if (mpSpecMaterialDataBuffer)   var["gSpecMaterialData"]   = mpSpecMaterialDataBuffer;
-    }
+    var["gVBuffer"] = renderData.getTexture(kOutputVBuffer);
+    var["gPos"] = renderData.getTexture(kOutputPos);
+    var["gDir"] = renderData.getTexture(kOutputDir);
+    var["gRoughness"] = renderData.getTexture(kOutputRoughness);
 
-    var["gPrefiltEnv"]["mipCount"] = mpPrefiltEnvCubemap ? mpPrefiltEnvCubemap->getMipCount() : 0u;
-    var["gPrefiltEnv"]["faceSize"] = mpPrefiltEnvCubemap ? mpPrefiltEnvCubemap->getWidth() : 0u;
-    var["gPrefiltEnv"]["valid"] = mpPrefiltEnvCubemap ? 1u : 0u;
-    var["gPrefiltEnv"]["fallbackValid"] = (mpScene && mpScene->useEnvLight()) ? 1u : 0u;
-    var["gPrefiltEnv"]["cubemap"].setTexture(mpPrefiltEnvCubemap);
-    var["gPrefiltEnv"]["sampler"].setSampler(mpPrefiltEnvSampler);
+    bindPrefiltEnv(var);
+    mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
+
+    mpSpecPrimary->execute(pRenderContext, uint3(pRayBatch->specSize, 1, 1));
+}
+
+void NeuralRadiosity::clusterReuse(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "ClusterReuse");
+
+    // Ping-pong: the reproject pass reads [1 - write] and seeds [write], the cone
+    // trace updates [write] in place, and the spatial pass only reads it.
+    mClusterHistoryWriteIdx ^= 1u;
+
+    clusterReprojectPass(pRenderContext, renderData);
+    pRenderContext->uavBarrier(mpClusterHistory[mClusterHistoryWriteIdx].get());
+    pRenderContext->uavBarrier(mpResidualStreak[mClusterHistoryWriteIdx].get());
+
+    coneTraceScreenPass(pRenderContext, renderData);
+    pRenderContext->uavBarrier(mpClusterHistory[mClusterHistoryWriteIdx].get());
+    pRenderContext->uavBarrier(mpResidualStreak[mClusterHistoryWriteIdx].get());
+
+    clusterSpatialReusePass(pRenderContext, renderData);
+
+    mClusterHistoryValid = true;
+}
+
+void NeuralRadiosity::clusterReprojectPass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "ClusterReproject");
+
+    const AABB& aabb = mpScene->getSceneBounds();
+    const float epsScene = clusterSceneEpsilon(aabb);
+
+    ShaderVar var = mpClusterReproject->getRootVar();
+    const auto name = "gClusterReproject";
+
+    var[name]["frameDim"] = mFrameDim;
+    var[name]["frameCount"] = mFrameCount;
+    var[name]["historyValid"] = mClusterHistoryValid ? 1u : 0u;
+    var[name]["epsScene"] = epsScene;
+    var[name]["normalThreshold"] = mClusterNormalThreshold;
+    var[name]["roughnessThreshold"] = mClusterRoughnessThreshold;
+    var[name]["posThresholdRel"] = mClusterPosThresholdRel;
+
+    var["gPos"] = renderData.getTexture(kOutputPos);
+    var["gDir"] = renderData.getTexture(kOutputDir);
+    var["gNormal"] = renderData.getTexture(kOutputNormal);
+    var["gRoughness"] = renderData.getTexture(kOutputRoughness);
+    var["gPrimaryPos"] = renderData.getTexture(kOutputPrimaryPos);
+
+    var["gPrevPos"] = mpPrevPos;
+    var["gPrevDir"] = mpPrevDir;
+    var["gPrevNormal"] = mpPrevNormal;
+    var["gPrevRoughness"] = mpPrevRoughness;
+    var["prevSpecActive"] = mpPrevSpecActive;
+
+    var["specActive"] = mpRenderBatch->specActive;
+    var["clusterHistoryIn"] = mpClusterHistory[1 - mClusterHistoryWriteIdx];
+    var["clusterHistoryOut"] = mpClusterHistory[mClusterHistoryWriteIdx];
+    var["residualStreakIn"] = mpResidualStreak[1 - mClusterHistoryWriteIdx];
+    var["residualStreakOut"] = mpResidualStreak[mClusterHistoryWriteIdx];
+
+    mpScene->bindShaderData(var["gScene"]);
+
+    mpClusterReproject->execute(pRenderContext, uint3(mFrameDim, 1));
+}
+
+void NeuralRadiosity::coneTraceScreenPass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "ConeTraceScreen");
+
+    const AABB& aabb = mpScene->getSceneBounds();
+    const float epsScene = clusterSceneEpsilon(aabb);
+
+    ShaderVar var = mpConeTraceScreen->getRootVar();
+    const auto name = "gConeTraceScreen";
+
+    var[name]["frameDim"] = mFrameDim;
+    var[name]["frameCount"] = mFrameCount;
+    var[name]["specSize"] = mpRenderBatch->specSize;
+    var[name]["epsScene"] = epsScene;
+    var[name]["assignThreshold"] = mClusterAssignThreshold;
+    var[name]["maxCount"] = mClusterMaxCount;
+    var[name]["weakWeight"] = mClusterWeakWeight;
+    var[name]["sigmaPriorScale"] = mClusterSigmaPriorScale;
+    var[name]["lockCount"] = mClusterLockCount;
+    var[name]["unlockStreak"] = mClusterUnlockStreak;
+    var[name]["maxRays"] = mClusterMaxRays;
+
+    var["specSrc"] = mpRenderBatch->specSrc;
+
+    var["gVBuffer"] = renderData.getTexture(kOutputVBuffer);
+    var["gPos"] = renderData.getTexture(kOutputPos);
+    var["gDir"] = renderData.getTexture(kOutputDir);
+    var["gNormal"] = renderData.getTexture(kOutputNormal);
+    var["gRoughness"] = renderData.getTexture(kOutputRoughness);
+    var["clusterHistory"] = mpClusterHistory[mClusterHistoryWriteIdx];
+    var["residualStreak"] = mpResidualStreak[mClusterHistoryWriteIdx];
 
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
-    mpConeTrace->execute(pRenderContext, uint3(pRayBatch->specSize * mNumSpecRays, 1, 1));
+    if (mpRenderBatch->specSize == 0) return;
 
-    if (pRayBatch == mpRenderBatch && mEnableRenderSpecTemporalReuse)
-    {
-        mRenderSpecTemporalHistoryValid = true;
-    }
+    mpConeTraceScreen->execute(pRenderContext, uint3(mpRenderBatch->specSize, 1, 1));
 }
 
-void NeuralRadiosity::prepareDebugDumpResources()
+void NeuralRadiosity::clusterSpatialReusePass(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    const uint32_t pixelCount = mFrameDim.x * mFrameDim.y;
+    FALCOR_PROFILE(pRenderContext, "ClusterSpatialReuse");
 
-    // Per-spec-pixel debug buffers (sized to screen pixel count, indexed by pixIdx).
-    auto ensureBuffer = [&](ref<Buffer>& buf, size_t bytes)
-    {
-        if (!buf || buf->getSize() != bytes)
-        {
-            buf = mpDevice->createBuffer(
-                bytes,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-                MemoryType::DeviceLocal,
-                nullptr);
-        }
-    };
-    ensureBuffer(mpSpecLevelBuffer,         pixelCount * sizeof(float));
-    ensureBuffer(mpSpecTanLobeBuffer,       pixelCount * sizeof(float));
-    ensureBuffer(mpSpecClusterMeanBuffer,   pixelCount * sizeof(float4));
-    ensureBuffer(mpSpecClusterScaleBuffer,  pixelCount * sizeof(float4));
-    ensureBuffer(mpSpecClusterWeightBuffer, pixelCount * sizeof(float4));
-    ensureBuffer(mpSpecClusterPosXBuffer,   pixelCount * sizeof(float4));
-    ensureBuffer(mpSpecClusterPosYBuffer,   pixelCount * sizeof(float4));
-    ensureBuffer(mpSpecClusterPosZBuffer,   pixelCount * sizeof(float4));
-    ensureBuffer(mpSpecMaterialDataBuffer,  pixelCount * sizeof(float2));
+    const AABB& aabb = mpScene->getSceneBounds();
+    const float epsScene = clusterSceneEpsilon(aabb);
 
-    // Output textures for CPU readback.
-    auto ensureTex = [&](ref<Texture>& tex, ResourceFormat fmt)
-    {
-        if (!tex || tex->getWidth() != mFrameDim.x || tex->getHeight() != mFrameDim.y || tex->getFormat() != fmt)
-        {
-            tex = mpDevice->createTexture2D(
-                mFrameDim.x, mFrameDim.y, fmt, 1, 1, nullptr,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess);
-        }
-    };
-    ensureTex(mpDumpSpecLevelTex,      ResourceFormat::RGBA32Float);
-    ensureTex(mpDumpTanLobeTex,        ResourceFormat::RGBA32Float);
-    ensureTex(mpDumpClusterMeanTex,    ResourceFormat::RGBA32Float);
-    ensureTex(mpDumpClusterScaleTex,   ResourceFormat::RGBA32Float);
-    ensureTex(mpDumpClusterWeightTex,  ResourceFormat::RGBA32Float);
-    ensureTex(mpDumpClusterPosXTex,    ResourceFormat::RGBA32Float);
-    ensureTex(mpDumpClusterPosYTex,    ResourceFormat::RGBA32Float);
-    ensureTex(mpDumpClusterPosZTex,    ResourceFormat::RGBA32Float);
-    ensureTex(mpDumpMaterialDataTex,   ResourceFormat::RGBA32Float);
+    ShaderVar var = mpClusterSpatialReuse->getRootVar();
+    const auto name = "gClusterSpatialReuse";
+
+    var[name]["frameDim"] = mFrameDim;
+    var[name]["specSize"] = mpRenderBatch->specSize;
+    var[name]["bboxMin"] = aabb.minPoint;
+    var[name]["bboxMax"] = aabb.maxPoint;
+    var[name]["epsScene"] = epsScene;
+    var[name]["assignThreshold"] = mClusterAssignThreshold;
+    var[name]["lockCount"] = mClusterLockCount;
+    var[name]["enableSpatialReuse"] = mEnableClusterSpatialReuse ? 1u : 0u;
+    var[name]["enableMirrorAlbedo"] = mEnableMirrorAlbedo ? 1u : 0u;
+    var[name]["numTaps"] = mClusterNumTaps;
+    var[name]["gatherRadiusScale"] = mClusterGatherRadiusScale;
+    var[name]["maxGatherRadius"] = mClusterMaxGatherRadius;
+    var[name]["gammaMax"] = mClusterGammaMax;
+    var[name]["gammaMin"] = mClusterGammaMin;
+    var[name]["confidenceCount"] = mClusterConfidenceCount;
+
+    var["specSrc"] = mpRenderBatch->specSrc;
+    var["specInput"] = mpRenderBatch->specInput;
+    var["specActive"] = mpRenderBatch->specActive;
+
+    var["gPos"] = renderData.getTexture(kOutputPos);
+    var["gDir"] = renderData.getTexture(kOutputDir);
+    var["gNormal"] = renderData.getTexture(kOutputNormal);
+    var["gRoughness"] = renderData.getTexture(kOutputRoughness);
+    var["clusterHistory"] = mpClusterHistory[mClusterHistoryWriteIdx];
+
+    bindPrefiltEnv(var);
+
+    mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
+
+    if (mpRenderBatch->specSize == 0) return;
+
+    mpClusterSpatialReuse->execute(pRenderContext, uint3(mpRenderBatch->specSize, 1, 1));
 }
 
-void NeuralRadiosity::dumpDebugImages(RenderContext* pRenderContext, const RenderData& renderData)
+void NeuralRadiosity::savePrevGBuffer(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    if (!mpDebugDumpPass || !mpRenderBatch)
-    {
-        logWarning("NeuralRadiosity::dumpDebugImages: debug dump pass or render batch not ready.");
-        return;
-    }
+    FALCOR_PROFILE(pRenderContext, "SavePrevGBuffer");
 
-    prepareDebugDumpResources();
+    pRenderContext->copyResource(mpPrevPos.get(), renderData.getTexture(kOutputPos).get());
+    pRenderContext->copyResource(mpPrevDir.get(), renderData.getTexture(kOutputDir).get());
+    pRenderContext->copyResource(mpPrevNormal.get(), renderData.getTexture(kOutputNormal).get());
+    pRenderContext->copyResource(mpPrevRoughness.get(), renderData.getTexture(kOutputRoughness).get());
 
-    // Run DebugDumpPass: copy per-spec-pixel debug buffers into screen-sized textures.
-    {
-        ShaderVar var = mpDebugDumpPass->getRootVar();
-        const auto name = "gDebugDumpPass";
-        var[name]["frameDim"] = mFrameDim;
-
-        var["gSpecActive"]        = mpRenderBatch->specActive;
-        var["gSpecIndex"]         = mpRenderBatch->specIndex;
-        var["gSpecLevel"]         = mpSpecLevelBuffer;
-        var["gSpecTanLobe"]       = mpSpecTanLobeBuffer;
-        var["gSpecClusterMean"]   = mpSpecClusterMeanBuffer;
-        var["gSpecClusterScale"]  = mpSpecClusterScaleBuffer;
-        var["gSpecClusterWeight"] = mpSpecClusterWeightBuffer;
-        var["gSpecClusterPosX"]   = mpSpecClusterPosXBuffer;
-        var["gSpecClusterPosY"]   = mpSpecClusterPosYBuffer;
-        var["gSpecClusterPosZ"]   = mpSpecClusterPosZBuffer;
-        var["gSpecMaterialData"]  = mpSpecMaterialDataBuffer;
-
-        var["gDumpSpecLevel"]      = mpDumpSpecLevelTex;
-        var["gDumpTanLobe"]        = mpDumpTanLobeTex;
-        var["gDumpClusterMean"]    = mpDumpClusterMeanTex;
-        var["gDumpClusterScale"]   = mpDumpClusterScaleTex;
-        var["gDumpClusterWeight"]  = mpDumpClusterWeightTex;
-        var["gDumpClusterPosX"]    = mpDumpClusterPosXTex;
-        var["gDumpClusterPosY"]    = mpDumpClusterPosYTex;
-        var["gDumpClusterPosZ"]    = mpDumpClusterPosZTex;
-        var["gDumpMaterialData"]   = mpDumpMaterialDataTex;
-
-        mpDebugDumpPass->execute(pRenderContext, uint3(mFrameDim, 1));
-    }
-
-    // Save all debug images to disk. Output dir: debug_dump_<frame>/.
-    const std::filesystem::path outDir = fmt::format("debug_dump_{:05d}", mFrameCount);
-    std::filesystem::create_directories(outDir);
-
-    auto saveTex = [&](const ref<Texture>& tex, const std::string& filename, Bitmap::FileFormat fmt)
-    {
-        if (!tex) return;
-        const auto path = outDir / filename;
-        tex->captureToFile(0, 0, path, fmt, Bitmap::ExportFlags::None, false);
-        logInfo("[NCR debug dump] saved {}", path.string());
-    };
-
-    // HDR float images as EXR.
-    saveTex(mpDumpSpecLevelTex,      "spec_level.exr",       Bitmap::FileFormat::ExrFile);
-    saveTex(mpDumpTanLobeTex,        "tan_lobe.exr",         Bitmap::FileFormat::ExrFile);
-    saveTex(mpDumpClusterMeanTex,    "cluster_mean.exr",     Bitmap::FileFormat::ExrFile);
-    saveTex(mpDumpClusterScaleTex,   "cluster_scale.exr",    Bitmap::FileFormat::ExrFile);
-    saveTex(mpDumpClusterWeightTex,  "cluster_weight.exr",   Bitmap::FileFormat::ExrFile);
-    saveTex(mpDumpClusterPosXTex,    "cluster_pos_x.exr",    Bitmap::FileFormat::ExrFile);
-    saveTex(mpDumpClusterPosYTex,    "cluster_pos_y.exr",    Bitmap::FileFormat::ExrFile);
-    saveTex(mpDumpClusterPosZTex,    "cluster_pos_z.exr",    Bitmap::FileFormat::ExrFile);
-    // Material data: r = material ID (as float), g = roughness.
-    saveTex(mpDumpMaterialDataTex,   "material_data.exr",    Bitmap::FileFormat::ExrFile);
-
-    // Also save the existing GBuffer channels (pos, normal, albedo) for context.
-    const auto& pPos    = renderData.getTexture(kOutputPos);
-    const auto& pNormal = renderData.getTexture(kOutputNormal);
-    const auto& pAlbedo = renderData.getTexture(kOutputAlbedo);
-    if (pPos)    pPos->captureToFile(0, 0, outDir / "gbuffer_pos.exr",    Bitmap::FileFormat::ExrFile, Bitmap::ExportFlags::None, false);
-    if (pNormal) pNormal->captureToFile(0, 0, outDir / "normal.exr",      Bitmap::FileFormat::ExrFile, Bitmap::ExportFlags::None, false);
-    if (pAlbedo) pAlbedo->captureToFile(0, 0, outDir / "albedo.exr",      Bitmap::FileFormat::ExrFile, Bitmap::ExportFlags::None, false);
-    logInfo("[NCR debug dump] saved gbuffer_pos.exr, normal.exr, albedo.exr");
-
-    logInfo("[NCR debug dump] all images saved to '{}/'", outDir.string());
+    // RayBatchBuffer never shrinks, so specActive can be larger than one frame
+    // of pixels. Copy exactly the region the history is indexed over.
+    pRenderContext->copyBufferRegion(
+        mpPrevSpecActive.get(), 0, mpRenderBatch->specActive.get(), 0, mpPrevSpecActive->getSize()
+    );
 }
 
 void NeuralRadiosity::modelInferenceCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
@@ -1251,16 +1110,8 @@ void NeuralRadiosity::modelTrainCUDA(RenderContext* pRenderContext, std::shared_
 {
     FALCOR_PROFILE(pRenderContext, "ModelTrainCUDA");
 
-    ModelIOPtrs diffPtrs = pRayBatch->getDiffPtrs();
-    ModelIOPtrs specPtrs = pRayBatch->getSpecPtrs();
-
-    // Debug freeze: force size to 0 so NRModel::train skips forward/backward/optimizer
-    // step for the frozen network. Inference is unaffected (uses the other stream).
-    if (mDisableDiffUpdate) diffPtrs.size = 0;
-    if (mDisableSpecUpdate) specPtrs.size = 0;
-
     pRenderContext->waitForFalcor(mpNRModel->stream(true));
-    mpNRModel->train(diffPtrs, specPtrs);
+    mpNRModel->train(pRayBatch->getDiffPtrs(), pRayBatch->getSpecPtrs());
     pRenderContext->waitForCuda(mpNRModel->stream(true));
 }
 
@@ -1279,24 +1130,6 @@ void NeuralRadiosity::updatePrograms(RenderContext* pRenderContext, const Render
 {
     if (!mVarsChanged) return;
     const auto startTime = std::chrono::steady_clock::now();
-
-    // On any var change, release existing compute passes so they get rebuilt
-    // with the updated DefineList (e.g. DEBUG_RENDER_DIFFUSE_ONLY). Without this,
-    // passes are created once and never pick up new shader defines.
-    mpFirstSmoothPass = nullptr;
-    mpCompactPass = nullptr;
-    mpResolvePass = nullptr;
-    mpPostFilterPass = nullptr;
-    mpPostFXAAPass = nullptr;
-    mpRandomSmooth = nullptr;
-    mpSampleRHS = nullptr;
-    mpResolveRHS = nullptr;
-    mpCompactBatch = nullptr;
-    mpResolveBatch = nullptr;
-    mpConeTrace = nullptr;
-    mpPrefiltEnvInitPass = nullptr;
-    mpPrefiltEnvDownsamplePass = nullptr;
-    mpDebugDumpPass = nullptr;
 
     if (!mpPrefixSum)
     {
@@ -1486,15 +1319,61 @@ void NeuralRadiosity::updatePrograms(RenderContext* pRenderContext, const Render
         mpSampleGenerator->bindShaderData(var);
     }
 
-    if (!mpDebugDumpPass)
+    if (!mpSpecPrimary)
     {
         ProgramDesc desc = baseDesc;
-        desc.addShaderLibrary(kDebugDumpPassFile).csEntry("main");
+        desc.addShaderLibrary(kSpecPrimaryFile).csEntry("main");
 
-        mpDebugDumpPass = ComputePass::create(mpDevice, desc, defines, true);
+        DefineList primaryDefines = defines;
+        primaryDefines.add("SPEC_PRIMARY_GROUP_SIZE", "64");
+        mpSpecPrimary = ComputePass::create(mpDevice, desc, primaryDefines, true);
 
-        ShaderVar var = mpDebugDumpPass->getRootVar();
+        ShaderVar var = mpSpecPrimary->getRootVar();
         mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
+        mpSampleGenerator->bindShaderData(var);
+    }
+
+    if (!mpClusterReproject)
+    {
+        ProgramDesc desc = baseDesc;
+        desc.addShaderLibrary(kClusterReprojectFile).csEntry("main");
+
+        mpClusterReproject = ComputePass::create(mpDevice, desc, defines, true);
+
+        // Bind static resources
+        ShaderVar var = mpClusterReproject->getRootVar();
+        mpScene->bindShaderData(var["gScene"]);
+        mpSampleGenerator->bindShaderData(var);
+    }
+
+    if (!mpConeTraceScreen)
+    {
+        ProgramDesc desc = baseDesc;
+        desc.addShaderLibrary(kConeTraceScreenFile).csEntry("main");
+
+        DefineList screenDefines = defines;
+        screenDefines.add("CONE_TRACE_SCREEN_GROUP_SIZE", std::to_string(kClusterGroupSize));
+        mpConeTraceScreen = ComputePass::create(mpDevice, desc, screenDefines, true);
+
+        // Bind static resources
+        ShaderVar var = mpConeTraceScreen->getRootVar();
+        mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
+        mpSampleGenerator->bindShaderData(var);
+    }
+
+    if (!mpClusterSpatialReuse)
+    {
+        ProgramDesc desc = baseDesc;
+        desc.addShaderLibrary(kClusterSpatialReuseFile).csEntry("main");
+
+        DefineList spatialDefines = defines;
+        spatialDefines.add("CLUSTER_SPATIAL_REUSE_GROUP_SIZE", std::to_string(kClusterGroupSize));
+        mpClusterSpatialReuse = ComputePass::create(mpDevice, desc, spatialDefines, true);
+
+        // Bind static resources
+        ShaderVar var = mpClusterSpatialReuse->getRootVar();
+        mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
+        mpSampleGenerator->bindShaderData(var);
     }
 
     const auto batchEndTime = std::chrono::steady_clock::now();
@@ -1504,38 +1383,6 @@ void NeuralRadiosity::updatePrograms(RenderContext* pRenderContext, const Render
     if (!mpNRModel)
     {
         mpNRModel = std::make_unique<NRModel>();
-        if (mEnableHashCollisionStats)
-        {
-            mpNRModel->setCollisionStatsEnabled(true);
-        }
-        // Propagate per-optimizer freeze switches to the new model.
-        mpNRModel->setFreezePrimGridOpt(mFreezePrimGridOpt);
-        mpNRModel->setFreezeClsGridOpt(mFreezeClsGridOpt);
-        mpNRModel->setFreezeDiffNetOpt(mFreezeDiffNetOpt);
-        mpNRModel->setFreezeSpecNetOpt(mFreezeSpecNetOpt);
-
-        // Sync training parameter UI mirrors to the new model.
-        mpNRModel->setPrimGridLr(mParamPrimGridLr);
-        mpNRModel->setClsGridLr(mParamClsGridLr);
-        mpNRModel->setDiffNetLr(mParamDiffNetLr);
-        mpNRModel->setSpecNetLr(mParamSpecNetLr);
-        mpNRModel->setPrimGridEmaDecay(mParamPrimGridEmaDecay);
-        mpNRModel->setClsGridEmaDecay(mParamClsGridEmaDecay);
-        mpNRModel->setDiffNetEmaDecay(mParamDiffNetEmaDecay);
-        mpNRModel->setSpecNetEmaDecay(mParamSpecNetEmaDecay);
-        mpNRModel->setInterpRatio(mParamInterpRatio);
-
-        if (!mLoadModelPath.empty())
-        {
-            logInfo("Auto-loading model state from '{}'", mLoadModelPath);
-            try {
-                mpNRModel->loadState(mLoadModelPath);
-                mpNRModel->setOnline(true);
-                logInfo("Model state loaded successfully.");
-            } catch (const std::exception& e) {
-                logError("Failed to load model state: {}", e.what());
-            }
-        }
     }
 
     const auto modelEndTime = std::chrono::steady_clock::now();
@@ -1551,12 +1398,14 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
 
     ShaderVar var = mpRandomSmooth->getRootVar();
 
+    if (!mpBindDummyBatch)
+        mpBindDummyBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, 1, mNumClusters, "BindDummy", true, true, true);
     if (!mpRenderBatch)
-        mpRenderBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mFrameDim.x * mFrameDim.y, mNumClusters, "RenderBatch", false);
+        mpRenderBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mFrameDim.x * mFrameDim.y, mNumClusters, "RenderBatch", false, true, true);
     if (!mpTrainLHSBatch)
-        mpTrainLHSBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mBatchSize, mNumClusters, "LHSBatch", true);
+        mpTrainLHSBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mBatchSize, mNumClusters, "LHSBatch", true, true, true);
     if (!mpTrainRHSBatch)
-        mpTrainRHSBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mBatchSize * mNumRHS, mNumClusters, "RHSBatch", true);
+        mpTrainRHSBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mBatchSize * mNumRHS, mNumClusters, "RHSBatch", true, true, false);
 
     if (mRenderMode == RenderMode::Render || mRenderMode == RenderMode::OnlineTrain)
     {
@@ -1568,21 +1417,97 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
         mpTrainRHSBatch->resize(mBatchSize * mNumRHS, mNumClusters);
     }
 
-    // const uint32_t historySize = mpRenderBatch ? mpRenderBatch->size : 0u;
-    // if (historySize > 0 && (!mpRenderSpecTemporalHistory || mpRenderSpecTemporalHistory->getElementCount() != historySize))
-    // {
-    //     ShaderVar coneTraceVar = mpConeTrace->getRootVar();
-    //     mpRenderSpecTemporalHistory = mpDevice->createStructuredBuffer(
-    //         coneTraceVar["temporalHistory"],
-    //         historySize,
-    //         ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-    //         MemoryType::DeviceLocal,
-    //         nullptr,
-    //         false
-    //     );
-    //     clearRenderTemporalHistory(pRenderContext);
-    //     mHasRenderCameraViewProj = false;
-    // }
+    // Spatiotemporal cluster reuse resources. The history is addressed per pixel
+    // (not per compacted index) because both the reprojection and the spatial
+    // gather need to reach arbitrary neighbouring pixels. With reuse off the
+    // render path uses ConeTrace, so these copies are released.
+    if (!mEnableRenderSpecTemporalReuse)
+    {
+        for (uint32_t i = 0; i < 2; ++i)
+        {
+            mpClusterHistory[i] = nullptr;
+            mpResidualStreak[i] = nullptr;
+        }
+        mpPrevSpecActive = nullptr;
+        mpPrevPos = nullptr;
+        mpPrevDir = nullptr;
+        mpPrevNormal = nullptr;
+        mpPrevRoughness = nullptr;
+        mClusterHistoryValid = false;
+    }
+    else
+    {
+        const uint32_t pixelCount = mFrameDim.x * mFrameDim.y;
+
+        const bool historyResized =
+            !mpClusterHistory[0] || mpClusterHistory[0]->getElementCount() != pixelCount ||
+            !mpResidualStreak[0] || mpResidualStreak[0]->getElementCount() != pixelCount;
+
+        if (pixelCount > 0 && historyResized)
+        {
+            ShaderVar reprojectVar = mpClusterReproject->getRootVar();
+            for (uint32_t i = 0; i < 2; ++i)
+            {
+                mpClusterHistory[i] = mpDevice->createStructuredBuffer(
+                    reprojectVar["clusterHistoryOut"],
+                    pixelCount,
+                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+                    MemoryType::DeviceLocal,
+                    nullptr,
+                    false
+                );
+                mpClusterHistory[i]->setName(fmt::format("NeuralRadiosity.ClusterHistory{}", i));
+
+                mpResidualStreak[i] = mpDevice->createStructuredBuffer(
+                    reprojectVar["residualStreakOut"],
+                    pixelCount,
+                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+                    MemoryType::DeviceLocal,
+                    nullptr,
+                    false
+                );
+                mpResidualStreak[i]->setName(fmt::format("NeuralRadiosity.ResidualStreak{}", i));
+            }
+
+            mpPrevSpecActive = mpDevice->createStructuredBuffer(
+                reprojectVar["prevSpecActive"],
+                pixelCount,
+                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+                MemoryType::DeviceLocal,
+                nullptr,
+                false
+            );
+            mpPrevSpecActive->setName("NeuralRadiosity.PrevSpecActive");
+
+            clearRenderTemporalHistory(pRenderContext);
+        }
+
+        const bool prevResized =
+            !mpPrevPos || mpPrevPos->getWidth() != mFrameDim.x || mpPrevPos->getHeight() != mFrameDim.y;
+
+        if (pixelCount > 0 && prevResized)
+        {
+            // Exact copies of the render-graph G-Buffer channels: the previous
+            // frame's (pos, dir, normal, roughness) is what turns a stored t_k
+            // back into a world anchor.
+            const auto createPrev = [&](ResourceFormat format, const char* name)
+            {
+                ref<Texture> pTex = mpDevice->createTexture2D(
+                    mFrameDim.x, mFrameDim.y, format, 1, 1, nullptr,
+                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess
+                );
+                pTex->setName(name);
+                return pTex;
+            };
+
+            mpPrevPos = createPrev(ResourceFormat::RGBA32Float, "NeuralRadiosity.PrevPos");
+            mpPrevDir = createPrev(ResourceFormat::RGBA32Float, "NeuralRadiosity.PrevDir");
+            mpPrevNormal = createPrev(ResourceFormat::RGBA32Float, "NeuralRadiosity.PrevNormal");
+            mpPrevRoughness = createPrev(ResourceFormat::R32Float, "NeuralRadiosity.PrevRoughness");
+
+            clearRenderTemporalHistory(pRenderContext);
+        }
+    }
 
     if (!mpRenderTempColor ||
         mpRenderTempColor->getWidth() != mFrameDim.x ||
@@ -1602,59 +1527,28 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
             ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess);
     }
 
-    // Debug: per-spec-pixel dominant grid level (one float per pixel).
-    const uint32_t specLevelCount = mFrameDim.x * mFrameDim.y;
-    if (mDebugShowSpecLevel &&
-        (!mpSpecLevelBuffer || mpSpecLevelBuffer->getSize() != specLevelCount * sizeof(float)))
-    {
-        mpSpecLevelBuffer = mpDevice->createBuffer(
-            specLevelCount * sizeof(float),
-            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-            MemoryType::DeviceLocal,
-            nullptr);
-    }
-
-    // Debug dump: allocate per-spec-pixel debug buffers when dump is requested.
-    if (mDebugDumpRequested)
-    {
-        prepareDebugDumpResources();
-    }
-
     const auto endTime = std::chrono::steady_clock::now();
     const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
     logInfo("NeuralRadiosity::prepareResources() took {} ms", elapsedMs);
-
-    NCR_LOG(this, "[NCR prepareResources] frameDim={}x={} renderBatchSize={} trainLHS={} trainRHS={} numClusters={}",
-            mFrameDim.x, mFrameDim.y,
-            mpRenderBatch ? mpRenderBatch->size : 0u,
-            mpTrainLHSBatch ? mpTrainLHSBatch->size : 0u,
-            mpTrainRHSBatch ? mpTrainRHSBatch->size : 0u,
-            mNumClusters);
-}
-
-void NeuralRadiosity::updateRenderTemporalHistory(RenderContext* pRenderContext)
-{
-    if (!mpScene || !mpRenderSpecTemporalHistory) return;
-
-    const auto& pCamera = mpScene->getCamera();
-    if (!pCamera) return;
-
-    const float4x4 viewProj = pCamera->getViewProjMatrix();
-    
-    if (!mHasRenderCameraViewProj || std::memcmp(&viewProj, &mRenderCameraViewProj, sizeof(float4x4)) != 0)
-    {
-        clearRenderTemporalHistory(pRenderContext);
-        mRenderCameraViewProj = viewProj;
-        mHasRenderCameraViewProj = true;
-    }
 }
 
 void NeuralRadiosity::clearRenderTemporalHistory(RenderContext* pRenderContext)
 {
-    if (!mpRenderSpecTemporalHistory) return;
+    // Note: camera motion deliberately does *not* land here. World-anchored
+    // clusters are validated one at a time against the current cone, so a global
+    // clear is only needed when the anchors themselves become meaningless
+    // (scene geometry moved, resource resize, or an explicit user request).
+    if (!pRenderContext) return;
 
-    pRenderContext->clearUAV(mpRenderSpecTemporalHistory->getUAV().get(), float4(0.f));
-    mRenderSpecTemporalHistoryValid = false;
+    for (uint32_t i = 0; i < 2; ++i)
+    {
+        if (mpClusterHistory[i]) pRenderContext->clearUAV(mpClusterHistory[i]->getUAV().get(), uint4(0));
+        if (mpResidualStreak[i]) pRenderContext->clearUAV(mpResidualStreak[i]->getUAV().get(), uint4(0));
+    }
+
+    if (mpPrevSpecActive) pRenderContext->clearUAV(mpPrevSpecActive->getUAV().get(), uint4(0));
+
+    mClusterHistoryValid = false;
 }
 
 bool NeuralRadiosity::prepareLighting(RenderContext* pRenderContext)
@@ -1685,19 +1579,6 @@ bool NeuralRadiosity::prepareLighting(RenderContext* pRenderContext)
         lightingChanged |= mpEmissiveSampler->update(pRenderContext, mpScene->getILightCollection(pRenderContext));
     }
 
-    // Verbose: emissive triangle count + sampler state.
-    if (mpScene && mpScene->useEmissiveLights())
-    {
-        const auto& pLights = mpScene->getILightCollection(pRenderContext);
-        const uint32_t activeTris = pLights ? pLights->getActiveLightCount(pRenderContext) : 0u;
-        NCR_LOG(this, "[NCR prepareLighting] useEmissiveLights=true, activeEmissiveTris={}, samplerCreated={}",
-                activeTris, mpEmissiveSampler ? 1 : 0);
-    }
-    else
-    {
-        NCR_LOG(this, "[NCR prepareLighting] useEmissiveLights=false (no emissive sampler)");
-    }
-
     return lightingChanged;
 }
 
@@ -1710,7 +1591,6 @@ void NeuralRadiosity::preparePrefiltEnvCubemap(RenderContext* pRenderContext)
     {
         mpPrefiltEnvCubemap = nullptr;
         mPrefiltEnvDirty = false;
-        NCR_LOG(this, "[NCR preparePrefiltEnvCubemap] no envMap, cubemap=nullptr");
         return;
     }
 
@@ -1773,8 +1653,6 @@ void NeuralRadiosity::preparePrefiltEnvCubemap(RenderContext* pRenderContext)
     }
 
     logInfo("NeuralRadiosity: prefiltered environment cubemap is {}x{} with {} mip levels.", faceSize, faceSize, mipCount);
-    NCR_LOG(this, "[NCR preparePrefiltEnvCubemap] cubemap={}x{} mipCount={} dirtyResolved",
-            faceSize, faceSize, mipCount);
     mPrefiltEnvDirty = false;
 }
 
@@ -1790,40 +1668,52 @@ void NeuralRadiosity::bindScreenData(ShaderVar& var, const RenderData& renderDat
         var[channel.texname] = renderData.getTexture(channel.name);
 }
 
+void NeuralRadiosity::bindPrefiltEnv(ShaderVar& var)
+{
+    var["gPrefiltEnv"]["mipCount"] = mpPrefiltEnvCubemap ? mpPrefiltEnvCubemap->getMipCount() : 0u;
+    var["gPrefiltEnv"]["faceSize"] = mpPrefiltEnvCubemap ? mpPrefiltEnvCubemap->getWidth() : 0u;
+    var["gPrefiltEnv"]["valid"] = mpPrefiltEnvCubemap ? 1u : 0u;
+    var["gPrefiltEnv"]["fallbackValid"] = (mpScene && mpScene->useEnvLight()) ? 1u : 0u;
+    var["gPrefiltEnv"]["cubemap"].setTexture(mpPrefiltEnvCubemap);
+    var["gPrefiltEnv"]["sampler"].setSampler(mpPrefiltEnvSampler);
+}
+
 void NeuralRadiosity::bindRayBatchData(ShaderVar& var, std::shared_ptr<RayBatchBuffer> pRayBatch, const std::string &name)
 {
+    FALCOR_ASSERT(mpBindDummyBatch);
+
     // Bind parameters
     var[name]["batchSize"] = pRayBatch->size;
     var[name]["batchCount"] = mFrameCount;
     var[name]["diffSize"] = pRayBatch->diffSize;
     var[name]["specSize"] = pRayBatch->specSize;
-    
-    // Bind buffers
-    var["allPos"] = pRayBatch->pos;
-    var["allDir"] = pRayBatch->dir;
-    var["allNormal"] = pRayBatch->normal;
-    var["allAlbedo"] = pRayBatch->albedo;
-    var["allRoughness"] = pRayBatch->roughness;
-    var["allVBuffer"] = pRayBatch->vbuffer;
-    var["allColor"] = pRayBatch->color;
-    var["allEmission"] = pRayBatch->emission;
+    var[name]["enableDiff"] = pRayBatch->needDiff ? 1u : 0u;
+    var[name]["enableSpec"] = pRayBatch->needSpec ? 1u : 0u;
 
-    // Bind diffuse buffers
-    var["diffActive"] = pRayBatch->diffActive;
-    var["diffIndex"] = pRayBatch->diffIndex;
-    var["diffInput"] = pRayBatch->diffInput;
-    var["diffColor"] = pRayBatch->diffColor;
+    const auto bind = [&](const char* field, const ref<Buffer>& buf, const ref<Buffer>& dummy)
+    {
+        var[field] = buf ? buf : dummy;
+    };
 
-    // Bind specular buffers
-    var["specActive"] = pRayBatch->specActive;
-    var["specIndex"] = pRayBatch->specIndex;
-    var["specInput"] = pRayBatch->specInput;
-    var["specColor"] = pRayBatch->specColor;
-    var["specVBuffer"] = pRayBatch->specVBuffer;
-    var["specPixel"] = pRayBatch->specPixel;
-    var["specPos"] = pRayBatch->specPos;
-    var["specDir"] = pRayBatch->specDir;
-    var["specRoughness"] = pRayBatch->specRoughness;
+    bind("allPos", pRayBatch->pos, mpBindDummyBatch->pos);
+    bind("allDir", pRayBatch->dir, mpBindDummyBatch->dir);
+    bind("allNormal", pRayBatch->normal, mpBindDummyBatch->normal);
+    bind("allAlbedo", pRayBatch->albedo, mpBindDummyBatch->albedo);
+    bind("allRoughness", pRayBatch->roughness, mpBindDummyBatch->roughness);
+    bind("allVBuffer", pRayBatch->vbuffer, mpBindDummyBatch->vbuffer);
+    bind("allColor", pRayBatch->color, mpBindDummyBatch->color);
+    bind("allEmission", pRayBatch->emission, mpBindDummyBatch->emission);
+
+    bind("diffActive", pRayBatch->diffActive, mpBindDummyBatch->diffActive);
+    bind("diffIndex", pRayBatch->diffIndex, mpBindDummyBatch->diffIndex);
+    bind("diffInput", pRayBatch->diffInput, mpBindDummyBatch->diffInput);
+    bind("diffColor", pRayBatch->diffColor, mpBindDummyBatch->diffColor);
+
+    bind("specActive", pRayBatch->specActive, mpBindDummyBatch->specActive);
+    bind("specIndex", pRayBatch->specIndex, mpBindDummyBatch->specIndex);
+    bind("specInput", pRayBatch->specInput, mpBindDummyBatch->specInput);
+    bind("specColor", pRayBatch->specColor, mpBindDummyBatch->specColor);
+    bind("specSrc", pRayBatch->specSrc, mpBindDummyBatch->specSrc);
 }
 
 DefineList NeuralRadiosity::getShaderDefines(const RenderData& renderData) const
@@ -1838,20 +1728,16 @@ DefineList NeuralRadiosity::getShaderDefines(const RenderData& renderData) const
     defines.add("NUM_KMEANS_ITERS", std::to_string(mNumKMeansIters));
     defines.add("NUM_SPEC_RAYS", std::to_string(mNumSpecRays));
     defines.add("NUM_CLUSTERS", std::to_string(mNumClusters));
+    defines.add("N_LEVELS", std::to_string(NCR_N_LEVELS));
+    defines.add("N_FEATURES_PER_LEVEL", std::to_string(NCR_N_FEATURES_PER_LEVEL));
+    defines.add("N_LEVELS_SPEC", std::to_string(NCR_N_LEVELS_SPEC));
+    defines.add("N_FEATURES_PER_LEVEL_SPEC", std::to_string(NCR_N_FEATURES_PER_LEVEL_SPEC));
+    defines.add("OUTPUT_DIM", std::to_string(NCR_OUTPUT_DIM));
+    defines.add("NR_USE_FP16", std::to_string(NCR_USE_FP16));
     // Add sample RHS parameters
     defines.add("NUM_RHS", std::to_string(mNumRHS));
     // Add random smooth parameters
     defines.add("RS_RR_PROB", std::to_string(mRSRRProb));
-    // Debug render-isolation switches
-    defines.add("DEBUG_RENDER_DIFFUSE_ONLY", mDebugRenderDiffuseOnly ? "1" : "0");
-    defines.add("DEBUG_RENDER_SPECULAR_ONLY", mDebugRenderSpecularOnly ? "1" : "0");
-    // Debug: per-spec-pixel grid level visualization (red=coarse, blue=fine).
-    defines.add("DEBUG_SHOW_SPEC_LEVEL", mDebugShowSpecLevel ? "1" : "0");
-    defines.add("N_GRID_LEVELS", mpNRModel ? std::to_string(mpNRModel->getNumLevels()) : "6");
-    // Debug dump: enables per-spec-pixel debug buffer writes in ConeTrace.
-    // This is a one-shot flag — we rebuild shaders with DEBUG_DUMP=1 for one
-    // frame, then rebuild with DEBUG_DUMP=0 to restore normal behavior.
-    defines.add("DEBUG_DUMP", mDebugDumpRequested ? "1" : "0");
     // Setup ray flags.
     RayFlags rayFlags = RayFlags::None;
     if (mForceCullMode && mCullMode == RasterizerState::CullMode::Front)
@@ -1958,25 +1844,24 @@ void NeuralRadiosity::setCamera(uint32_t cameraIdx)
 
 void NeuralRadiosity::setConeParameters(bool train)
 {
-    if (train)
+    // With cluster reuse enabled, ConeTrace is only reached by the training
+    // batches, so it can stay specialized for T=128 even in Render/OnlineTrain
+    // mode. Without it the render path still needs the cheaper T=32 variant,
+    // unless the user explicitly asked for the T=128 reference.
+    const bool useTrainConfig = train || mEnableRenderSpecTemporalReuse || mUseReferenceConeTrace;
+
+    const uint32_t numSpecRays = useTrainConfig ? NCR_NUM_SPEC_RAYS_TRAIN : NCR_NUM_SPEC_RAYS_RENDER;
+    const uint32_t numKMeansIters = useTrainConfig ? NCR_NUM_KMEANS_ITERS_TRAIN : NCR_NUM_KMEANS_ITERS_RENDER;
+
+    if (mNumSpecRays != numSpecRays || mNumKMeansIters != numKMeansIters)
     {
-        if (mNumSpecRays != NUM_SPEC_RAYS_TRAIN || mNumKMeansIters != NUM_KMEANS_ITERS_TRAIN)
-        {
-            mNumSpecRays = NUM_SPEC_RAYS_TRAIN;
-            mNumKMeansIters = NUM_KMEANS_ITERS_TRAIN;
-            mpConeTrace = nullptr;
-        }
-        updateAdaptiveRHSState(0, true);
+        mNumSpecRays = numSpecRays;
+        mNumKMeansIters = numKMeansIters;
+        mpConeTrace = nullptr;
+        mVarsChanged = true;
     }
-    else
-    {
-        if (mNumSpecRays != NUM_SPEC_RAYS_RENDER || mNumKMeansIters != NUM_KMEANS_ITERS_RENDER)
-        {
-            mNumSpecRays = NUM_SPEC_RAYS_RENDER;
-            mNumKMeansIters = NUM_KMEANS_ITERS_RENDER;
-            mpConeTrace = nullptr;
-        }
-    }
+
+    if (train) updateAdaptiveRHSState(0, true);
 }
 
 uint32_t NeuralRadiosity::getAdaptiveRHSStage(uint32_t completedSteps) const

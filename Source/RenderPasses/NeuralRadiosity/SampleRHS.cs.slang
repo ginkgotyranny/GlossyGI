@@ -25,8 +25,6 @@ RWStructuredBuffer<float4> rhsEmission;
 
 RWStructuredBuffer<uint> rhsDiffActive;
 RWStructuredBuffer<uint> rhsDiffIndex;
-RWStructuredBuffer<uint> rhsSpecActive;
-RWStructuredBuffer<uint> rhsSpecIndex;
 
 
 #define is_valid(name) (is_valid_##name != 0)
@@ -47,12 +45,14 @@ RWStructuredBuffer<uint> rhsSpecIndex;
 #define RAY_FLAGS true
 #endif
 
+#include "NCRConfig.h"
+
 #ifndef SPECULAR_ROUGHNESS_THRESHOLD
-#define SPECULAR_ROUGHNESS_THRESHOLD 0.5f
+#define SPECULAR_ROUGHNESS_THRESHOLD NCR_SPECULAR_ROUGHNESS_THRESHOLD
 #endif
 
 #ifndef NUM_RHS
-#define NUM_RHS 32
+#define NUM_RHS NCR_NUM_RHS_INIT
 #endif
 
 
@@ -122,7 +122,6 @@ struct SampleRHS
         path.origin = lPos;
         path.dir = lDir;
         path.setHit(lHit);
-        bool pathActive = true;  // Local tracking to work around Slang bitfield bug
 
         // Prepare ray query structures.
         SceneRayQuery<kUseAlphaTest> sceneRayQuery;
@@ -198,7 +197,6 @@ struct SampleRHS
                         color = gScene.envMap.eval(ray.dir) * path.thp;
                     }
                     path.terminate();
-                    pathActive = false;
                     break;
                 }
 
@@ -229,7 +227,6 @@ struct SampleRHS
                 {
                     color = bsdfProperties.emission * path.thp;
                     path.terminate();
-                    pathActive = false;
                     break;
                 }
 
@@ -237,7 +234,6 @@ struct SampleRHS
                 if (!sd.mtl.isDoubleSided() && !sd.frontFacing)
                 {
                     path.terminate();
-                    pathActive = false;
                     break;
                 }
 
@@ -264,7 +260,6 @@ struct SampleRHS
                 if (!valid)
                 {
                     path.terminate();
-                    pathActive = false;
                     break;
                 }
 
@@ -275,16 +270,14 @@ struct SampleRHS
         else
         {
             path.terminate();
-            pathActive = false;
         }
 
         // MIS evaluation
         float misNEE = neeValid ? ((ls.lightType == (uint)LightType::Analytic) ? 1.0f : (ls.pdf / (ls.pdf + pBdE))) : 0.f;
         float misBSDF = bsdfValid ? (bs.pdf / (bs.pdf + pEdB)) : 0.f;
 
-        // Active mask
-        uint diffAct = (pathActive && (roughness > kSpecularRoughnessThreshold)) ? 1 : 0;
-        uint specAct = (pathActive && (roughness <= kSpecularRoughnessThreshold)) ? 1 : 0;
+        // RHS supervision always queries the diffuse network, including glossy hits.
+        uint diffAct = path.isActive() ? 1 : 0;
 
         // Write outputs
         rhsColor[rayIdx] = float4(color * misBSDF, 0.f);
@@ -301,8 +294,6 @@ struct SampleRHS
         // Write active mask
         rhsDiffActive[rayIdx] = diffAct;
         rhsDiffIndex[rayIdx] = diffAct;
-        rhsSpecActive[rayIdx] = specAct;
-        rhsSpecIndex[rayIdx] = specAct;
     }
 };
 

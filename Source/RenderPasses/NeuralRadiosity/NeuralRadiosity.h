@@ -33,10 +33,10 @@
 #include "Utils/CudaUtils.h"
 #include "Utils/Algorithm/PrefixSum.h"
 #include "Model/Model.h"
+#include "NCRConfig.h"
 
 #include <filesystem>
 #include <memory>
-#include <cstdlib>
 
 using namespace Falcor;
 
@@ -49,7 +49,12 @@ struct RayBatchBuffer
     uint32_t specSize = 0;
     uint32_t numClusters = 0;
     std::string name;
+    /// G-buffer (pos/dir/normal/albedo/roughness/vbuffer/color/emission).
     bool needAll = true;
+    /// Compacted diffuse network I/O.
+    bool needDiff = true;
+    /// Compacted specular network I/O and specSrc (G-Buffer is gathered on demand).
+    bool needSpec = true;
 
     /// G-buffer
     ref<Buffer> pos;
@@ -66,18 +71,31 @@ struct RayBatchBuffer
     ref<Buffer> diffInput;          // Diffuse input for neural network
     ref<Buffer> diffColor;
     /// Specular buffer
-    ref<Buffer> specVBuffer;
-    ref<Buffer> specPixel;
-    ref<Buffer> specPos;
-    ref<Buffer> specDir;
-    ref<Buffer> specRoughness;
+    /// Render: y * width + x. Train: pre-compact raw sample index.
+    ref<Buffer> specSrc;
     ref<Buffer> specActive;       // Compaction Input
     ref<Buffer> specIndex;        // Compaction Output
     ref<Buffer> specInput;        // Specular input for neural network
     ref<Buffer> specColor;
 
-    RayBatchBuffer(ref<Device> pDevice, ShaderVar& var, uint32_t size, uint32_t numClusters, const std::string& name, bool needAll = true)
-        : pDevice(pDevice), var(var), size(size), numClusters(numClusters), name(name), needAll(needAll)
+    RayBatchBuffer(
+        ref<Device> pDevice,
+        ShaderVar& var,
+        uint32_t size,
+        uint32_t numClusters,
+        const std::string& name,
+        bool needAll = true,
+        bool needDiff = true,
+        bool needSpec = true
+    )
+        : pDevice(pDevice)
+        , var(var)
+        , size(size)
+        , numClusters(numClusters)
+        , name(name)
+        , needAll(needAll)
+        , needDiff(needDiff)
+        , needSpec(needSpec)
     {
         initBuffers();
     }
@@ -99,148 +117,45 @@ struct RayBatchBuffer
 
     void initBuffers()
     {
-        // Create buffers
+        // Only the four CUDA I/O buffers need exportable memory. Everything else
+        // stays on the Vulkan heap so it can be suballocated.
+        const auto kBind = ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess;
+        const auto kBindCuda = kBind | ResourceBindFlags::Shared;
+
         if (needAll)
         {
-            pos = pDevice->createStructuredBuffer(
-                var["allPos"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            dir = pDevice->createStructuredBuffer(
-                var["allDir"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            normal = pDevice->createStructuredBuffer(
-                var["allNormal"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            albedo = pDevice->createStructuredBuffer(
-                var["allAlbedo"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            roughness = pDevice->createStructuredBuffer(
-                var["allRoughness"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            vbuffer = pDevice->createStructuredBuffer(
-                var["allVBuffer"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            color = pDevice->createStructuredBuffer(
-                var["allColor"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            emission = pDevice->createStructuredBuffer(
-                var["allEmission"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
+            pos = pDevice->createStructuredBuffer(var["allPos"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
+            dir = pDevice->createStructuredBuffer(var["allDir"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
+            normal = pDevice->createStructuredBuffer(var["allNormal"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
+            albedo = pDevice->createStructuredBuffer(var["allAlbedo"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
+            roughness = pDevice->createStructuredBuffer(var["allRoughness"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
+            vbuffer = pDevice->createStructuredBuffer(var["allVBuffer"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
+            color = pDevice->createStructuredBuffer(var["allColor"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
+            emission = pDevice->createStructuredBuffer(var["allEmission"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
         }
 
-        // Create diffuse pixel buffers
+        if (needDiff)
         {
-            diffActive = pDevice->createStructuredBuffer(
-                var["diffActive"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            diffIndex = pDevice->createStructuredBuffer(
-                var["diffIndex"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            diffInput = pDevice->createStructuredBuffer(
-                var["diffInput"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            diffColor = pDevice->createStructuredBuffer(
-                var["diffColor"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
+            diffActive = pDevice->createStructuredBuffer(var["diffActive"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
+            diffIndex = pDevice->createStructuredBuffer(var["diffIndex"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
+            diffInput = pDevice->createStructuredBuffer(var["diffInput"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
+            diffColor = pDevice->createStructuredBuffer(var["diffColor"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
         }
 
-        // Create specular pixel buffers
+        if (needSpec)
         {
-            specVBuffer = pDevice->createStructuredBuffer(
-                var["specVBuffer"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            specPixel = pDevice->createStructuredBuffer(
-                var["specPixel"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            specPos = pDevice->createStructuredBuffer(
-                var["specPos"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            specDir = pDevice->createStructuredBuffer(
-                var["specDir"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            specRoughness = pDevice->createStructuredBuffer(
-                var["specRoughness"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            specActive = pDevice->createStructuredBuffer(
-                var["specActive"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            specIndex = pDevice->createStructuredBuffer(
-                var["specIndex"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            specInput = pDevice->createStructuredBuffer(
-                var["specInput"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
-            specColor = pDevice->createStructuredBuffer(
-                var["specColor"], size,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess | ResourceBindFlags::Shared,
-                MemoryType::DeviceLocal,
-                nullptr, false
-            );
+            specSrc = pDevice->createStructuredBuffer(var["specSrc"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
+            specActive = pDevice->createStructuredBuffer(var["specActive"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
+            specIndex = pDevice->createStructuredBuffer(var["specIndex"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
+            specInput = pDevice->createStructuredBuffer(var["specInput"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
+            specColor = pDevice->createStructuredBuffer(var["specColor"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
         }
     }
 
     ModelIOPtrs getDiffPtrs()
     {
+        if (!needDiff || !diffInput || !diffColor)
+            return { nullptr, nullptr, 0 };
         return {
             (precision_t*) diffInput->getCudaMemory()->getMappedData(),
             (float*) diffColor->getCudaMemory()->getMappedData(),
@@ -250,6 +165,8 @@ struct RayBatchBuffer
 
     ModelIOPtrs getSpecPtrs()
     {
+        if (!needSpec || !specInput || !specColor)
+            return { nullptr, nullptr, 0 };
         return {
             (precision_t*) specInput->getCudaMemory()->getMappedData(),
             (float*) specColor->getCudaMemory()->getMappedData(),
@@ -277,24 +194,6 @@ FALCOR_ENUM_INFO(
 );
 FALCOR_ENUM_REGISTER(RenderMode);
 
-enum class ConeTraceReuseMode
-{
-    TemporalMerge,
-    TemporalToHistory,
-    ScreenSpaceDenoise,
-};
-
-FALCOR_ENUM_INFO(
-    ConeTraceReuseMode,
-    {
-        {ConeTraceReuseMode::TemporalMerge, "Temporal Merge"},
-        {ConeTraceReuseMode::TemporalToHistory, "Temporal To History"},
-        {ConeTraceReuseMode::ScreenSpaceDenoise, "Screen Space Denoise"},
-    }
-);
-FALCOR_ENUM_REGISTER(ConeTraceReuseMode);
-
-
 class NeuralRadiosity : public RenderPass
 {
 public:
@@ -303,13 +202,6 @@ public:
     static ref<NeuralRadiosity> create(ref<Device> pDevice, const Properties& props)
     {
         return make_ref<NeuralRadiosity>(pDevice, props);
-    }
-
-    // Returns true if env var NCR_DEBUG_LOG=1 is set (used by NCR_LOG macro).
-    static bool debugLogEnvEnabled()
-    {
-        const char* v = std::getenv("NCR_DEBUG_LOG");
-        return v != nullptr && v[0] == '1';
     }
 
     NeuralRadiosity(ref<Device> pDevice, const Properties& props);
@@ -326,7 +218,7 @@ public:
 
 private:
     void render(RenderContext* pRenderContext, const RenderData& renderData);
-    void train(RenderContext* pRenderContext);
+    void train(RenderContext* pRenderContext, const RenderData& renderData);
     // Screen rendering passes
     void firstSmoothPass(RenderContext* pRenderContext, const RenderData& renderData);
     void compactPass(RenderContext* pRenderContext, const RenderData& renderData);
@@ -339,27 +231,28 @@ private:
     void compactBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     void resolveBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     // Common rendering passes
-    void coneTrace(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
+    void coneTrace(RenderContext* pRenderContext, const RenderData& renderData, std::shared_ptr<RayBatchBuffer> pRayBatch);
+    void coneTraceBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, const RenderData& renderData);
+    void specPrimaryPass(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, const RenderData& renderData);
     void modelInferenceCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     void modelTrainCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
+    // Spatiotemporal cluster reuse (render path only)
+    void clusterReuse(RenderContext* pRenderContext, const RenderData& renderData);
+    void clusterReprojectPass(RenderContext* pRenderContext, const RenderData& renderData);
+    void coneTraceScreenPass(RenderContext* pRenderContext, const RenderData& renderData);
+    void clusterSpatialReusePass(RenderContext* pRenderContext, const RenderData& renderData);
+    void savePrevGBuffer(RenderContext* pRenderContext, const RenderData& renderData);
+    bool useClusterReuse() const;
 
     void updateFrameDim(const uint2 frameDim);
     void updatePrograms(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareResources(RenderContext* pRenderContext, const RenderData& renderData);
     bool prepareLighting(RenderContext* pRenderContext);
     void preparePrefiltEnvCubemap(RenderContext* pRenderContext);
-    void updateRenderTemporalHistory(RenderContext* pRenderContext);
     void clearRenderTemporalHistory(RenderContext* pRenderContext);
     void bindScreenData(ShaderVar& var, const RenderData& renderData, const std::string &name);
+    void bindPrefiltEnv(ShaderVar& var);
     void bindRayBatchData(ShaderVar& var, std::shared_ptr<RayBatchBuffer> pRayBatch, const std::string &name);
-
-    /// Debug image dump: runs DebugDumpPass to copy per-spec-pixel debug
-    /// buffers into textures, then saves all debug images (spec level,
-    /// material ID, normal, albedo, tanLobe, cluster mean) to disk under
-    /// the given directory. Returns the directory path used.
-    void dumpDebugImages(RenderContext* pRenderContext, const RenderData& renderData);
-    /// Create / resize the debug dump textures and buffers to match frameDim.
-    void prepareDebugDumpResources();
     DefineList getShaderDefines(const RenderData& renderData) const;
     bool loadTrainCamerasFromFile(const std::filesystem::path& path);
     void setCamera(uint32_t cameraIdx);
@@ -372,16 +265,12 @@ private:
     uint2 mFrameDim = {};
     /// Shader variables changed flag
     bool mVarsChanged = false;
-    /// Algorithm parameters
-    static const uint32_t NUM_SPEC_RAYS_TRAIN = 128;
-    static const uint32_t NUM_SPEC_RAYS_RENDER = 32;
-    static const uint32_t NUM_KMEANS_ITERS_TRAIN = 10;
-    static const uint32_t NUM_KMEANS_ITERS_RENDER = 3;
-    uint32_t mNumSpecRays = NUM_SPEC_RAYS_RENDER;
-    uint32_t mNumKMeansIters = NUM_KMEANS_ITERS_RENDER;
-    uint32_t mNumClusters = 4;
+    /// Algorithm parameters. Counts come from NCRConfig.h; train vs render is chosen in setConeParameters.
+    uint32_t mNumSpecRays = NCR_NUM_SPEC_RAYS_RENDER;
+    uint32_t mNumKMeansIters = NCR_NUM_KMEANS_ITERS_RENDER;
+    uint32_t mNumClusters = NCR_NUM_CLUSTERS;
     /// Russian Roulette probability for random smooth.
-    float mRSRRProb = 0.4f;
+    float mRSRRProb = NCR_RS_RR_PROB;
     /// Enable alpha test.
     bool mUseAlphaTest = true;
     /// Use environment lighting.
@@ -391,44 +280,62 @@ private:
     /// Adjust shading normals.
     bool mAdjustShadingNormals = true;
     /// Specular roughness threshold
-    float mSpecularRoughnessThreshold = 0.5f;
-    /// Enable temporal reuse for render-batch specular cone tracing.
-    bool mEnableRenderSpecTemporalReuse = true;
-    /// Strategy for integrating the current frame's depth samples with temporal specular clusters.
-    ConeTraceReuseMode mConeTraceReuseMode = ConeTraceReuseMode::TemporalToHistory;
+    float mSpecularRoughnessThreshold = NCR_SPECULAR_ROUGHNESS_THRESHOLD;
+    /// Replace the specular environment color with the mirror-hit albedo.
+    bool mEnableMirrorAlbedo = true;
+    /// Enable spatiotemporal cluster reuse on the render path. When off, the render
+    /// path falls back to the original per-frame group-wide K-Means cone trace.
+    bool mEnableRenderSpecTemporalReuse = false;
+    /// Enable the neighbourhood gather stage of the cluster reuse pipeline.
+    bool mEnableClusterSpatialReuse = true;
+    /// Wipe all history whenever the scene reports moved geometry. Off by default:
+    /// a playing animation raises that flag every frame, which would leave the
+    /// render path permanently un-accumulated.
+    bool mClearHistoryOnGeometryMoved = false;
+    /// With cluster reuse off, run the render path at the training ray count so its
+    /// clusters can be compared against the T=128 reference. Very slow.
+    bool mUseReferenceConeTrace = false;
+    /// lambda: normalized residual below which a depth sample joins an existing mode.
+    /// Also sets how finely the cone is partitioned, because a sample that fails the
+    /// gate starts a new mode. Tuned against the T=32/T=128 K-Means reference on the
+    /// living-room scene: lambda=0.4 gives 3.64 live modes vs the reference's 3.70 and
+    /// matches its clsScale/(tanLobe*t) to within 2%, at 1.06 rays/pixel. Larger values
+    /// collapse the mixture toward a single wide mode and visibly coarsen the hash grid
+    /// query, which shifts the tone of every glossy pixel.
+    float mClusterAssignThreshold = 0.1f;
+    /// alpha_w kept for property compatibility; accumulation is 1/(n+1) until lock.
+    float mClusterAlphaWeight = 0.1f;
+    /// N_max: caps the per-mode (mu, sigma) count during accumulation.
+    float mClusterMaxCount = 64.0f;
+    /// Observation count at which the mixture hard-locks (α = 0). Aligns with old T=32.
+    float mClusterLockCount = 32.0f;
+    /// Consecutive residual outliers required to unlock a frozen pixel.
+    uint32_t mClusterUnlockStreak = 1;
+    /// Modes below this weight release their slot.
+    float mClusterWeakWeight = 0.02f;
+    /// Newborn sigma = mClusterSigmaPriorScale * tanLobe * t.
+    /// 0 makes a single-sample mode produce exactly the training path's singleton
+    /// clsScale of tanLobe*t/2; Welford then grows sigma from later hits. Measured
+    /// converged sigma/(tanLobe*t) has a median of 0.21, so any prior much above
+    /// that biases every fresh cluster toward a coarser hash grid level.
+    float mClusterSigmaPriorScale = 0.0f;
+    /// Ray budget per glossy pixel per frame. 1 baseline, more only on outliers.
+    uint32_t mClusterMaxRays = 4;
+    /// Reprojection rejection thresholds.
+    float mClusterNormalThreshold = 0.9f;
+    float mClusterRoughnessThreshold = 0.05f;
+    float mClusterPosThresholdRel = 0.02f;
+    /// Spatial gather configuration.
+    uint32_t mClusterNumTaps = 5;
+    float mClusterGatherRadiusScale = 1.0f;
+    float mClusterMaxGatherRadius = 8.0f;
+    float mClusterGammaMax = 0.6f;
+    float mClusterGammaMin = 0.05f;
+    float mClusterConfidenceCount = 32.0f;
     /// Post filter switch
     bool mEnablePostFilter = true;
     /// FXAA switch for post filter.
     bool mEnableFXAA = true;
-    /// Debug switches: render only diffuse or specular component (isolate flickering source).
-    bool mDebugRenderDiffuseOnly = false;
-    bool mDebugRenderSpecularOnly = false;
-    /// Debug switches: freeze training updates for one network (still inferred, params not updated).
-    bool mDisableDiffUpdate = false;
-    bool mDisableSpecUpdate = false;
-    /// Debug switches: freeze individual optimizer step() (forward/backward still run).
-    bool mFreezePrimGridOpt = false;
-    bool mFreezeClsGridOpt  = false;
-    bool mFreezeDiffNetOpt  = false;
-    bool mFreezeSpecNetOpt  = false;
-    /// Training parameter UI mirrors (synced to NRModel on change).
-    float mParamPrimGridLr = 5e-3f;
-    float mParamClsGridLr  = 5e-3f;
-    float mParamDiffNetLr  = 5e-3f;
-    float mParamSpecNetLr  = 5e-3f;
-    float mParamPrimGridEmaDecay = 0.95f;
-    float mParamClsGridEmaDecay  = 0.95f;
-    float mParamDiffNetEmaDecay  = 0.95f;
-    float mParamSpecNetEmaDecay  = 0.95f;
-    float mParamInterpRatio = 1.0f;
-    /// Verbose scene-related parameter logging (AABB / envMap / emissive / camera / batches).
-    bool mEnableDebugLog = false;
-    /// Debug: count hash grid collisions per frame (unique slots vs total queries).
-    bool mEnableHashCollisionStats = false;
-    /// Debug: visualize per-spec-pixel grid level as color (red=coarse, blue=fine).
-    bool mDebugShowSpecLevel = false;
-    /// Debug: one-shot flag to dump all debug images to disk on next frame.
-    bool mDebugDumpRequested = false;
     /// Force cull mode for all geometry, otherwise set it based on the scene.
     bool mForceCullMode = false;
     /// Cull mode to use for when mForceCullMode is true.
@@ -441,38 +348,28 @@ private:
     std::shared_ptr<RayBatchBuffer> mpRenderBatch;
     std::shared_ptr<RayBatchBuffer> mpTrainLHSBatch;
     std::shared_ptr<RayBatchBuffer> mpTrainRHSBatch;
-    ref<Buffer> mpRenderSpecTemporalHistory;
+    /// 1-element stand-in so shaders that declare the full RayBatch layout can
+    /// still be bound when a group (usually RHS spec) is not allocated.
+    std::shared_ptr<RayBatchBuffer> mpBindDummyBatch;
     ref<Texture> mpRenderTempColor;
     ref<Texture> mpPostFilterTempColor;
     ref<Texture> mpPrefiltEnvCubemap;
-    /// Debug: per-spec-pixel dominant grid level (one float per screen pixel).
-    ref<Buffer> mpSpecLevelBuffer;
-    /// Debug dump: per-spec-pixel buffers written by ConeTrace when DEBUG_DUMP is on.
-    ref<Buffer> mpSpecTanLobeBuffer;        // float per spec pixel
-    ref<Buffer> mpSpecClusterMeanBuffer;    // float4 per spec pixel (4 cluster means)
-    ref<Buffer> mpSpecClusterScaleBuffer;   // float4 per spec pixel (4 cluster scales)
-    ref<Buffer> mpSpecClusterWeightBuffer;  // float4 per spec pixel (4 cluster weights)
-    ref<Buffer> mpSpecClusterPosXBuffer;    // float4 per spec pixel (4 cluster pos.x)
-    ref<Buffer> mpSpecClusterPosYBuffer;    // float4 per spec pixel (4 cluster pos.y)
-    ref<Buffer> mpSpecClusterPosZBuffer;    // float4 per spec pixel (4 cluster pos.z)
-    ref<Buffer> mpSpecMaterialDataBuffer;   // float2 per spec pixel (materialID, roughness)
-    /// Debug dump: output textures for CPU readback (DebugDumpPass writes these).
-    ref<Texture> mpDumpSpecLevelTex;        // RGBA32Float
-    ref<Texture> mpDumpTanLobeTex;          // RGBA32Float
-    ref<Texture> mpDumpClusterMeanTex;      // RGBA32Float
-    ref<Texture> mpDumpClusterScaleTex;     // RGBA32Float
-    ref<Texture> mpDumpClusterWeightTex;    // RGBA32Float
-    ref<Texture> mpDumpClusterPosXTex;      // RGBA32Float
-    ref<Texture> mpDumpClusterPosYTex;      // RGBA32Float
-    ref<Texture> mpDumpClusterPosZTex;      // RGBA32Float
-    ref<Texture> mpDumpMaterialDataTex;     // RGBA32Float (r=materialID, g=roughness)
-    /// Debug dump compute pass.
-    ref<ComputePass> mpDebugDumpPass;
     ref<Sampler> mpPrefiltEnvSampler;
-    bool mRenderSpecTemporalHistoryValid = false;
-    bool mHasRenderCameraViewProj = false;
-    float4x4 mRenderCameraViewProj = float4x4();
     bool mPrefiltEnvDirty = true;
+
+    /// Per-pixel cluster mixture, ping-ponged: [1 - write] holds the previous frame.
+    ref<Buffer> mpClusterHistory[2];
+    /// Consecutive residual-outlier count, ping-ponged with the mixture.
+    ref<Buffer> mpResidualStreak[2];
+    uint32_t mClusterHistoryWriteIdx = 0;
+    /// False until one full frame of history exists (after a clear or a resize).
+    bool mClusterHistoryValid = false;
+    /// Previous frame G-Buffer copies, needed to rebuild the writer's cone frame.
+    ref<Texture> mpPrevPos;
+    ref<Texture> mpPrevDir;
+    ref<Texture> mpPrevNormal;
+    ref<Texture> mpPrevRoughness;
+    ref<Buffer> mpPrevSpecActive;
 
     // Scene & Compute Passes
     ref<Scene> mpScene;
@@ -487,6 +384,10 @@ private:
     ref<ComputePass> mpCompactBatch;
     ref<ComputePass> mpResolveBatch;
     ref<ComputePass> mpConeTrace;
+    ref<ComputePass> mpSpecPrimary;
+    ref<ComputePass> mpClusterReproject;
+    ref<ComputePass> mpConeTraceScreen;
+    ref<ComputePass> mpClusterSpatialReuse;
     ref<ComputePass> mpPrefiltEnvInitPass;
     ref<ComputePass> mpPrefiltEnvDownsamplePass;
     ref<SampleGenerator> mpSampleGenerator;
@@ -498,10 +399,10 @@ private:
     std::unique_ptr<NRModel> mpNRModel;
 
     // Train mode parameters
-    RenderMode mRenderMode = RenderMode::Render;
+    RenderMode mRenderMode = RenderMode::OnlineTrain;
     /// LHS and RHS
-    uint32_t mBatchSizeInit = 1u << 15;
-    uint32_t mNumRHSInit = 8u;
+    uint32_t mBatchSizeInit = NCR_BATCH_SIZE_INIT;
+    uint32_t mNumRHSInit = NCR_NUM_RHS_INIT;
     uint32_t mBatchSize = mBatchSizeInit;
     uint32_t mNumRHS = mNumRHSInit;
     /// Cameras used for training.
@@ -512,15 +413,4 @@ private:
     uint32_t mSaveCKPTInterval = 1000;
     bool mAdaptiveRHS = true;
     uint32_t mAdaptiveRHSStage = 0;
-    std::string mLoadModelPath;
 };
-
-// Debug-log macro: emits only when NeuralRadiosity::mEnableDebugLog is true,
-// OR the NCR_DEBUG_LOG environment variable is set to "1" (allows scripted
-// tests to dump scene parameters without GUI interaction).
-// Usage: NCR_LOG(pSelf, "fmt {}", arg);  pSelf must point to a NeuralRadiosity.
-#define NCR_LOG(pSelf, ...) \
-    do { \
-        if ((pSelf) && ((pSelf)->mEnableDebugLog || ::NeuralRadiosity::debugLogEnvEnabled())) \
-            ::Falcor::logInfo(__VA_ARGS__); \
-    } while (0)
