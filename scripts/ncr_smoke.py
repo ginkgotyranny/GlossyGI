@@ -35,14 +35,19 @@ def render_graph_NeuralRadiosity():
         g.markOutput("NeuralRadiosity." + extra)
     return g
 
-graph = render_graph_NeuralRadiosity()
 try:
     # Mogwai runs --script before --scene, so a synchronous render loop must load
     # the scene itself. Pass the scene via NCR_SMOKE_SCENE instead of --scene.
     scene = os.environ.get("NCR_SMOKE_SCENE")
     if scene:
         m.loadScene(scene)
-    m.addGraph(graph)
+    # NCR_SMOKE_GRAPH=<scripts/X.py>: run that render-graph script instead of the
+    # NeuralRadiosity graph (the script adds its own graph via m.addGraph).
+    graph_file = os.environ.get("NCR_SMOKE_GRAPH")
+    if graph_file:
+        exec(compile(open(graph_file).read(), graph_file, "exec"), globals())
+    else:
+        m.addGraph(render_graph_NeuralRadiosity())
     m.resizeFrameBuffer(int(res[0]), int(res[1]))
     m.ui = False
     m.clock.framerate = 60

@@ -10,12 +10,14 @@ rem   run.bat                          interactive: pick script + scene
 rem   run.bat <script> [scene] [anim]  direct mode (same as run.sh)
 rem   run.bat ncr living-room anim
 rem   run.bat ptnrd kitchen
-rem   Options: --width/-w N   --height/-h N
+rem   Options: --width/-w N   --height/-h N   --device/-d d3d12|vulkan   --gpu N
 rem   Set NCR_RUN_DRYRUN=1 to print the command without launching.
+rem   Set NCR_BUILD_DIR=build\windows-vs2022-vk to launch a different build tree.
 rem ============================================================================
 
 set "ROOT=%~dp0"
-set "BIN=%ROOT%build\windows-vs2022\bin\Release\Mogwai.exe"
+if not defined NCR_BUILD_DIR set "NCR_BUILD_DIR=build\windows-vs2022"
+set "BIN=%ROOT%%NCR_BUILD_DIR%\bin\Release\Mogwai.exe"
 set "SCENE_ROOT=%ROOT%media\scenes"
 
 if not exist "%BIN%" (
@@ -26,6 +28,7 @@ if not exist "%BIN%" (
 
 set WIDTH=1280
 set HEIGHT=720
+set "DEVICE_ARGS="
 set "SCRIPT_KEY="
 set "SCENE_NAME="
 set "SCENE_SUFFIX="
@@ -60,6 +63,9 @@ if /i "%A%"=="--width"    ( set "WIDTH=%~2" & shift & shift & goto argloop )
 if /i "%A%"=="-w"         ( set "WIDTH=%~2" & shift & shift & goto argloop )
 if /i "%A%"=="--height"   ( set "HEIGHT=%~2" & shift & shift & goto argloop )
 if /i "%A%"=="-h"         ( set "HEIGHT=%~2" & shift & shift & goto argloop )
+if /i "%A%"=="--device"   ( set "DEVICE_ARGS=!DEVICE_ARGS! --device-type=%~2" & shift & shift & goto argloop )
+if /i "%A%"=="-d"         ( set "DEVICE_ARGS=!DEVICE_ARGS! --device-type=%~2" & shift & shift & goto argloop )
+if /i "%A%"=="--gpu"      ( set "DEVICE_ARGS=!DEVICE_ARGS! --gpu=%~2" & shift & shift & goto argloop )
 if not defined SCRIPT_KEY ( set "SCRIPT_KEY=%A%" & shift & goto argloop )
 if not defined SCENE_NAME ( set "SCENE_NAME=%A%" & shift & goto argloop )
 echo Unknown argument: %A%
@@ -207,11 +213,13 @@ echo  Script : %SCRIPT_KEY% (!SCRIPT_PATH!)
 echo  Scene  : %SCENE_NAME% (%SCENE_SUFFIX%)
 echo  File   : %SCENE_FILE%
 echo  Window : %WIDTH%x%HEIGHT%
+echo  Binary : %BIN%
+if defined DEVICE_ARGS echo  Device :%DEVICE_ARGS%
 echo ============================================
 
 if defined NCR_RUN_DRYRUN (
-    echo [dryrun] "%BIN%" --width %WIDTH% --height %HEIGHT% --script "%ROOT%!SCRIPT_PATH!" --scene "%SCENE_FILE%"
+    echo [dryrun] "%BIN%"%DEVICE_ARGS% --width %WIDTH% --height %HEIGHT% --script "%ROOT%!SCRIPT_PATH!" --scene "%SCENE_FILE%"
     exit /b 0
 )
 
-"%BIN%" --width %WIDTH% --height %HEIGHT% --script "%ROOT%!SCRIPT_PATH!" --scene "%SCENE_FILE%"
+"%BIN%"%DEVICE_ARGS% --width %WIDTH% --height %HEIGHT% --script "%ROOT%!SCRIPT_PATH!" --scene "%SCENE_FILE%"
