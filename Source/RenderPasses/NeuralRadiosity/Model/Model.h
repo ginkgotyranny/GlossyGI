@@ -116,7 +116,10 @@ private:
     uint32_t mSpecGBufferDim;
     uint32_t mDiffInputDim;
     uint32_t mSpecInputDim;
+    /// Channels stored in diffColor / specColor and supervised by the loss.
     uint32_t mOutputDim;
+    /// FullyFusedMLP forward/backward width. 16 when mOutputDim <= 16.
+    uint32_t mPaddedOutputDim;
 
     uint32_t mDiffEncOffset;
     uint32_t mDiffPosOffset;

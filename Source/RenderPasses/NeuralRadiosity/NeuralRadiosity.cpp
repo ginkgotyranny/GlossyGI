@@ -471,8 +471,6 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
 void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
 {
     mpScene = pScene;
-    if (mpScene)
-      mpScene->getCamera()->setIsAnimated(false);
     mpFirstSmoothPass = nullptr;
     mpConeTrace = nullptr;
     mpSpecPrimary = nullptr;

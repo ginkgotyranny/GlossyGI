@@ -30,12 +30,13 @@
 #define NCR_PER_LEVEL_SCALE_SPEC 2.0f
 #define NCR_INTERP_RATIO 1.0f
 
-// Fused MLP. Output width stays 16 so it matches the fully fused layout.
+// Fused MLP. The stored color is RGBA. FullyFusedMLP still pads the last
+// layer to 16 internally and the inference path trims back to these 4.
 #define NCR_DIFF_N_NEURONS 64
 #define NCR_DIFF_N_HIDDEN_LAYERS 3
 #define NCR_SPEC_N_NEURONS 64
 #define NCR_SPEC_N_HIDDEN_LAYERS 4
-#define NCR_OUTPUT_DIM 16
+#define NCR_OUTPUT_DIM 4
 #define NCR_USE_FP16 1
 
 // Optimizer.

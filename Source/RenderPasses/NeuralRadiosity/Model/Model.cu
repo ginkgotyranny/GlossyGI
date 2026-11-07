@@ -202,6 +202,10 @@ void NRModel::createOnlineModels()
     mpSpecParamsFull     = std::make_shared<tcnn::GPUMemory<float>>(mpSpecNet->n_params());
     mpDiffNet->initialize_params(*mpRng, mpDiffParamsFull->data());
     mpSpecNet->initialize_params(*mpRng, mpSpecParamsFull->data());
+    mPaddedOutputDim = mpDiffNet->padded_output_width();
+    CHECK_THROW(mpSpecNet->padded_output_width() == mPaddedOutputDim);
+    CHECK_THROW(mpDiffNet->output_width() == mOutputDim);
+    CHECK_THROW(mpSpecNet->output_width() == mOutputDim);
 
     const tcnn::json offlineOptConfig = {
         {"otype", "Adam"},
@@ -384,10 +388,12 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
     if (diffBatchSize > 0) {
         tcnn::GPUMatrix<precision_t> diffInput(diffPtrs.inputPtr, mDiffInputDim, diffBatchSize);
         tcnn::GPUMatrix<float> diffTarget(diffPtrs.outputPtr, mOutputDim, diffBatchSize);
-        tcnn::GPUMatrix<precision_t> networkOutput{mOutputDim, diffBatchSize, mTrainStream};
-        tcnn::GPUMatrix<precision_t> dL_dnetworkOutput{mOutputDim, diffBatchSize, mTrainStream};
+        // Forward writes the padded 16-wide tile. The loss supervises mOutputDim
+        // and zeros the gradient on the padded channels.
+        tcnn::GPUMatrix<precision_t> networkOutput{mPaddedOutputDim, diffBatchSize, mTrainStream};
+        tcnn::GPUMatrix<precision_t> dL_dnetworkOutput{mPaddedOutputDim, diffBatchSize, mTrainStream};
         tcnn::GPUMatrix<precision_t> dL_dnetworkInput{mDiffInputDim, diffBatchSize, mTrainStream};
-        tcnn::GPUMatrix<float> loss{mOutputDim, diffBatchSize, mTrainStream};
+        tcnn::GPUMatrix<float> loss{mPaddedOutputDim, diffBatchSize, mTrainStream};
         // castMatrix(mTrainStream, diffInput, networkInput);
         // moveGBuffer(mTrainStream, diffGBuffer, networkInput, mDiffPosOffset);
         // Forward
@@ -422,10 +428,10 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
     if (specBatchSize > 0) {
         tcnn::GPUMatrix<precision_t> specInput(specPtrs.inputPtr, mSpecInputDim, specBatchSize);
         tcnn::GPUMatrix<float> specTarget(specPtrs.outputPtr, mOutputDim, specBatchSize);
-        tcnn::GPUMatrix<precision_t> networkOutput{mOutputDim, specBatchSize, mTrainStream};
-        tcnn::GPUMatrix<precision_t> dL_dnetworkOutput{mOutputDim, specBatchSize, mTrainStream};
+        tcnn::GPUMatrix<precision_t> networkOutput{mPaddedOutputDim, specBatchSize, mTrainStream};
+        tcnn::GPUMatrix<precision_t> dL_dnetworkOutput{mPaddedOutputDim, specBatchSize, mTrainStream};
         tcnn::GPUMatrix<precision_t> dL_dnetworkInput{mSpecInputDim, specBatchSize, mTrainStream};
-        tcnn::GPUMatrix<float> loss{mOutputDim, specBatchSize, mTrainStream};
+        tcnn::GPUMatrix<float> loss{mPaddedOutputDim, specBatchSize, mTrainStream};
         // castMatrix(mTrainStream, specInput, networkInput);
         // moveGBuffer(mTrainStream, specGBuffer, networkInput, mSpecPosOffset);
         // Forward
