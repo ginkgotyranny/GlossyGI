@@ -62,6 +62,24 @@ namespace
 
     /// Thread group size of the two compacted-index cluster passes.
     constexpr uint32_t kClusterGroupSize = 64;
+    /// Thread group size of SpecPrimary.
+    constexpr uint32_t kSpecPrimaryGroupSize = 64;
+    /// Byte offsets into RayBatchBuffer::counts.
+    constexpr uint64_t kDiffCountOffset = 0;
+    constexpr uint64_t kSpecCountOffset = sizeof(uint32_t);
+    /// ConeTrace and SpecPrimary run before the CPU knows this frame's specular
+    /// count, and this gfx build has no Vulkan indirect dispatch. The grid is sized
+    /// from the previous frame's count plus headroom, and the shaders stride over
+    /// any samples beyond it, so a count that grows is still fully covered. A grid
+    /// much smaller than the count costs ConeTrace ~1 ms on living-room-2, because
+    /// each group then runs many samples back to back.
+    constexpr uint32_t kSpecDispatchMinItems = 8192;
+
+    uint32_t specDispatchItems(uint32_t prevSpecCount, uint32_t batchSize)
+    {
+        const uint32_t withHeadroom = prevSpecCount + prevSpecCount / 8;
+        return std::min(batchSize, std::max(kSpecDispatchMinItems, withHeadroom));
+    }
 
     const FileDialogFilterVec kCameraJsonFilters = {
         {"json", "JSON Files"},
@@ -520,10 +538,15 @@ void NeuralRadiosity::onSceneUpdates(RenderContext* pRenderContext, IScene::Upda
 
 void NeuralRadiosity::render(RenderContext* pRenderContext, const RenderData& renderData)
 {
+    // submit(false) hands recorded work to the GPU without waiting for it. Falcor
+    // otherwise submits only at the CUDA interop syncs, so the GPU would sit idle
+    // while the CPU records the whole segment.
     // First smooth pass.
     firstSmoothPass(pRenderContext, renderData);
+    pRenderContext->submit(false);
     // Compact pass.
     compactPass(pRenderContext, renderData);
+    pRenderContext->submit(false);
     // Cone tracing: either the spatiotemporal cluster reuse pipeline or the
     // original per-frame group-wide K-Means.
     coneTrace(pRenderContext, renderData, mpRenderBatch);
@@ -531,6 +554,7 @@ void NeuralRadiosity::render(RenderContext* pRenderContext, const RenderData& re
     modelInferenceCUDA(pRenderContext, mpRenderBatch);
     // Resolve pass.
     resolvePass(pRenderContext, renderData);
+    pRenderContext->submit(false);
     // Post-process filtering pass.
     postFilterPass(pRenderContext, renderData);
     // Snapshot the G-Buffer for next frame's reprojection.
@@ -539,10 +563,14 @@ void NeuralRadiosity::render(RenderContext* pRenderContext, const RenderData& re
 
 void NeuralRadiosity::train(RenderContext* pRenderContext, const RenderData& renderData)
 {
+    // submit(false) between passes lets the GPU start while the CPU records the
+    // rest of the segment (see render()).
     // Sample random smooth points (LHS)
     randomSmooth(pRenderContext, mpTrainLHSBatch);
+    pRenderContext->submit(false);
     // Sample RHS
     sampleRHS(pRenderContext);
+    pRenderContext->submit(false);
 
     // Render RHS
     {
@@ -555,12 +583,14 @@ void NeuralRadiosity::train(RenderContext* pRenderContext, const RenderData& ren
         modelInferenceCUDA(pRenderContext, mpTrainRHSBatch);
         // 4. Resolve
         resolveBatch(pRenderContext, mpTrainRHSBatch);
+        pRenderContext->submit(false);
     }
 
     // Train LHS with RHS results
     {
         // 1. Compaction
         compactBatch(pRenderContext, mpTrainLHSBatch);
+        pRenderContext->submit(false);
         // 2. Cone tracing
         coneTraceBatch(pRenderContext, mpTrainLHSBatch, renderData);
         // 3. Resolve RHS color (write to lhs->diffColor/specColor)
@@ -614,20 +644,8 @@ void NeuralRadiosity::compactPass(RenderContext* pRenderContext, const RenderDat
 {
     FALCOR_PROFILE(pRenderContext, "CompactPass");
 
-    // Prefix sum from active mask to index
-    mpPrefixSum->execute(
-        pRenderContext,
-        mpRenderBatch->diffIndex,
-        mFrameDim.x * mFrameDim.y,
-        &mpRenderBatch->diffSize
-    );
-
-    mpPrefixSum->execute(
-        pRenderContext,
-        mpRenderBatch->specIndex,
-        mFrameDim.x * mFrameDim.y,
-        &mpRenderBatch->specSize
-    );
+    // Prefix sum from active mask to index. The counts stay on the GPU.
+    computeBatchCounts(pRenderContext, mpRenderBatch, mFrameDim.x * mFrameDim.y);
 
     ShaderVar var = mpCompactPass->getRootVar();
     const auto name = "gCompactPass";
@@ -636,9 +654,6 @@ void NeuralRadiosity::compactPass(RenderContext* pRenderContext, const RenderDat
     const AABB& aabb = mpScene->getSceneBounds();
     var[name]["bboxMin"] = aabb.minPoint;
     var[name]["bboxMax"] = aabb.maxPoint;
-
-    var[name]["diffSize"] = mpRenderBatch->diffSize;
-    var[name]["specSize"] = mpRenderBatch->specSize;
 
     var["diffActive"] = mpRenderBatch->diffActive;
     var["diffIndex"] = mpRenderBatch->diffIndex;
@@ -650,6 +665,8 @@ void NeuralRadiosity::compactPass(RenderContext* pRenderContext, const RenderDat
     var["specSrc"] = mpRenderBatch->specSrc;
 
     mpCompactPass->execute(pRenderContext, uint3(mFrameDim, 1));
+
+    stageBatchCounts(pRenderContext, mpRenderBatch);
 }
 
 void NeuralRadiosity::resolvePass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -810,34 +827,8 @@ void NeuralRadiosity::compactBatch(RenderContext* pRenderContext, std::shared_pt
 {
     FALCOR_PROFILE(pRenderContext, "CompactBatch");
 
-    // Prefix sum from active mask to index
-    if (pRayBatch->needDiff)
-    {
-        mpPrefixSum->execute(
-            pRenderContext,
-            pRayBatch->diffIndex,
-            pRayBatch->size,
-            &pRayBatch->diffSize
-        );
-    }
-    else
-    {
-        pRayBatch->diffSize = 0;
-    }
-
-    if (pRayBatch->needSpec)
-    {
-        mpPrefixSum->execute(
-            pRenderContext,
-            pRayBatch->specIndex,
-            pRayBatch->size,
-            &pRayBatch->specSize
-        );
-    }
-    else
-    {
-        pRayBatch->specSize = 0;
-    }
+    // Prefix sum from active mask to index. The counts stay on the GPU.
+    computeBatchCounts(pRenderContext, pRayBatch, pRayBatch->size);
 
     ShaderVar var = mpCompactBatch->getRootVar();
     const auto name = "gCompactBatch";
@@ -848,6 +839,37 @@ void NeuralRadiosity::compactBatch(RenderContext* pRenderContext, std::shared_pt
     var[name]["bboxMax"] = aabb.maxPoint;
 
     mpCompactBatch->execute(pRenderContext, uint3(pRayBatch->size, 1, 1));
+
+    stageBatchCounts(pRenderContext, pRayBatch);
+}
+
+void NeuralRadiosity::computeBatchCounts(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, uint32_t elementCount)
+{
+    // A disabled group keeps its count at zero.
+    pRenderContext->clearUAV(pRayBatch->counts->getUAV().get(), uint4(0));
+
+    // Passing a CPU pointer here would make PrefixSum read the total back, which
+    // flushes and waits for the GPU. The total goes to `counts` instead.
+    if (pRayBatch->needDiff)
+        mpPrefixSum->execute(pRenderContext, pRayBatch->diffIndex, elementCount, nullptr, pRayBatch->counts, kDiffCountOffset);
+    if (pRayBatch->needSpec)
+        mpPrefixSum->execute(pRenderContext, pRayBatch->specIndex, elementCount, nullptr, pRayBatch->counts, kSpecCountOffset);
+}
+
+void NeuralRadiosity::stageBatchCounts(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
+{
+    // The CPU copy is read after the next CUDA interop sync, which already waits
+    // for the GPU, so this costs no extra stall.
+    pRenderContext->copyBufferRegion(pRayBatch->countsReadback.get(), 0, pRayBatch->counts.get(), 0, 2 * sizeof(uint32_t));
+}
+
+void NeuralRadiosity::readBatchCountsAfterSync(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
+{
+    // waitForFalcor() blocks the CPU until the GPU is idle only on Vulkan. D3D12
+    // uses a shared fence and returns immediately, so wait explicitly there.
+    if (mpDevice->getType() != Device::Type::Vulkan)
+        pRenderContext->submit(true);
+    pRayBatch->readCounts();
 }
 
 void NeuralRadiosity::resolveBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
@@ -883,18 +905,21 @@ void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, const RenderData&
 
 void NeuralRadiosity::coneTraceBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, const RenderData& renderData)
 {
-    if (!pRayBatch->needSpec || pRayBatch->specSize == 0) return;
+    // This frame's specular count is only known on the GPU here. specSize still
+    // holds the previous frame's count and sizes the grid (see specDispatchItems).
+    if (!pRayBatch->needSpec) return;
 
     {
         FALCOR_PROFILE(pRenderContext, "ConeTrace");
+
+        const uint32_t numGroups = specDispatchItems(pRayBatch->specSize, pRayBatch->size);
 
         ShaderVar var = mpConeTrace->getRootVar();
         const auto name = "gConeTrace";
         // Bind parameters
         var[name]["batchSize"] = pRayBatch->size;
         var[name]["batchCount"] = mFrameCount;
-        var[name]["diffSize"] = pRayBatch->diffSize;
-        var[name]["specSize"] = pRayBatch->specSize;
+        var[name]["dispatchGroupCount"] = numGroups;
         var[name]["frameDim"] = mFrameDim;
         var[name]["useScreenGBuffer"] = pRayBatch->needAll ? 0u : 1u;
 
@@ -904,6 +929,7 @@ void NeuralRadiosity::coneTraceBatch(RenderContext* pRenderContext, std::shared_
 
         var["specSrc"] = pRayBatch->specSrc;
         var["specInput"] = pRayBatch->specInput;
+        var["gBatchCounts"] = pRayBatch->counts;
 
         var["allPos"] = pRayBatch->pos ? pRayBatch->pos : mpBindDummyBatch->pos;
         var["allDir"] = pRayBatch->dir ? pRayBatch->dir : mpBindDummyBatch->dir;
@@ -917,7 +943,8 @@ void NeuralRadiosity::coneTraceBatch(RenderContext* pRenderContext, std::shared_
 
         mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
-        mpConeTrace->execute(pRenderContext, uint3(pRayBatch->specSize * mNumSpecRays, 1, 1));
+        // Groups of NUM_SPEC_RAYS threads, each handling one glossy sample at a time.
+        mpConeTrace->execute(pRenderContext, uint3(numGroups * mNumSpecRays, 1, 1));
     }
 
     // Cluster slots and the envColor slot are different fields of the same element.
@@ -931,7 +958,8 @@ void NeuralRadiosity::specPrimaryPass(RenderContext* pRenderContext, std::shared
 
     ShaderVar var = mpSpecPrimary->getRootVar();
     const auto name = "gSpecPrimary";
-    var[name]["specSize"] = pRayBatch->specSize;
+    const uint32_t numThreads = specDispatchItems(pRayBatch->specSize, pRayBatch->size);
+    var[name]["dispatchThreadCount"] = numThreads;
     var[name]["frameDim"] = mFrameDim;
     var[name]["useScreenGBuffer"] = pRayBatch->needAll ? 0u : 1u;
     var[name]["enableMirrorAlbedo"] = mEnableMirrorAlbedo ? 1u : 0u;
@@ -942,6 +970,7 @@ void NeuralRadiosity::specPrimaryPass(RenderContext* pRenderContext, std::shared
 
     var["specSrc"] = pRayBatch->specSrc;
     var["specInput"] = pRayBatch->specInput;
+    var["gBatchCounts"] = pRayBatch->counts;
 
     var["allPos"] = pRayBatch->pos ? pRayBatch->pos : mpBindDummyBatch->pos;
     var["allDir"] = pRayBatch->dir ? pRayBatch->dir : mpBindDummyBatch->dir;
@@ -956,12 +985,17 @@ void NeuralRadiosity::specPrimaryPass(RenderContext* pRenderContext, std::shared
     bindPrefiltEnv(var);
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
-    mpSpecPrimary->execute(pRenderContext, uint3(pRayBatch->specSize, 1, 1));
+    mpSpecPrimary->execute(pRenderContext, uint3(numThreads, 1, 1));
 }
 
 void NeuralRadiosity::clusterReuse(RenderContext* pRenderContext, const RenderData& renderData)
 {
     FALCOR_PROFILE(pRenderContext, "ClusterReuse");
+
+    // The cluster passes size their dispatches from specSize on the CPU, so this
+    // path still waits for the compaction counts.
+    pRenderContext->submit(true);
+    mpRenderBatch->readCounts();
 
     // Ping-pong: the reproject pass reads [1 - write] and seeds [write], the cone
     // trace updates [write] in place, and the spatial pass only reads it.
@@ -1126,6 +1160,7 @@ void NeuralRadiosity::modelInferenceCUDA(RenderContext* pRenderContext, std::sha
     FALCOR_PROFILE(pRenderContext, "ModelInferenceCUDA");
 
     pRenderContext->waitForFalcor(mpNRModel->stream(false));
+    readBatchCountsAfterSync(pRenderContext, pRayBatch);
     mpNRModel->inference(pRayBatch->getDiffPtrs(), pRayBatch->getSpecPtrs());
     pRenderContext->waitForCuda(mpNRModel->stream(false));
 }
@@ -1135,6 +1170,7 @@ void NeuralRadiosity::modelTrainCUDA(RenderContext* pRenderContext, std::shared_
     FALCOR_PROFILE(pRenderContext, "ModelTrainCUDA");
 
     pRenderContext->waitForFalcor(mpNRModel->stream(true));
+    readBatchCountsAfterSync(pRenderContext, pRayBatch);
     mpNRModel->train(pRayBatch->getDiffPtrs(), pRayBatch->getSpecPtrs());
     pRenderContext->waitForCuda(mpNRModel->stream(true));
 }
@@ -1349,7 +1385,7 @@ void NeuralRadiosity::updatePrograms(RenderContext* pRenderContext, const Render
         desc.addShaderLibrary(kSpecPrimaryFile).csEntry("main");
 
         DefineList primaryDefines = defines;
-        primaryDefines.add("SPEC_PRIMARY_GROUP_SIZE", "64");
+        primaryDefines.add("SPEC_PRIMARY_GROUP_SIZE", std::to_string(kSpecPrimaryGroupSize));
         mpSpecPrimary = ComputePass::create(mpDevice, desc, primaryDefines, true);
 
         ShaderVar var = mpSpecPrimary->getRootVar();

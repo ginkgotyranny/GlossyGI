@@ -19,6 +19,8 @@ import MirrorAlbedo;
 
 RWStructuredBuffer<uint> specSrc;
 RWStructuredBuffer<SpecNetInput> specInput;
+/// Compacted counts from PrefixSum: [0] diffuse, [1] specular.
+ByteAddressBuffer gBatchCounts;
 
 // Train path: gather G-Buffer from the pre-compact batch.
 RWStructuredBuffer<float4> allPos;
@@ -35,7 +37,8 @@ RWTexture2D<float> gRoughness;
 
 struct SpecPrimary
 {
-    uint specSize = 0;
+    /// Number of threads actually dispatched. Each thread loops over samples with this stride.
+    uint dispatchThreadCount = 1;
     uint2 frameDim = {};
     /// Nonzero: specSrc is a screen pixIdx. Zero: specSrc is a pre-compact batch index.
     uint useScreenGBuffer = 0;
@@ -67,8 +70,6 @@ struct SpecPrimary
 
     void execute(const uint idx)
     {
-        if (idx >= specSize) return;
-
         float3 pos;
         float3 incoming;
         float roughness;
@@ -94,5 +95,9 @@ ParameterBlock<SpecPrimary> gSpecPrimary;
 [numthreads(SPEC_PRIMARY_GROUP_SIZE, 1, 1)]
 void main(uint3 dispatchThreadId: SV_DispatchThreadID)
 {
-    gSpecPrimary.execute(dispatchThreadId.x);
+    // The grid is sized from the previous frame's count, since this frame's count
+    // is only known on the GPU. The stride loop covers any samples beyond it.
+    const uint specCount = gBatchCounts.Load(4);
+    for (uint idx = dispatchThreadId.x; idx < specCount; idx += gSpecPrimary.dispatchThreadCount)
+        gSpecPrimary.execute(idx);
 }

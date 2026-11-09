@@ -48,6 +48,9 @@ import ClusterHistory;
 
 RWStructuredBuffer<uint> specSrc;
 RWStructuredBuffer<SpecNetInput> specInput;
+/// Compacted counts from PrefixSum: [0] diffuse, [1] specular. Read on the GPU so
+/// the dispatch can be sized without a CPU readback.
+ByteAddressBuffer gBatchCounts;
 
 // Train path: gather G-Buffer from the pre-compact batch.
 RWStructuredBuffer<float4> allPos;
@@ -140,8 +143,8 @@ struct ConeTrace
 
     uint batchSize = 0;
     uint batchCount = 0;
-    uint diffSize = 0;
-    uint specSize = 0;
+    /// Number of groups actually dispatched. Each group loops over samples with this stride.
+    uint dispatchGroupCount = 1;
     uint2 frameDim = {};
     uint useScreenGBuffer = 0;
 
@@ -554,9 +557,6 @@ struct ConeTrace
 
     void execute(const uint pixIdx, const uint threadIdx)
     {
-        if (pixIdx >= specSize)
-            return;
-
         // Load interaction.
         loadGroupData(pixIdx, threadIdx);
 
@@ -577,5 +577,15 @@ ParameterBlock<ConeTrace> gConeTrace;
 [numthreads(NUM_SPEC_RAYS, 1, 1)]
 void main(uint3 groupID: SV_GroupID, uint3 groupThreadID: SV_GroupThreadID)
 {
-    gConeTrace.execute(groupID.x, groupThreadID.x);
+    // The CPU does not know this frame's specular count when it records this
+    // dispatch. It sizes the grid from the previous frame's count, and each group
+    // strides over any samples beyond it. The stride is uniform across the group,
+    // so the barriers inside execute() stay convergent.
+    const uint specCount = gBatchCounts.Load(4);
+    for (uint pixIdx = groupID.x; pixIdx < specCount; pixIdx += gConeTrace.dispatchGroupCount)
+    {
+        gConeTrace.execute(pixIdx, groupThreadID.x);
+        // The next sample overwrites the groupshared interaction and cluster state.
+        GroupMemoryBarrierWithGroupSync();
+    }
 }

@@ -45,6 +45,8 @@ struct RayBatchBuffer
     ref<Device> pDevice;
     ShaderVar var;
     uint32_t size = 0;
+    /// Compacted counts on the CPU. Only valid after readCounts(), which needs the
+    /// GPU to have finished the compaction (the CUDA interop sync guarantees that).
     uint32_t diffSize = 0;
     uint32_t specSize = 0;
     uint32_t numClusters = 0;
@@ -77,6 +79,10 @@ struct RayBatchBuffer
     ref<Buffer> specIndex;        // Compaction Output
     ref<Buffer> specInput;        // Specular input for neural network
     ref<Buffer> specColor;
+    /// Compacted counts: [0] diffuse, [1] specular. Written by PrefixSum on the GPU.
+    ref<Buffer> counts;
+    /// Host-visible copy of `counts`, filled by a copy recorded after compaction.
+    ref<Buffer> countsReadback;
 
     RayBatchBuffer(
         ref<Device> pDevice,
@@ -150,6 +156,19 @@ struct RayBatchBuffer
             specInput = pDevice->createStructuredBuffer(var["specInput"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
             specColor = pDevice->createStructuredBuffer(var["specColor"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
         }
+
+        counts = pDevice->createBuffer(2 * sizeof(uint32_t), kBind, MemoryType::DeviceLocal, nullptr);
+        countsReadback = pDevice->createBuffer(2 * sizeof(uint32_t), ResourceBindFlags::None, MemoryType::ReadBack, nullptr);
+    }
+
+    /// Load diffSize/specSize from countsReadback. The caller must make sure the GPU
+    /// has executed the copy into countsReadback, otherwise the values are stale.
+    void readCounts()
+    {
+        const uint32_t* pCounts = static_cast<const uint32_t*>(countsReadback->map());
+        diffSize = needDiff ? pCounts[0] : 0;
+        specSize = needSpec ? pCounts[1] : 0;
+        countsReadback->unmap();
     }
 
     ModelIOPtrs getDiffPtrs()
@@ -229,6 +248,10 @@ private:
     void sampleRHS(RenderContext* pRenderContext);
     void resolveRHS(RenderContext* pRenderContext);
     void compactBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
+    // Batch counts stay on the GPU until the next full sync.
+    void computeBatchCounts(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, uint32_t elementCount);
+    void stageBatchCounts(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
+    void readBatchCountsAfterSync(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     void resolveBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     // Common rendering passes
     void coneTrace(RenderContext* pRenderContext, const RenderData& renderData, std::shared_ptr<RayBatchBuffer> pRayBatch);
