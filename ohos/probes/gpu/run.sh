@@ -3,7 +3,7 @@
 # pushes both to the phone and runs the tests. See gpu_probe.cpp for what each test answers.
 #
 # Usage (Git Bash, phone connected over hdc):
-#   ohos/probes/gpu/run.sh [info|encode|scatter|adam|rays|features|features64 ...]     default: all
+#   ohos/probes/gpu/run.sh [info|encode|scatter|adam|rays|features|features64|readback|load16|pipelines ...]     default: all
 # Results: ohos/_build/gpu_probe/results.txt (RESULT lines) and full.log (everything).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,7 +14,7 @@ HDC="${HDC:-/c/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/toolch
 SLANGC="${SLANGC:-$REPO/external/packman/slang/bin/slangc.exe}"
 OUT="$ROOT/_build/gpu_probe"
 DEVICE_DIR=/data/local/tmp/ncr_gpu_probe
-SHADERS="PrimEncode ClsEncode PrimScatter GridAdam RayThroughput Features"
+SHADERS="PrimEncode ClsEncode PrimScatter GridAdam RayThroughput Features ReadAfterWrite Load16"
 
 mkdir -p "$OUT"
 for s in $SHADERS; do

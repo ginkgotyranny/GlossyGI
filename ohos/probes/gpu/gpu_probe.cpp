@@ -8,6 +8,10 @@
 //   rays      inline ray query throughput in a closed 196,608-triangle box (every ray must hit)
 //   features  subgroup arithmetic and groupshared memory in a Slang compute shader
 //   features64 the same shader with 64-bit integers (needs shaderInt64)
+//   readback  does a load see a store made earlier in the same invocation, for a storage image and
+//             for a storage buffer? (NCR's ResolvePass depends on it for the image.)
+//   load16    16-bit loads from a byte-address buffer at offsets that are not multiples of four
+//             (how Falcor reads the 16-bit indices of every odd triangle)
 //   pipelines  (not in the default list) creates a compute pipeline from every <name>.spv with a
 //             <name>.layout in ./baked: the SPIR-V Falcor compiled for the NCR passes. Tells whether
 //             the driver accepts those modules at all.
@@ -774,6 +778,140 @@ static void testFeatures(const std::string& dir, bool int64)
 }
 
 // ---------------------------------------------------------------------------------------------
+static void testReadAfterWrite(const std::string& dir)
+{
+    printf("== readback: a load after a store in the same invocation\n");
+    const uint32_t width = 64, height = 64, count = width * height;
+    struct { uint32_t width, enable; } push = {width, 1};
+    Pipeline p = makeCompute(dir + "/ReadAfterWrite.spv", {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kStorage, kStorage}, sizeof(push));
+    if (!p.ok) return;
+
+    // Storage image, RGBA32F, texel i holds the value i.
+    VkImageCreateInfo ici = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    ici.extent = {width, height, 1};
+    ici.mipLevels = 1;
+    ici.arrayLayers = 1;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    VkImage image;
+    CHK(vkCreateImage(gDev, &ici, nullptr, &image));
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(gDev, image, &req);
+    VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = memoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VkDeviceMemory imageMemory;
+    CHK(vkAllocateMemory(gDev, &ai, nullptr, &imageMemory));
+    CHK(vkBindImageMemory(gDev, image, imageMemory, 0));
+    VkImageViewCreateInfo vi = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = ici.format;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkImageView view;
+    CHK(vkCreateImageView(gDev, &vi, nullptr, &view));
+
+    Buffer staging = makeBuffer(count * 16ull, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    Buffer buffer = makeBuffer(count * 16ull, kStorageUsage);
+    Buffer out = makeBuffer(count * 16ull, kStorageUsage);
+    for (uint32_t i = 0; i < count; i++)
+        for (uint32_t c = 0; c < 4; c++) staging.as<float>()[i * 4 + c] = buffer.as<float>()[i * 4 + c] = (float)i;
+    memset(out.data, 0, out.size);
+
+    VkCommandBuffer cb = beginCommands();
+    VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange = vi.subresourceRange;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    VkBufferImageCopy region = {};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyBufferToImage(cb, staging.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    submitAndWait(cb);
+
+    VkDescriptorImageInfo imageInfo = {VK_NULL_HANDLE, view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet w = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = p.set;
+    w.dstBinding = 0;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    w.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(gDev, 1, &w, 0, nullptr);
+    bindBuffer(p, 1, buffer);
+    bindBuffer(p, 2, out);
+    runCompute(p, &push, sizeof(push), count / 64, 1, 1);
+
+    // What the image holds afterwards.
+    cb = beginCommands();
+    vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, staging.buffer, 1, &region);
+    submitAndWait(cb);
+
+    size_t imageLoadOk = 0, bufferLoadOk = 0, imageStored = 0, bufferStored = 0, firstOk = 0;
+    for (uint32_t i = 0; i < count; i++)
+    {
+        const float* o = out.as<float>() + i * 4;
+        firstOk += o[0] == (float)i && o[2] == (float)i;
+        imageLoadOk += o[1] == (float)i + 100.0f;
+        bufferLoadOk += o[3] == (float)i + 100.0f;
+        imageStored += staging.as<float>()[i * 4] == (float)i + 100.0f;
+        bufferStored += buffer.as<float>()[i * 4] == (float)i + 100.0f;
+    }
+    printf("  thread 5: image first load %.0f, second load %.0f; buffer first load %.0f, second load %.0f (stored: old + 100)\n",
+           out.as<float>()[20], out.as<float>()[21], out.as<float>()[22], out.as<float>()[23]);
+    printf("RESULT readback: first loads %zu/%u | image: store landed %zu/%u, load after it sees it %zu/%u %s | buffer: store landed %zu/%u, load after it sees it %zu/%u %s\n",
+           firstOk, count, imageStored, count, imageLoadOk, count, imageLoadOk == count ? "OK" : "STALE", bufferStored, count,
+           bufferLoadOk, count, bufferLoadOk == count ? "OK" : "STALE");
+    vkDestroyImageView(gDev, view, nullptr);
+    vkDestroyImage(gDev, image, nullptr);
+    vkFreeMemory(gDev, imageMemory, nullptr);
+    for (Buffer* b : {&staging, &buffer, &out}) freeBuffer(*b);
+}
+
+// ---------------------------------------------------------------------------------------------
+static void testLoad16(const std::string& dir)
+{
+    printf("== load16: 16-bit loads at offsets that are not multiples of four\n");
+    Pipeline p = makeCompute(dir + "/Load16.spv", {kStorage, kStorage}, 0);
+    if (!p.ok) return;
+    const uint32_t triangles = 4096;
+    Buffer data = makeBuffer(triangles * 6 + 8, kStorageUsage);
+    Buffer out = makeBuffer(triangles * 8 * 4ull, kStorageUsage);
+    for (uint32_t i = 0; i < triangles * 3 + 4; i++) data.as<uint16_t>()[i] = (uint16_t)i;
+    memset(out.data, 0xff, out.size);
+    bindBuffer(p, 0, data);
+    bindBuffer(p, 1, out);
+    runCompute(p, nullptr, 0, triangles / 64, 1, 1);
+    size_t directEven = 0, directOdd = 0, wordsOk = 0;
+    for (uint32_t t = 0; t < triangles; t++)
+    {
+        const uint32_t* o = out.as<uint32_t>() + t * 8;
+        const uint32_t e[3] = {(t * 3) & 0xffffu, (t * 3 + 1) & 0xffffu, (t * 3 + 2) & 0xffffu};
+        const bool direct = o[0] == e[0] && o[1] == e[1] && o[2] == e[2];
+        (t & 1 ? directOdd : directEven) += direct;
+        wordsOk += o[4] == e[0] && o[5] == e[1] && o[6] == e[2];
+    }
+    const uint32_t* o = out.as<uint32_t>();
+    printf("  triangle 0 (offset 0): %u %u %u; triangle 1 (offset 6, expected 3 4 5): %u %u %u; triangle 3 (offset 18, expected 9 10 11): %u %u %u\n",
+           o[0], o[1], o[2], o[8], o[9], o[10], o[24], o[25], o[26]);
+    printf("RESULT load16: Load<uint16_t3> correct on %zu/%u even triangles and %zu/%u odd triangles %s | through aligned 32-bit words %zu/%u %s\n",
+           directEven, triangles / 2, directOdd, triangles / 2, directEven + directOdd == triangles ? "OK" : "WRONG", wordsOk, triangles,
+           wordsOk == triangles ? "OK" : "WRONG");
+    for (Buffer* b : {&data, &out}) freeBuffer(*b);
+}
+
+// ---------------------------------------------------------------------------------------------
 static void testPipelines(const std::string& dir)
 {
     printf("== pipelines: compute pipelines from the SPIR-V baked by Falcor\n");
@@ -849,7 +987,7 @@ int main(int argc, char** argv)
     dir = dir.find('/') == std::string::npos ? "." : dir.substr(0, dir.find_last_of('/'));
     std::vector<std::string> tests;
     for (int i = 1; i < argc; i++) tests.push_back(argv[i]);
-    if (tests.empty()) tests = {"encode", "scatter", "adam", "rays", "features", "features64"};
+    if (tests.empty()) tests = {"encode", "scatter", "adam", "rays", "features", "features64", "readback", "load16"};
 
     VkApplicationInfo app = {VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.apiVersion = VK_API_VERSION_1_2;
@@ -941,10 +1079,11 @@ int main(int argc, char** argv)
     VkCommandPoolCreateInfo pci = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pci.queueFamilyIndex = 0;
     CHK(vkCreateCommandPool(gDev, &pci, nullptr, &gPool));
-    VkDescriptorPoolSize poolSizes[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 64}, {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 4}};
+    VkDescriptorPoolSize poolSizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 64}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},
+                                         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 4}};
     VkDescriptorPoolCreateInfo dpi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dpi.maxSets = 16;
-    dpi.poolSizeCount = gRayQuery ? 2 : 1;
+    dpi.poolSizeCount = gRayQuery ? 3 : 2;
     dpi.pPoolSizes = poolSizes;
     CHK(vkCreateDescriptorPool(gDev, &dpi, nullptr, &gDescriptorPool));
     if (gRayQuery)
@@ -965,6 +1104,8 @@ int main(int argc, char** argv)
         else if (test == "features") testFeatures(dir, false);
         else if (test == "features64") testFeatures(dir, true);
         else if (test == "pipelines") testPipelines(dir);
+        else if (test == "readback") testReadAfterWrite(dir);
+        else if (test == "load16") testLoad16(dir);
         else if (test != "info") printf("unknown test %s\n", test.c_str());
     }
     vkDeviceWaitIdle(gDev);

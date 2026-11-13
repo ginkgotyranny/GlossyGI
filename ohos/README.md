@@ -30,8 +30,12 @@ ohos/npu/train_loop_check.py   convergence of the NPU-style training loop agains
 ohos/npu/export_models.py      gradient check vs autograd, ONNX, test vectors, .om / .omc conversion (WSL)
 ohos/probes/npu_mlp/           on-device probe: load a model through NNRt, check the outputs, time RunSync
 ohos/probes/gpu/               on-device probe: hash grids in compute, ray query throughput, shader features, baked pipelines
+ohos/replay/                   the replayer: runs the baked passes on any Vulkan device (PC and phone), networks on the CPU for now
 ohos/tools/spirv_info.py       capabilities and bindings of a SPIR-V module (and .layout files for the probe)
 ohos/tools/bake_check.py       resolves every SPIR-V binding of a bake to the resource the bake recorded for it
+ohos/tools/bake_pack.py        joins bake and SPIR-V into the index the replayer reads; repairs the SPIR-V (spirv_fix.py)
+ohos/tools/replay_compare.py   a replay's images and buffers against Falcor's from the baked frame
+ohos/tools/raw_to_png.py       a dumped RGBA32F image as PNG
 ohos/tools/png_stats.py        mean / saturation / difference of PNG frames, standard library only
 ohos/_build/                   generated files (git-ignored)
 ```
@@ -205,12 +209,75 @@ that computes the same sequence with 32-bit arithmetic (`FALCOR_SPLITMIX64_32BIT
 64-bit arithmetic on 400,000 draws); the NeuralRadiosity pass defines it, so the desktop and the phone
 run the same code. The default is unchanged for every other pass.
 
+### The replayer
+
+`ohos/replay` loads a packed bake and runs the render path the way `NeuralRadiosity::render()` does
+(FirstSmoothPass, prefix sums, CompactPass, ConeTrace, SpecPrimary, the networks, ResolvePass,
+PostFilterPass, PostFXAAPass), without Falcor: it creates the buffers, textures and samplers of the bake,
+rebuilds the acceleration structures, creates a compute pipeline per baked module and binds what Falcor
+had bound. The same source builds for Windows and for OpenHarmony. In this first version the prefix sums
+and the networks run on the CPU (`replay_nn.h`, the float32 reference of `ncr_reference.py`).
+
+```bat
+python ohos/tools/bake_pack.py <bake dir>
+ohos\replay\build_pc.bat
+ohos\_build\replay\ncr_replay.exe <bake dir> <checkpoint.ckpt> <out dir>
+python ohos/tools/replay_compare.py <bake dir> <out dir>
+bash ohos/replay/run_device.sh <bake dir> <checkpoint.ckpt>          # the same on the phone
+python ohos/tools/replay_compare.py <bake dir> ohos/_build/replay/device_out
+```
+
+The bake keeps, as reference, every image and ray-batch buffer as Falcor left it at the end of the baked
+frame; the replayer writes the same resources after replaying that frame.
+
+Results, bathroom at 640x360 in render mode with a 300-step checkpoint (92,764 diffuse and 130,423
+specular samples), 2026-11-13:
+
+| | PC (the GPU Falcor ran on) | Phone (Maleoon 955) |
+|---|---|---|
+| Diffuse / specular masks, compacted indices, counts | identical | identical |
+| Hit records (same triangle) | 100% of the pixels | 99.998% |
+| Position, direction, normal, albedo, roughness (mean difference / mean value) | identical | 1e-6 to 1e-4 |
+| Network inputs after cone trace and encodings (same measure) | 1e-4 | 2e-4 |
+| Network outputs, CPU float32 against tiny-cuda-nn fp16 (same measure) | 5e-4 | 5e-4 |
+| Final image against Falcor | 74.7 dB PSNR | 61.6 dB PSNR |
+
+GPU time of that frame on the phone: FirstSmoothPass 2.2-2.9 ms; CompactPass + ConeTrace (32 rays for each
+of 130,423 samples, K-Means) + SpecPrimary 68-78 ms; ResolvePass + PostFilterPass + PostFXAAPass 6.5-6.9 ms.
+Acceleration structures (591,288 triangles) build in 22-31 ms, the 15 pipelines in 3.5-3.9 s. The CPU
+stand-ins take 82 ms (prefix sums) and about 390 ms (networks); they are replaced next.
+
+### What the phone's driver does differently
+
+Each of these made the first replays on the phone wrong while the PC was right. The first two are
+reproduced by `ohos/probes/gpu`.
+
+1. **A load from a storage image after a store to the same texel, in the same invocation, returns the
+   value from before the store** (test `readback`: 0 of 4,096; the store itself lands, and storage
+   buffers behave). ResolvePass read the throughput from `gColor`, stored the product and read `gColor`
+   back for the next pass, which therefore got the bare throughput: a white image. It now keeps the
+   result in a local. No other NCR shader reads an image back after writing it.
+2. **At most 65,535 thread groups per dimension, and a larger dispatch runs only that many without an
+   error.** ConeTrace is dispatched with one group per specular sample (146,725 here), so half of the
+   samples were never traced. Its shader already strides a group over further samples when there are
+   fewer groups than samples; the replayer caps the group count at the device limit and sets the stride.
+3. **Descriptor arrays are indexed per group unless the access is decorated NonUniform**, as Vulkan
+   specifies. Falcor's material system indexes its texture and sampler arrays by material without the
+   decoration, and the Slang version it ships does not emit it on the pointer even when asked, so pixels
+   took the texture of a neighbour's material (part of a picture showed its wooden frame). `spirv_fix.py`,
+   run by `bake_pack.py`, adds the decoration to every access into an array of images or samplers with a
+   non-constant index, and declares the capabilities.
+
+A 16-bit index load at a byte offset that is not a multiple of four, as Falcor does for every odd
+triangle, was suspected first and is fine (test `load16`).
+
 ## Stages
 
 1. Device probes (done).
 2. The network split on the PC against the CUDA implementation (done, above).
-3. Bake and replay. Done: the bake (SPIR-V accepted by the phone's driver; resources, uniform layouts and
-   acceleration-structure description complete). Next: a replayer on the PC compared with Falcor image by
-   image, with a CPU implementation of the networks in place of the NPU.
+3. Bake and replay. Done: the bake, and the replayer rendering the baked frame on the PC and on the
+   phone in agreement with Falcor (above), with the prefix sums and the networks on the CPU. Next: the
+   grid lookups in compute and the MLPs on the NPU in place of the CPU networks, the prefix sums on the
+   GPU, the cluster-reuse cone trace, running frame after frame with a moving camera, then training.
 4. The HarmonyOS app: platform layer, NNRt backend, zero-copy buffers, frame synchronisation, cross-frame
    training; then performance.

@@ -57,20 +57,25 @@ struct ResolvePass
         if (any(pixel >= frameDim)) return;
 
         uint pixIdx = pixel.y * frameDim.x + pixel.x;
-        float4 thp = gColor[pixel];
+        // The pixel holds the path throughput. The result is kept in a local and written to both
+        // images: loading gColor again after storing to it returns the value from before the store
+        // on the Maleoon 955 driver (ohos/probes/gpu, test "readback").
+        float4 color = gColor[pixel];
 
         if (specActive[pixIdx] != 0)
         {
             const uint specIdx = specIndex[pixIdx];
-            gColor[pixel] = thp * specColor[specIdx].toFloat4();
+            color *= specColor[specIdx].toFloat4();
+            gColor[pixel] = color;
         }
         else if (diffActive[pixIdx] != 0)
         {
             const uint diffIdx = diffColorOffset + diffIndex[pixIdx];
-            gColor[pixel] = thp * diffColor[diffIdx].toFloat4();
+            color *= diffColor[diffIdx].toFloat4();
+            gColor[pixel] = color;
         }
 
-        tempColor[pixel] = gColor[pixel];
+        tempColor[pixel] = color;
     }
 }
 
