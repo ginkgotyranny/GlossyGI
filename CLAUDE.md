@@ -108,6 +108,14 @@ Upstream NRDPass was D3D12-only. This fork adds a Vulkan backend (`createVulkanP
 
 `OptixDenoiser` pass + `scripts/OptixDenoiser.py` provide the other comparison baseline (needs the OptiX SDK under `external/packman/optix`).
 
+## OpenHarmony port (`ohos/`, branch `ohos-port`)
+
+`ohos/` holds the port of NCR to a HarmonyOS phone (Mate 90 Pro Max, Kirin 9050 Pro, Maleoon 955); `ohos/README.md` is the reference, including the measured probe results. It is a new native runtime, not a Falcor build: Falcor and CUDA do not exist on the phone. The fixed requirement is that the two MLPs are inferred **and trained** on the NPU in real time (NNRt, HiAI Foundation device `HIAI_F`); the hash grids stay on the GPU (compute shaders), and the MLP optimizer runs on the CPU.
+
+- `ohos/npu/` defines the MLPs as NPU graphs in PyTorch (weights as inputs in conv-kernel layout, hand-written gradients, no compare/cast/`Sign`, 2-D sample tiles) and exports ONNX / `.om` / `.omc`. Run it with `E:/MyProjects/MRRCGI/.venv/Scripts/python`; the converters (`omg`, `atc`) run in WSL as set up for the Device MRRC project (`E:\MyProjects\MRRCGI`, whose OpenHarmony port is the platform-side reference).
+- `ohos/probes/` are stand-alone executables built with the OpenHarmony NDK and run from a shell on the phone over `hdc` (`run.sh` in each folder builds, pushes, runs and collects `RESULT` lines into `ohos/_build/`).
+- Shaders for the phone are Slang compiled offline with `external/packman/slang/bin/slangc.exe -target spirv`. The phone's driver has no 64-bit integers (`shaderInt64 = 0`): any `uint64_t`/`int64_t` in a shader makes pipeline creation fail.
+
 ## Conventions
 
 - Formatting: `.clang-format` at root (`tools/format_code.sh`); VS Code uses the clang-format from `tools/.packman/clang-format`.

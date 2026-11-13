@@ -1,0 +1,2 @@
+# Git Bash cannot run scripts checked out with CRLF line endings.
+*.sh text eol=lf
