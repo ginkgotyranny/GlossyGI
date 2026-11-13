@@ -62,9 +62,10 @@ export struct UniformSampleGenerator : ISampleGenerator
         // but it is very unlikely. For example, with these most extreme parameters of
         // 2^56 sequences of length L, the probability of overlap is P(overlap) = L*2^-16.
         SplitMix64 rng = createSplitMix64(interleave_32bit(pixel), sampleNumber);
-        uint64_t s0 = nextRandom64(rng);
-        uint64_t s1 = nextRandom64(rng);
-        uint seed[4] = { uint(s0), uint(s0 >> 32), uint(s1), uint(s1 >> 32) };
+        // As (low, high) words: the same values with or without 64-bit integers (FALCOR_SPLITMIX64_32BIT).
+        uint2 s0 = nextRandom64Parts(rng);
+        uint2 s1 = nextRandom64Parts(rng);
+        uint seed[4] = { s0.x, s0.y, s1.x, s1.y };
 
         // Create xoshiro128** pseudorandom generator.
         this.rng = createXoshiro128StarStar(seed);

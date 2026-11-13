@@ -318,6 +318,9 @@ private:
     void coneTrace(RenderContext* pRenderContext, const RenderData& renderData, std::shared_ptr<RayBatchBuffer> pRayBatch);
     void coneTraceBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, const RenderData& renderData);
     void specPrimaryPass(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, const RenderData& renderData);
+    /// Writes what the OpenHarmony port replays on the phone (BakeExport.cpp). Does nothing unless
+    /// the environment variable NCR_BAKE_DIR is set.
+    void bakeExport(RenderContext* pRenderContext);
     void modelInferenceCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     void modelTrainCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     // Spatiotemporal cluster reuse (render path only)

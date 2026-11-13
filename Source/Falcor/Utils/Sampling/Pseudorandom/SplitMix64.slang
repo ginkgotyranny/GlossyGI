@@ -37,8 +37,82 @@
  * Steele Jr, Guy L., Doug Lea, and Christine H. Flood., "Fast Splittable Pseudorandom Number Generators",
  * ACM SIGPLAN Notices 49.10 (2014): 453-472. http://dx.doi.org/10.1145/2714064.2660195.
  *
- * This code requires shader model 6.0 or above for 64-bit integer support.
+ * This code requires shader model 6.0 or above for 64-bit integer support, unless
+ * FALCOR_SPLITMIX64_32BIT is defined to 1: the generator then carries its state as two 32-bit words
+ * and computes the same sequence with 32-bit arithmetic, for devices without 64-bit integers
+ * (shaderInt64). nextRandom64Parts() and nextRandom() exist in both variants.
  */
+
+#ifndef FALCOR_SPLITMIX64_32BIT
+#define FALCOR_SPLITMIX64_32BIT 0
+#endif
+
+#if FALCOR_SPLITMIX64_32BIT
+
+struct SplitMix64
+{
+    uint2 state; ///< x: low 32 bits, y: high 32 bits.
+};
+
+/// 64-bit values below are uint2 (low, high).
+uint2 splitMix64Add(uint2 a, uint2 b)
+{
+    uint lo = a.x + b.x;
+    return uint2(lo, a.y + b.y + (lo < a.x ? 1u : 0u));
+}
+
+/// a ^ (a >> n) for 0 < n < 32.
+uint2 splitMix64XorShift(uint2 a, uint n)
+{
+    return uint2(a.x ^ ((a.x >> n) | (a.y << (32u - n))), a.y ^ (a.y >> n));
+}
+
+/// Low 64 bits of a * b.
+uint2 splitMix64Mul(uint2 a, uint2 b)
+{
+    // 32 x 32 -> 64 of the low words, from 16-bit halves.
+    uint a0 = a.x & 0xffffu, a1 = a.x >> 16;
+    uint b0 = b.x & 0xffffu, b1 = b.x >> 16;
+    uint p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+    uint mid = (p00 >> 16) + (p01 & 0xffffu) + (p10 & 0xffffu);
+    uint lo = (p00 & 0xffffu) | (mid << 16);
+    uint hi = p11 + (p01 >> 16) + (p10 >> 16) + (mid >> 16);
+    return uint2(lo, hi + a.x * b.y + a.y * b.x);
+}
+
+/**
+ * Generates the next pseudorandom number in the sequence (64 bits) as (low, high) words.
+ */
+uint2 nextRandom64Parts(inout SplitMix64 rng)
+{
+    rng.state = splitMix64Add(rng.state, uint2(0x7F4A7C15u, 0x9E3779B9u));
+    uint2 z = rng.state;
+    z = splitMix64Mul(splitMix64XorShift(z, 30), uint2(0x1CE4E5B9u, 0xBF58476Du));
+    z = splitMix64Mul(splitMix64XorShift(z, 27), uint2(0x133111EBu, 0x94D049BBu));
+    return splitMix64XorShift(z, 31);
+}
+
+/**
+ * Generates the next pseudorandom number in the sequence (low 32 bits).
+ */
+uint nextRandom(inout SplitMix64 rng)
+{
+    return nextRandom64Parts(rng).x;
+}
+
+/**
+ * Initialize SplitMix64 pseudorandom number generator.
+ * @param[in] s0 Low bits of initial state (seed).
+ * @param[in] s1 High bits of initial state (seed).
+ */
+SplitMix64 createSplitMix64(uint s0, uint s1)
+{
+    SplitMix64 rng;
+    rng.state = uint2(s0, s1);
+    return rng;
+}
+
+#else // FALCOR_SPLITMIX64_32BIT
 
 struct SplitMix64
 {
@@ -62,6 +136,15 @@ uint64_t nextRandom64(inout SplitMix64 rng)
 }
 
 /**
+ * Generates the next pseudorandom number in the sequence (64 bits) as (low, high) words.
+ */
+uint2 nextRandom64Parts(inout SplitMix64 rng)
+{
+    uint64_t z = nextRandom64(rng);
+    return uint2(uint(z), uint(z >> 32));
+}
+
+/**
  * Generates the next pseudorandom number in the sequence (low 32 bits).
  */
 uint nextRandom(inout SplitMix64 rng)
@@ -80,3 +163,5 @@ SplitMix64 createSplitMix64(uint s0, uint s1)
     rng.state = asuint64(s0, s1);
     return rng;
 }
+
+#endif // FALCOR_SPLITMIX64_32BIT

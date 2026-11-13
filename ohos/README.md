@@ -29,7 +29,9 @@ ohos/npu/verify_tcnn.py        the reference model against data dumped from the 
 ohos/npu/train_loop_check.py   convergence of the NPU-style training loop against exact training
 ohos/npu/export_models.py      gradient check vs autograd, ONNX, test vectors, .om / .omc conversion (WSL)
 ohos/probes/npu_mlp/           on-device probe: load a model through NNRt, check the outputs, time RunSync
-ohos/probes/gpu/               on-device probe: hash grids in compute, ray query throughput, shader features
+ohos/probes/gpu/               on-device probe: hash grids in compute, ray query throughput, shader features, baked pipelines
+ohos/tools/spirv_info.py       capabilities and bindings of a SPIR-V module (and .layout files for the probe)
+ohos/tools/png_stats.py        mean / saturation / difference of PNG frames, standard library only
 ohos/_build/                   generated files (git-ignored)
 ```
 
@@ -157,10 +159,44 @@ What the comparison established about the model, beyond what its source suggests
 - **SquarePlus needs care in fp16**: `(10 z)^2` overflows from z = 25.6 on. The graphs take the root as
   `64 * sqrt((q / 64)^2 + 4 / 64^2)`, good up to z = 1638.
 
+## Rendering on the phone: Falcor bakes, the phone replays
+
+NCR's shaders lean on Falcor's shader library (materials, emissive light sampling, inline ray tracing,
+the scene's GPU data). Instead of rewriting that for the phone, Falcor is used as the offline compiler:
+
+```bat
+set NCR_BAKE_DIR=<dir> & set NCR_BAKE_FRAME=5
+set NCR_SMOKE_SCENE=media/scenes/bathroom/scene-v4.pyscene & set NCR_SMOKE_FRAMES=8
+build\windows-vs2022\bin\Release\Mogwai.exe --headless --device-type vulkan --script scripts/ncr_smoke.py
+python ohos/tools/spirv_info.py --summary <dir>/spirv/*.spv
+NCR_BAKE_SPIRV=<dir>/spirv bash ohos/probes/gpu/run.sh pipelines
+```
+
+With `NCR_BAKE_DIR` set, the NeuralRadiosity pass (`BakeExport.cpp`) writes the SPIR-V of each of its
+compute passes exactly as Falcor compiled it for the loaded scene and the current settings. The modules
+carry their bindings by name (`gScene.geometryInstances`, `gScene.materials.materialTextures`, ...), so
+the replayer can bind the scene's buffers and textures, dumped by the same bake, to the same slots.
+
+Result on the phone, bathroom scene, 2026-11-13: **all 15 passes create compute pipelines on the
+Maleoon 955** (FirstSmoothPass, CompactPass, ConeTrace, SpecPrimary, ClusterReproject, ConeTraceScreen,
+ClusterSpatialReuse, ResolvePass, PostFilterPass, PostFXAAPass, RandomSmooth, SampleRHS, CompactBatch,
+ResolveBatch, ResolveRHS). Creation takes 6 ms to 3.0 s per pass (ConeTraceScreen 3.0 s, SampleRHS 2.3 s),
+7.2 s in total: a pipeline cache is needed for start-up.
+
+One change to Falcor's shader library made that possible. The modules need Int16, Float16, 16-bit storage,
+ray query, the ray tracing capability, storage images without format and, in ConeTrace, subgroup
+arithmetic: all present on the phone. They also needed Int64, which is not: Falcor's default sample
+generator seeds itself with SplitMix64. `Utils/Sampling/Pseudorandom/SplitMix64.slang` now has a variant
+that computes the same sequence with 32-bit arithmetic (`FALCOR_SPLITMIX64_32BIT=1`, checked against
+64-bit arithmetic on 400,000 draws); the NeuralRadiosity pass defines it, so the desktop and the phone
+run the same code. The default is unchanged for every other pass.
+
 ## Stages
 
 1. Device probes (done).
 2. The network split on the PC against the CUDA implementation (done, above).
-3. A stand-alone Vulkan renderer on the PC with ONNX Runtime in place of the NPU, compared with Falcor.
+3. Bake and replay. Done: SPIR-V bake, accepted by the phone's driver. Next: the bake of the scene's
+   resources and uniform data, a replayer on the PC compared with Falcor image by image, with a CPU
+   implementation of the networks in place of the NPU.
 4. The HarmonyOS app: platform layer, NNRt backend, zero-copy buffers, frame synchronisation, cross-frame
    training; then performance.

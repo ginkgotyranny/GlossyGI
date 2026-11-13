@@ -8,6 +8,9 @@
 //   rays      inline ray query throughput in a closed 196,608-triangle box (every ray must hit)
 //   features  subgroup arithmetic and groupshared memory in a Slang compute shader
 //   features64 the same shader with 64-bit integers (needs shaderInt64)
+//   pipelines  (not in the default list) creates a compute pipeline from every <name>.spv with a
+//             <name>.layout in ./baked: the SPIR-V Falcor compiled for the NCR passes. Tells whether
+//             the driver accepts those modules at all.
 // The shaders are the .slang files next to this one, compiled to SPIR-V by Falcor's slangc.
 //
 //   gpu_probe [test ...]        default: all of the above, in that order
@@ -771,6 +774,74 @@ static void testFeatures(const std::string& dir, bool int64)
 }
 
 // ---------------------------------------------------------------------------------------------
+static void testPipelines(const std::string& dir)
+{
+    printf("== pipelines: compute pipelines from the SPIR-V baked by Falcor\n");
+    std::ifstream list(dir + "/baked/list.txt");
+    std::string name;
+    uint32_t created = 0, total = 0;
+    while (std::getline(list, name))
+    {
+        if (name.empty()) continue;
+        ++total;
+        // Descriptor set layouts from "<set> <binding> <type> <count>" lines.
+        std::vector<std::vector<VkDescriptorSetLayoutBinding>> sets;
+        std::ifstream layoutFile(dir + "/baked/" + name + ".layout");
+        uint32_t set, binding, count;
+        std::string type;
+        while (layoutFile >> set >> binding >> type >> count)
+        {
+            VkDescriptorType t = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            if (type == "uniform_buffer") t = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            else if (type == "storage_image") t = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            else if (type == "sampled_image") t = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            else if (type == "sampler") t = VK_DESCRIPTOR_TYPE_SAMPLER;
+            else if (type == "combined_image_sampler") t = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            else if (type == "acceleration_structure") t = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+            if (sets.size() <= set) sets.resize(set + 1);
+            sets[set].push_back({binding, t, count ? count : 1u, VK_SHADER_STAGE_COMPUTE_BIT, nullptr});
+        }
+        std::vector<VkDescriptorSetLayout> layouts;
+        for (const auto& bindings : sets)
+        {
+            VkDescriptorSetLayoutCreateInfo sl = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            sl.bindingCount = (uint32_t)bindings.size();
+            sl.pBindings = bindings.data();
+            VkDescriptorSetLayout layout;
+            CHK(vkCreateDescriptorSetLayout(gDev, &sl, nullptr, &layout));
+            layouts.push_back(layout);
+        }
+        VkPipelineLayoutCreateInfo pl = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pl.setLayoutCount = (uint32_t)layouts.size();
+        pl.pSetLayouts = layouts.data();
+        VkPipelineLayout pipelineLayout;
+        CHK(vkCreatePipelineLayout(gDev, &pl, nullptr, &pipelineLayout));
+
+        std::vector<uint32_t> code = loadSpv(dir + "/baked/" + name + ".spv");
+        VkShaderModuleCreateInfo sm = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        sm.codeSize = code.size() * 4;
+        sm.pCode = code.data();
+        VkShaderModule module = VK_NULL_HANDLE;
+        VkResult r = code.empty() ? VK_ERROR_UNKNOWN : vkCreateShaderModule(gDev, &sm, nullptr, &module);
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        double ms = 0.0;
+        if (r == VK_SUCCESS)
+        {
+            VkComputePipelineCreateInfo ci = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+            ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, module, "main", nullptr};
+            ci.layout = pipelineLayout;
+            const auto start = std::chrono::steady_clock::now();
+            r = vkCreateComputePipelines(gDev, VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline);
+            ms = msSince(start);
+        }
+        created += r == VK_SUCCESS;
+        printf("RESULT pipeline %s: %zu bytes, %zu descriptor sets -> %s (%d) in %.0f ms\n", name.c_str(), code.size() * 4, sets.size(),
+               r == VK_SUCCESS ? "created" : "FAILED", (int)r, ms);
+    }
+    printf("RESULT pipelines: %u of %u created %s\n", created, total, created == total && total ? "OK" : "MISMATCH");
+}
+
+// ---------------------------------------------------------------------------------------------
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IOLBF, 0);
@@ -811,7 +882,10 @@ int main(int argc, char** argv)
 
     gRayQuery = has(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) && has(VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
                 has(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
-    VkPhysicalDeviceRayQueryFeaturesKHR rayQuery = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+    // The modules Falcor bakes declare the RayTracingKHR capability next to RayQueryKHR.
+    const bool rayPipelineExt = has(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayPipeline = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
+    VkPhysicalDeviceRayQueryFeaturesKHR rayQuery = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR, rayPipelineExt ? &rayPipeline : nullptr};
     VkPhysicalDeviceAccelerationStructureFeaturesKHR accel = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR, &rayQuery};
     VkPhysicalDeviceVulkan12Features v12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, gRayQuery ? &accel : nullptr};
     VkPhysicalDeviceVulkan11Features v11 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, &v12};
@@ -825,8 +899,11 @@ int main(int argc, char** argv)
     printf("  features: shaderInt64 %u, shaderInt16 %u, shaderFloat16 %u, shaderInt8 %u, storageBuffer16BitAccess %u, uniformAndStorageBuffer16BitAccess %u, bufferDeviceAddress %u, scalarBlockLayout %u, descriptorIndexing %u, runtimeDescriptorArray %u\n",
            features.features.shaderInt64, features.features.shaderInt16, v12.shaderFloat16, v12.shaderInt8, v11.storageBuffer16BitAccess,
            v11.uniformAndStorageBuffer16BitAccess, v12.bufferDeviceAddress, v12.scalarBlockLayout, v12.descriptorIndexing, v12.runtimeDescriptorArray);
-    printf("  ray tracing: accelerationStructure %u, rayQuery %u, VK_KHR_ray_tracing_pipeline %s\n", accel.accelerationStructure,
-           rayQuery.rayQuery, has(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) ? "yes" : "no");
+    printf("  ray tracing: accelerationStructure %u, rayQuery %u, VK_KHR_ray_tracing_pipeline %s (feature %u)\n", accel.accelerationStructure,
+           rayQuery.rayQuery, rayPipelineExt ? "yes" : "no", rayPipeline.rayTracingPipeline);
+    printf("  images: shaderStorageImageReadWithoutFormat %u, shaderStorageImageWriteWithoutFormat %u, shaderStorageImageExtendedFormats %u\n",
+           features.features.shaderStorageImageReadWithoutFormat, features.features.shaderStorageImageWriteWithoutFormat,
+           features.features.shaderStorageImageExtendedFormats);
     printf("  subgroups: size %u, stages 0x%x (compute %s), operations 0x%x (arithmetic %s, ballot %s, shuffle %s)\n", subgroup.subgroupSize,
            subgroup.supportedStages, (subgroup.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) ? "yes" : "no", subgroup.supportedOperations,
            (subgroup.supportedOperations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) ? "yes" : "no",
@@ -846,6 +923,7 @@ int main(int argc, char** argv)
     if (gRayQuery)
     {
         enabled = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_RAY_QUERY_EXTENSION_NAME, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME};
+        if (rayPipelineExt) enabled.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
     }
     float priority = 1.0f;
     VkDeviceQueueCreateInfo qci = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -886,6 +964,7 @@ int main(int argc, char** argv)
         else if (test == "rays") testRays(dir);
         else if (test == "features") testFeatures(dir, false);
         else if (test == "features64") testFeatures(dir, true);
+        else if (test == "pipelines") testPipelines(dir);
         else if (test != "info") printf("unknown test %s\n", test.c_str());
     }
     vkDeviceWaitIdle(gDev);

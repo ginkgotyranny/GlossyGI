@@ -400,6 +400,7 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
         render(pRenderContext, renderData);
     }
 
+    bakeExport(pRenderContext);
     mFrameCount++;
 }
 
@@ -2114,6 +2115,9 @@ DefineList NeuralRadiosity::getShaderDefines(const RenderData& renderData) const
 {
     DefineList defines;
 
+    // Seed the sample generator without 64-bit integers (same sequence): the OpenHarmony port replays
+    // these shaders on a GPU that has none.
+    defines.add("FALCOR_SPLITMIX64_32BIT", "1");
     defines.add("USE_ALPHA_TEST", mUseAlphaTest ? "1" : "0");
     defines.add("ADJUST_SHADING_NORMALS", mAdjustShadingNormals ? "1" : "0");
     defines.add("USE_ENV_LIGHT", mUseEnvLight ? "1" : "0");
