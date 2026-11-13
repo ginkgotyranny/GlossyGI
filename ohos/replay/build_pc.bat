@@ -17,6 +17,7 @@ set SLANG_ARGS=-I "%~dp0shaders" -target spirv -entry main -stage compute
 "%SLANGC%" "%~dp0shaders\ScatterGradients.cs.slang" -DSPECULAR=0 %SLANG_ARGS% -o "%OUT%\shaders\ScatterDiff.spv" || exit /b 1
 "%SLANGC%" "%~dp0shaders\ScatterGradients.cs.slang" -DSPECULAR=1 %SLANG_ARGS% -o "%OUT%\shaders\ScatterSpec.spv" || exit /b 1
 "%SLANGC%" "%~dp0shaders\GridOptimizer.cs.slang" %SLANG_ARGS% -o "%OUT%\shaders\GridOptimizer.spv" || exit /b 1
+"%SLANGC%" "%~dp0shaders\PrefixSum.cs.slang" %SLANG_ARGS% -o "%OUT%\shaders\PrefixSum.spv" || exit /b 1
 
 if not defined VSCMD_VER call "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat" > nul
 cl /nologo /std:c++17 /O2 /EHsc /W3 /I "%REPO%\external\vulkan-headers\include" "%~dp0ncr_replay.cpp" ^

@@ -18,12 +18,34 @@ namespace replay
 {
 inline float halfToFloat(uint16_t h)
 {
-    const uint32_t s = (h >> 15) & 1, e = (h >> 10) & 0x1f, m = h & 0x3ff;
+    const uint32_t sign = (uint32_t)(h & 0x8000u) << 16, e = (h >> 10) & 0x1f;
+    uint32_t m = h & 0x3ffu, bits;
+    if (e == 31)
+    {
+        bits = sign | 0x7f800000u | (m << 13);   // infinity or NaN
+    }
+    else if (e != 0)
+    {
+        bits = sign | ((e + 112) << 23) | (m << 13);
+    }
+    else if (m == 0)
+    {
+        bits = sign;
+    }
+    else
+    {
+        // Subnormal, m * 2^-24: shift the leading one up to where a normal number keeps it.
+        uint32_t shift = 0;
+        while (!(m & 0x400u))
+        {
+            m <<= 1;
+            shift++;
+        }
+        bits = sign | ((113 - shift) << 23) | ((m & 0x3ffu) << 13);
+    }
     float v;
-    if (e == 0) v = std::ldexp((float)m, -24);
-    else if (e == 31) v = m ? NAN : INFINITY;
-    else v = std::ldexp((float)(m | 0x400), (int)e - 25);
-    return s ? -v : v;
+    std::memcpy(&v, &bits, sizeof(v));
+    return v;
 }
 
 /// Round to nearest, ties to even: what a float -> __half cast does in CUDA.

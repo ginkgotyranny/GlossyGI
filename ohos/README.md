@@ -239,7 +239,9 @@ The networks run the way they will in the app (`--networks`):
   the bit, the frame is 216 ms longer.
 - `rows`: the float32 reference on the CPU, lookups included (`replay_nn.h`).
 
-The prefix sums still run on the CPU. Training is described below.
+The prefix sums between the passes (mask to compacted index, and the count) are a compute pass of the
+replayer as well (`shaders/PrefixSum`), so a frame only waits for the host where the networks run.
+`--cpu-prefix-sum` does them on the CPU instead. Training is described below.
 
 ```bat
 python ohos/tools/bake_pack.py <bake dir>
@@ -275,7 +277,7 @@ The networks of that frame on the phone with `--networks npu`: grid lookups into
 the MLPs 17-19 ms inside `RunSync` for two SpecNet and two DiffNet tiles (the first runs after loading;
 the probe measured 1.6-1.9 ms per tile in steady state) plus 10-28 ms copying tiles in and out, which
 zero-copy buffers remove; outputs back to rows about 3 ms. The whole frame, first run, about 120 ms.
-The prefix sums run on the CPU (1.5 ms on a local copy of the buffer; 82 ms when walking the shared
+The prefix sums ran on the CPU in that measurement (1.5 ms on a local copy of the buffer; 82 ms when walking the shared
 buffer directly).
 
 ### Training
@@ -334,26 +336,25 @@ checkpoint the phone wrote after its 60 frames, loaded into Falcor (D3D12, rende
 Falcor's own 60-frame checkpoint gives (mean difference 0.0012 of the 8-bit range). The PC column was
 measured with the default `randomTrainDir`, the phone column needs it off, for the reason given below.
 
-A frame of online training on the phone at these sizes, steady state over 60 frames: 364 ms
-(580 ms with `--copy-tiles`).
+A frame of online training on the phone at these sizes, steady state over 60 frames: 316 ms
+(364 ms with `--cpu-prefix-sum`, 580 ms with `--copy-tiles` as well).
 
 | Part of the frame | Time |
 |---|---|
-| RandomSmooth + SampleRHS (32,768 samples, 8 RHS paths each) | 57 ms |
-| RHS: compaction, grid lookups for 229,738 queries, outputs | 25 ms |
-| RHS: DiffNet on the NPU, 4 tiles | 12 ms |
-| LHS: compaction, cone trace (32 rays per specular sample), targets | 9 ms |
+| RandomSmooth + SampleRHS (32,768 samples, 8 RHS paths each), RHS prefix sum and compaction | 62 ms |
+| RHS: grid lookups for 229,738 queries | 18 ms |
+| RHS: DiffNet on the NPU, 4 tiles | 13 ms |
+| RHS outputs; LHS prefix sums, compaction, cone trace (32 rays per specular sample), targets | 10 ms |
 | Training: inputs and targets into tiles | 5 ms |
-| Training: gradients on the NPU, 4 + 5 tiles of 4,096 | 74-83 ms (7.3-8.3 ms per tile in `RunSync`) |
+| Training: gradients on the NPU, 4 + 5 tiles of 4,096 | 80 ms (7.3-8.3 ms per tile in `RunSync`) |
 | Training: grid gradient scatter and the two grid optimizers | 15 ms |
-| Training: MLP optimizers on the CPU | 1-12 ms |
-| Render: G-buffer, compaction, cone trace | 68 ms |
-| Render: grid lookups, outputs, resolve, filters | 22 ms |
-| Render: 2 + 2 tiles on the NPU | 15 ms |
-| Prefix sums on the CPU | 30-54 ms |
+| Training: MLP optimizers on the CPU | 1-10 ms |
+| Render: G-buffer, prefix sums, compaction, cone trace | 69 ms |
+| Render: grid lookups, outputs, resolve, filters | 23 ms |
+| Render: 2 + 2 tiles on the NPU | 14 ms |
 
-That is about 200 ms on the GPU, 105 ms on the NPU and 40-65 ms on the CPU, with the sample counts of
-the desktop defaults: the configuration for the phone is still to be chosen.
+That is about 200 ms on the GPU, 107 ms on the NPU and up to 10 ms on the CPU, with the sample counts
+of the desktop defaults: the configuration for the phone is still to be chosen.
 
 #### What the comparison showed about the desktop pipeline
 
@@ -415,7 +416,8 @@ triangle, was suspected first and is fine (test `load16`).
    in agreement with Falcor, with the grid lookups on the GPU and the MLPs on the NPU; online training
    in the replayer, frame after frame, with the MLP gradients on the NPU, the grids trained on the GPU
    and the result in agreement with Falcor's training (above); the tiles shared by Vulkan and NNRt.
-   Next: the prefix sums on the GPU; sample counts for the phone; the cluster-reuse cone trace; a
-   moving camera; the training schedule.
+   The prefix sums run on the GPU.
+   Next: sample counts for the phone; the cluster-reuse cone trace; a moving camera; the training
+   schedule.
 4. The HarmonyOS app: platform layer, NNRt backend, zero-copy buffers, frame synchronisation, cross-frame
    training; then performance.

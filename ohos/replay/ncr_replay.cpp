@@ -35,11 +35,11 @@
 //   --dump-train      write the tensors of the first training step for ohos/tools/train_check.py
 //   --copy-tiles      with npu: keep the tiles in ordinary memory and copy them to and from the NPU,
 //                     instead of sharing one buffer between Vulkan and NNRt
+//   --cpu-prefix-sum  do the prefix sums on the CPU instead of in a compute pass (shaders/PrefixSum)
 //   --shaders <dir>   the replayer's own SPIR-V (default: shaders next to the executable)
 //   --models <dir>    the NPU models
 //   --per-pass        submit every call on its own and print the time of each (slower overall)
 //
-// The prefix sums still run on the CPU.
 // The same source builds for Windows (build_pc.bat) and for OpenHarmony (run_device.sh).
 #include "replay_bake.h"
 #include "replay_nn.h"
@@ -104,6 +104,8 @@ struct DecodePush { uint32_t count, rowBase; };
 struct TargetPush { uint32_t count, rowBase, tileShift, slots; };
 struct ScatterPush { uint32_t count, tileShift; float gradScale; };
 struct OptimizerPush { uint32_t count; float learningRate, gradToFloat, emaDecay, emaDebiasOld, emaDebiasNew; };
+struct PrefixPush { uint32_t count, stage, countIndex; };
+constexpr uint32_t kPrefixBlock = 256;   // elements per block in shaders/PrefixSum
 
 /// A ray batch (render, lhs, rhs) as the host sees it.
 struct Batch
@@ -152,6 +154,13 @@ struct TrainNet
     std::vector<float> weightGradient;   // dL/dw of the batch
 };
 struct TrainPath { TrainNet diff, spec; };
+
+/// The prefix sum of one mask of one batch on the GPU.
+struct PrefixPath
+{
+    Buffer blockSums;
+    OwnPass pass;
+};
 }  // namespace
 
 int main(int argc, char** argv)
@@ -168,7 +177,7 @@ int main(int argc, char** argv)
     const size_t slash = executable.find_last_of("/\\");
     std::string networksMode = "tiles", modelDir = ".";
     std::string shaderDir = (slash == std::string::npos ? std::string(".") : executable.substr(0, slash)) + "/shaders";
-    bool perPass = false, noTrain = false, dumpTrain = false, copyTiles = false;
+    bool perPass = false, noTrain = false, dumpTrain = false, copyTiles = false, cpuPrefixSum = false;
     uint32_t frames = 1, trainTile = 4096, lossInterval = 0;
     float learningRate = 0.0f, emaDecay = 0.0f;
     for (int i = 4; i < argc; i++)
@@ -179,6 +188,7 @@ int main(int argc, char** argv)
         else if (arg == "--no-train") noTrain = true;
         else if (arg == "--dump-train") dumpTrain = true;
         else if (arg == "--copy-tiles") copyTiles = true;
+        else if (arg == "--cpu-prefix-sum") cpuPrefixSum = true;
         else if (arg == "--networks" && hasValue) networksMode = argv[++i];
         else if (arg == "--shaders" && hasValue) shaderDir = argv[++i];
         else if (arg == "--models" && hasValue) modelDir = argv[++i];
@@ -238,7 +248,8 @@ int main(int argc, char** argv)
     Grid primGrid, clsGrid;
     std::map<std::string, TilePath> tilePaths;
     std::map<std::string, TrainPath> trainPaths;
-    VkDescriptorPool ownPool = VK_NULL_HANDLE;
+    const VkDescriptorPool ownPool = makeOwnPool(dev, 64, 320);
+    std::map<std::string, PrefixPath> prefixPaths;
     const VkBufferUsageFlags storage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     auto zeroed = [&](VkDeviceSize bytes) {
         Buffer b = dev.makeBuffer(bytes, storage, true);
@@ -255,7 +266,6 @@ int main(int argc, char** argv)
     auto tiles = [](const Buffer& b) { return TileMemory{b.as<uint16_t>(), b.fd, b.sharedSize}; };
     if (useTiles)
     {
-        ownPool = makeOwnPool(dev, 48, 256);
         auto createGrid = [&](Grid& g, const std::vector<uint16_t>& ema, const std::vector<float>& master) {
             g.elements = (uint32_t)ema.size();
             g.inference = dev.makeBuffer(ema.size() * 2, storage, true);
@@ -372,6 +382,27 @@ int main(int argc, char** argv)
         if (cb == VK_NULL_HANDLE) cb = dev.begin();
         pendingNames += (pendingNames.empty() ? "" : " + ") + name;
         return cb;
+    };
+
+    // Mask -> compacted index, and the count into the batch's counts (NeuralRadiosity::computeBatchCounts).
+    auto prefixSumGpu = [&](const std::string& role, bool spec, uint32_t count) {
+        const std::string key = role + (spec ? ".spec" : ".diff");
+        auto it = prefixPaths.find(key);
+        if (it == prefixPaths.end())
+        {
+            PrefixPath& created = prefixPaths[key];
+            created.blockSums = dev.makeBuffer((VkDeviceSize)(count / kPrefixBlock + 1) * 4, storage, false);
+            created.pass.create(dev, ownPool, shaderDir + "/PrefixSum.spv", 3, sizeof(PrefixPush), 64);
+            created.pass.bind(dev, 0, bake.buffer(role + (spec ? ".specIndex" : ".diffIndex")));
+            created.pass.bind(dev, 1, created.blockSums);
+            created.pass.bind(dev, 2, bake.buffer(role + ".counts"));
+            it = prefixPaths.find(key);
+        }
+        VkCommandBuffer c = record("prefix sum (" + role + (spec ? ", spec)" : ", diff)"));
+        const uint32_t index = spec ? 1 : 0;
+        it->second.pass.dispatch(c, PrefixPush{count, 0, index}, (count + kPrefixBlock - 1) / kPrefixBlock);
+        it->second.pass.dispatch(c, PrefixPush{count, 1, index}, 1);
+        it->second.pass.dispatch(c, PrefixPush{count, 2, index}, count);
     };
 
     /// Falcor reads the compacted counts back where it syncs with CUDA.
@@ -570,16 +601,30 @@ int main(int argc, char** argv)
                 if (perPass) flush();
                 continue;
             }
-            flush();
             const std::string& what = step.host[0];
-            const auto t0 = std::chrono::steady_clock::now();
-            if (what == "clearcounts")
+            if (what == "clearcounts" && !cpuPrefixSum)
             {
+                // On the GPU, in order with the calls around it: nothing has to wait for the host.
+                VkCommandBuffer c = record("clear counts (" + step.host[1] + ")");
+                vkCmdFillBuffer(c, bake.buffer(step.host[1] + ".counts").buffer, 0, 2 * sizeof(uint32_t), 0);
+                VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+                barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+            }
+            else if (what == "prefixsum" && !cpuPrefixSum)
+            {
+                prefixSumGpu(step.host[1], step.host[2] == "spec", (uint32_t)std::stoul(step.host[3]));
+            }
+            else if (what == "clearcounts")
+            {
+                flush();
                 std::memset(bake.buffer(step.host[1] + ".counts").data, 0, 2 * sizeof(uint32_t));
             }
             else if (what == "prefixsum")
             {
-                // Mask -> compacted index, and the count (NeuralRadiosity::computeBatchCounts).
+                flush();
+                const auto t0 = std::chrono::steady_clock::now();
                 const bool spec = step.host[2] == "spec";
                 const uint32_t count = (uint32_t)std::stoul(step.host[3]);
                 uint32_t* counts = bake.buffer(step.host[1] + ".counts").as<uint32_t>();
@@ -588,10 +633,12 @@ int main(int argc, char** argv)
             }
             else if (what == "infer")
             {
+                flush();   // the host reads the counts
                 infer(batches.at(step.host[1]));
             }
             else if (what == "train")
             {
+                flush();
                 if (training) train(batches.at(step.host[1]), frame);
             }
             else

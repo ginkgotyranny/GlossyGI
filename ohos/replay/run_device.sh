@@ -31,6 +31,7 @@ SLANG_ARGS=(-I "$HERE/shaders" -target spirv -entry main -stage compute)
 "$SLANGC" "$HERE/shaders/ScatterGradients.cs.slang" -DSPECULAR=0 "${SLANG_ARGS[@]}" -o "$OUT/device/shaders/ScatterDiff.spv"
 "$SLANGC" "$HERE/shaders/ScatterGradients.cs.slang" -DSPECULAR=1 "${SLANG_ARGS[@]}" -o "$OUT/device/shaders/ScatterSpec.spv"
 "$SLANGC" "$HERE/shaders/GridOptimizer.cs.slang" "${SLANG_ARGS[@]}" -o "$OUT/device/shaders/GridOptimizer.spv"
+"$SLANGC" "$HERE/shaders/PrefixSum.cs.slang" "${SLANG_ARGS[@]}" -o "$OUT/device/shaders/PrefixSum.spv"
 "$SDK/llvm/bin/clang++.exe" --target=aarch64-linux-ohos --sysroot="$SDK/sysroot" -std=c++17 -O2 \
   "$HERE/ncr_replay.cpp" -o "$OUT/device/ncr_replay" -lvulkan -lneural_network_core -lnative_buffer -lnative_window -lqos -static-libstdc++
 for net in diff spec; do
