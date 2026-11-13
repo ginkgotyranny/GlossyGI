@@ -6,8 +6,11 @@
 // The weights are graph inputs: the inference graph gets the EMA copies, the training graph the
 // training copies, both rewritten after every optimizer step (which runs on the CPU).
 //
-// Copy mode: the tiles are copied between the Vulkan buffers and tensors NNRt owns. Zero-copy
-// (OH_NativeBuffer shared by Vulkan and NNRt) replaces the copies later.
+// The tiles are shared with the GPU: one dma-buf (Device::makeSharedBuffer) is a Vulkan storage
+// buffer the compute passes write and read, and the memory of the NNRt tensors, one tensor per tile
+// at its offset in the buffer (OH_NNTensor_CreateWithFd). Nothing is copied. Tiles in ordinary
+// memory (fd -1) are copied into tensors NNRt owns instead: slower, and the way to tell a problem
+// of the sharing from a problem of the graphs (--copy-tiles).
 #pragma once
 #ifdef __OHOS__
 #include "replay_nn.h"
@@ -16,6 +19,7 @@
 #include <neural_network_runtime/neural_network_core.h>
 #include <qos/qos.h>
 #include <dlfcn.h>
+#include <tuple>
 
 namespace replay
 {
@@ -55,30 +59,33 @@ public:
         }
     }
 
-    const char* name() const override { return "NPU (NNRt, HIAI_F), copy mode"; }
+    const char* name() const override { return "NPU (NNRt, HIAI_F)"; }
 
-    void infer(bool specular, const uint16_t* x, uint16_t* y, uint32_t tiles) override
+    void infer(bool specular, const TileMemory& x, const TileMemory& y, uint32_t tiles) override
     {
         Model& m = mNets[specular ? 1 : 0].inference;
         const size_t xBytes = (size_t)(specular ? cfg::kSpecInputDim : cfg::kDiffInputDim) * cfg::kTile * 2;
         const size_t yBytes = (size_t)cfg::kOutputChannels * cfg::kTile * 2;
+        std::vector<NN_Tensor*> inputs = m.inputs, outputs = m.outputs;
         for (uint32_t t = 0; t < tiles; t++)
         {
             auto start = std::chrono::steady_clock::now();
-            std::memcpy(OH_NNTensor_GetDataBuffer(m.inputs[0]), reinterpret_cast<const char*>(x) + t * xBytes, xBytes);
+            if (x.fd >= 0) inputs[0] = shared(m, true, 0, x, t * xBytes);
+            else std::memcpy(OH_NNTensor_GetDataBuffer(inputs[0]), reinterpret_cast<const char*>(x.data) + t * xBytes, xBytes);
+            if (y.fd >= 0) outputs[0] = shared(m, false, 0, y, t * yBytes);
             copyMs += msSince(start);
             start = std::chrono::steady_clock::now();
-            run(m);
+            run(m, inputs, outputs);
             runMs += msSince(start);
             start = std::chrono::steady_clock::now();
-            std::memcpy(reinterpret_cast<char*>(y) + t * yBytes, OH_NNTensor_GetDataBuffer(m.outputs[0]), yBytes);
+            if (y.fd < 0) std::memcpy(reinterpret_cast<char*>(y.data) + t * yBytes, OH_NNTensor_GetDataBuffer(outputs[0]), yBytes);
             copyMs += msSince(start);
             runs++;
         }
     }
 
-    void train(bool specular, uint32_t tile, uint32_t tiles, const uint16_t* x, const uint16_t* target, float* weightGradient,
-               uint16_t* inputGradient) override
+    void train(bool specular, uint32_t tile, uint32_t tiles, const TileMemory& x, const TileMemory& target, float* weightGradient,
+               const TileMemory& inputGradient) override
     {
         Net& net = mNets[specular ? 1 : 0];
         if (net.trainingTile != tile)
@@ -91,25 +98,31 @@ public:
         Model& m = net.training;
         const size_t layers = net.mlp->layerSizes().size();
         const size_t xBytes = (size_t)net.mlp->inputDim * tile * 2, targetBytes = (size_t)cfg::kOutputChannels * tile * 2;
+        std::vector<NN_Tensor*> inputs = m.inputs, outputs = m.outputs;
         for (uint32_t t = 0; t < tiles; t++)
         {
             auto start = std::chrono::steady_clock::now();
-            std::memcpy(OH_NNTensor_GetDataBuffer(m.inputs[layers]), reinterpret_cast<const char*>(x) + t * xBytes, xBytes);
-            std::memcpy(OH_NNTensor_GetDataBuffer(m.inputs[layers + 1]), reinterpret_cast<const char*>(target) + t * targetBytes, targetBytes);
+            if (x.fd >= 0) inputs[layers] = shared(m, true, layers, x, t * xBytes);
+            else std::memcpy(OH_NNTensor_GetDataBuffer(inputs[layers]), reinterpret_cast<const char*>(x.data) + t * xBytes, xBytes);
+            if (target.fd >= 0) inputs[layers + 1] = shared(m, true, layers + 1, target, t * targetBytes);
+            else std::memcpy(OH_NNTensor_GetDataBuffer(inputs[layers + 1]), reinterpret_cast<const char*>(target.data) + t * targetBytes, targetBytes);
+            if (inputGradient.fd >= 0) outputs[layers] = shared(m, false, layers, inputGradient, t * xBytes);
             trainCopyMs += msSince(start);
             start = std::chrono::steady_clock::now();
-            run(m);
+            run(m, inputs, outputs);
             trainRunMs += msSince(start);
             start = std::chrono::steady_clock::now();
             size_t offset = 0;
             for (size_t layer = 0; layer < layers; layer++)
             {
-                const uint16_t* g = static_cast<const uint16_t*>(OH_NNTensor_GetDataBuffer(m.outputs[layer]));
+                // The weight gradients are small (28,672 values in all) and stay in NNRt's own tensors.
+                const uint16_t* g = static_cast<const uint16_t*>(OH_NNTensor_GetDataBuffer(outputs[layer]));
                 const size_t count = net.mlp->layerSizes()[layer];
                 for (size_t i = 0; i < count; i++) weightGradient[offset + i] += halfToFloat(g[i]);
                 offset += count;
             }
-            std::memcpy(reinterpret_cast<char*>(inputGradient) + t * xBytes, OH_NNTensor_GetDataBuffer(m.outputs[layers]), xBytes);
+            if (inputGradient.fd < 0)
+                std::memcpy(reinterpret_cast<char*>(inputGradient.data) + t * xBytes, OH_NNTensor_GetDataBuffer(outputs[layers]), xBytes);
             trainCopyMs += msSince(start);
             trainRuns++;
         }
@@ -130,7 +143,8 @@ public:
         }
     }
 
-    // Accumulated: time inside RunSync and time copying tiles, for inference and for training.
+    // Accumulated: time inside RunSync and time around it (copying tiles, or looking up the shared
+    // tensors, and reading the weight gradients), for inference and for training.
     double runMs = 0.0, copyMs = 0.0, trainRunMs = 0.0, trainCopyMs = 0.0;
     uint32_t runs = 0, trainRuns = 0;
 
@@ -153,6 +167,24 @@ private:
     size_t mDevice = 0;
     std::string mModelDir;
     Net mNets[2];   // DiffNet, SpecNet
+    // Tensors over shared tiles, by (model, input or output, index, dma-buf, offset).
+    std::map<std::tuple<const Model*, bool, size_t, int, size_t>, NN_Tensor*> mShared;
+
+    /// The tensor of a graph input or output whose memory is a tile inside a shared buffer.
+    NN_Tensor* shared(Model& m, bool input, size_t index, const TileMemory& memory, size_t offset)
+    {
+        const auto key = std::make_tuple(static_cast<const Model*>(&m), input, index, memory.fd, offset);
+        auto it = mShared.find(key);
+        if (it != mShared.end()) return it->second;
+        NN_TensorDesc* desc = input ? OH_NNExecutor_CreateInputTensorDesc(m.executor, index) : OH_NNExecutor_CreateOutputTensorDesc(m.executor, index);
+        NN_Tensor* tensor = OH_NNTensor_CreateWithFd(mDevice, desc, memory.fd, memory.bytes, offset);
+        OH_NNTensorDesc_Destroy(&desc);
+        if (!tensor)
+            fail("cannot create a tensor over shared memory (offset " + std::to_string(offset) + " of " + std::to_string(memory.bytes) +
+                 " bytes); --copy-tiles runs without shared tiles");
+        mShared[key] = tensor;
+        return tensor;
+    }
 
     [[noreturn]] static void fail(const std::string& what)
     {
@@ -160,9 +192,9 @@ private:
         std::exit(2);
     }
 
-    static void run(Model& m)
+    static void run(Model& m, std::vector<NN_Tensor*>& inputs, std::vector<NN_Tensor*>& outputs)
     {
-        const OH_NN_ReturnCode rc = OH_NNExecutor_RunSync(m.executor, m.inputs.data(), m.inputs.size(), m.outputs.data(), m.outputs.size());
+        const OH_NN_ReturnCode rc = OH_NNExecutor_RunSync(m.executor, inputs.data(), inputs.size(), outputs.data(), outputs.size());
         if (rc != OH_NN_SUCCESS) fail("OH_NNExecutor_RunSync failed with code " + std::to_string((int)rc));
     }
 

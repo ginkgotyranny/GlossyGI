@@ -285,6 +285,15 @@ struct Mlp
     }
 };
 
+/// Tiles as a backend gets them: mapped for the CPU and, where the buffer is shared with the NPU
+/// (Device::makeSharedBuffer), the dma-buf behind it, which the NPU reads and writes in place.
+struct TileMemory
+{
+    uint16_t* data = nullptr;
+    int fd = -1;        // -1: not shared, the backend copies
+    size_t bytes = 0;   // size of the dma-buf
+};
+
 /// Runs the two MLPs on NPU tiles, channel-planar fp16. The hash-grid encodings are already in the
 /// inputs (the GPU wrote them).
 class NetworkBackend
@@ -294,14 +303,14 @@ public:
     virtual const char* name() const = 0;
     /// Inference: x holds `tiles` tiles of kTile samples with C channels (32 for DiffNet, 64 for
     /// SpecNet), y receives `tiles` tiles of kOutputChannels channels.
-    virtual void infer(bool specular, const uint16_t* x, uint16_t* y, uint32_t tiles) = 0;
+    virtual void infer(bool specular, const TileMemory& x, const TileMemory& y, uint32_t tiles) = 0;
     /// The gradients of one training step (ncr_npu_graphs.Training), for `tiles` tiles of `tile`
     /// samples: x as for inference, target with kOutputChannels channels (radiance in 0-3, the
     /// sample weight in the last). `weightGradient` receives the sum over the tiles of dL/dw and
     /// `inputGradient` the tiles of dL/dx, each tile normalised by its own sample count: the caller
     /// rescales to the batch. Both carry the loss scale.
-    virtual void train(bool specular, uint32_t tile, uint32_t tiles, const uint16_t* x, const uint16_t* target, float* weightGradient,
-                       uint16_t* inputGradient) = 0;
+    virtual void train(bool specular, uint32_t tile, uint32_t tiles, const TileMemory& x, const TileMemory& target, float* weightGradient,
+                       const TileMemory& inputGradient) = 0;
     /// The optimizer has changed the weights of a network.
     virtual void weightsChanged(bool specular) { (void)specular; }
 };
@@ -574,11 +583,14 @@ class CpuTileBackend : public NetworkBackend
 public:
     explicit CpuTileBackend(const CpuNetworks& networks) : mNetworks(networks) {}
     const char* name() const override { return "CPU (float32), tiles"; }
-    void infer(bool specular, const uint16_t* x, uint16_t* y, uint32_t tiles) override { mNetworks.inferTiles(specular, x, y, tiles); }
-    void train(bool specular, uint32_t tile, uint32_t tiles, const uint16_t* x, const uint16_t* target, float* weightGradient,
-               uint16_t* inputGradient) override
+    void infer(bool specular, const TileMemory& x, const TileMemory& y, uint32_t tiles) override
     {
-        mNetworks.trainTiles(specular, tile, tiles, x, target, weightGradient, inputGradient);
+        mNetworks.inferTiles(specular, x.data, y.data, tiles);
+    }
+    void train(bool specular, uint32_t tile, uint32_t tiles, const TileMemory& x, const TileMemory& target, float* weightGradient,
+               const TileMemory& inputGradient) override
+    {
+        mNetworks.trainTiles(specular, tile, tiles, x.data, target.data, weightGradient, inputGradient.data);
     }
 
 private:

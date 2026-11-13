@@ -5,6 +5,12 @@
 // Header-only and platform-neutral: the same code is built for Windows (parity checks against
 // Falcor) and for OpenHarmony (the phone). No window: everything is compute.
 #pragma once
+#ifdef __OHOS__
+#define VK_USE_PLATFORM_OHOS   // vulkan_ohos.h: VK_OHOS_external_memory
+#include <native_buffer/native_buffer.h>
+#include <native_window/buffer_handle.h>
+#include <native_window/external_window.h>
+#endif
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
@@ -50,6 +56,9 @@ struct Buffer
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkDeviceSize size = 0;
     void* data = nullptr;   // mapped for the buffer's lifetime, when host-visible
+    // A buffer shared with the NPU (Device::makeSharedBuffer): the dma-buf behind it and its size.
+    int fd = -1;
+    size_t sharedSize = 0;
     template <typename T> T* as() const { return static_cast<T*>(data); }
 };
 
@@ -74,6 +83,8 @@ struct Device
     VkPhysicalDeviceMemoryProperties memory = {};
     char name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE] = {};
     uint32_t maxGroupCount[3] = {65535, 65535, 65535};   // maxComputeWorkGroupCount
+    bool rayPipeline = false;
+    bool sharedMemory = false;   // VK_OHOS_external_memory: buffers shared with the NPU
 
     PFN_vkGetAccelerationStructureBuildSizesKHR getBuildSizes = nullptr;
     PFN_vkCreateAccelerationStructureKHR createAS = nullptr;
@@ -111,7 +122,13 @@ struct Device
                 enabled = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_RAY_QUERY_EXTENSION_NAME,
                            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME};
                 // The baked modules declare the RayTracingKHR capability next to RayQueryKHR.
-                if (has(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) enabled.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+                rayPipeline = has(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+                if (rayPipeline) enabled.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+#ifdef __OHOS__
+                // Buffers the GPU and the NPU both work on (makeSharedBuffer).
+                sharedMemory = has(VK_OHOS_EXTERNAL_MEMORY_EXTENSION_NAME);
+                if (sharedMemory) enabled.push_back(VK_OHOS_EXTERNAL_MEMORY_EXTENSION_NAME);
+#endif
                 break;
             }
         }
@@ -128,7 +145,6 @@ struct Device
 
         // Everything the driver offers: the baked modules use 16-bit types and storage, ray queries,
         // descriptor arrays, storage images without format.
-        const bool rayPipeline = enabled.size() == 4;
         VkPhysicalDeviceRayTracingPipelineFeaturesKHR pipelineFeatures = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
         VkPhysicalDeviceRayQueryFeaturesKHR rayQuery = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR, rayPipeline ? &pipelineFeatures : nullptr};
         VkPhysicalDeviceAccelerationStructureFeaturesKHR accel = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR, &rayQuery};
@@ -213,6 +229,70 @@ struct Device
         VK_CHECK(vkBindBufferMemory(device, b.buffer, b.memory, 0));
         if (hostVisible) VK_CHECK(vkMapMemory(device, b.memory, 0, VK_WHOLE_SIZE, 0, &b.data));
         return b;
+    }
+
+    /// A storage buffer the GPU, the CPU and the NPU all work on without copies: an OH_NativeBuffer
+    /// (dma-buf) imported into Vulkan through VK_OHOS_external_memory, mapped for the CPU, and handed
+    /// to NNRt by its file descriptor (OH_NNTensor_CreateWithFd). Where there is no such memory
+    /// (the desktop) it is an ordinary host-visible buffer, with fd -1.
+    Buffer makeSharedBuffer(VkDeviceSize size, VkBufferUsageFlags usage) const
+    {
+#ifdef __OHOS__
+        if (sharedMemory)
+        {
+            Buffer b;
+            b.size = size;
+            // Whole pages: the memory goes to another device by file descriptor.
+            b.sharedSize = (size_t)((size + 4095) / 4096 * 4096);
+            OH_NativeBuffer_Config config = {};
+            config.width = (int32_t)b.sharedSize;
+            config.height = 1;
+            config.format = NATIVEBUFFER_PIXEL_FMT_BLOB;
+            config.usage = NATIVEBUFFER_USAGE_CPU_READ | NATIVEBUFFER_USAGE_CPU_WRITE | NATIVEBUFFER_USAGE_MEM_DMA | NATIVEBUFFER_USAGE_HW_RENDER |
+                           NATIVEBUFFER_USAGE_HW_TEXTURE;
+            OH_NativeBuffer* native = OH_NativeBuffer_Alloc(&config);
+            if (!native)
+            {
+                std::printf("FAIL cannot allocate a native buffer of %zu bytes\n", b.sharedSize);
+                std::exit(2);
+            }
+            // The file descriptor is only reachable through the window-buffer view of the buffer.
+            OHNativeWindowBuffer* window = OH_NativeWindow_CreateNativeWindowBufferFromNativeBuffer(native);
+            BufferHandle* handle = window ? OH_NativeWindow_GetBufferHandleFromNative(window) : nullptr;
+            if (!handle || handle->fd < 0)
+            {
+                std::printf("FAIL a native buffer without a file descriptor\n");
+                std::exit(2);
+            }
+            b.fd = handle->fd;
+
+            VkExternalMemoryBufferCreateInfo external = {VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+            external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OHOS_NATIVE_BUFFER_BIT_OHOS;
+            VkBufferCreateInfo ci = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            ci.pNext = &external;
+            ci.size = size;
+            ci.usage = usage;
+            VK_CHECK(vkCreateBuffer(device, &ci, nullptr, &b.buffer));
+            VkNativeBufferPropertiesOHOS properties = {VK_STRUCTURE_TYPE_NATIVE_BUFFER_PROPERTIES_OHOS};
+            VK_CHECK(vkGetNativeBufferPropertiesOHOS(device, native, &properties));
+            VkImportNativeBufferInfoOHOS import = {VK_STRUCTURE_TYPE_IMPORT_NATIVE_BUFFER_INFO_OHOS};
+            import.buffer = native;
+            VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            ai.pNext = &import;
+            ai.allocationSize = properties.allocationSize;
+            ai.memoryTypeIndex = 0;
+            while (ai.memoryTypeIndex < 32 && !(properties.memoryTypeBits & (1u << ai.memoryTypeIndex))) ai.memoryTypeIndex++;
+            VK_CHECK(vkAllocateMemory(device, &ai, nullptr, &b.memory));
+            VK_CHECK(vkBindBufferMemory(device, b.buffer, b.memory, 0));
+            if (OH_NativeBuffer_Map(native, &b.data) != 0 || !b.data)
+            {
+                std::printf("FAIL cannot map a native buffer\n");
+                std::exit(2);
+            }
+            return b;
+        }
+#endif
+        return makeBuffer(size, usage, true);
     }
 
     void destroy(Buffer& b) const

@@ -231,8 +231,12 @@ The networks run the way they will in the app (`--networks`):
   NPU reads them, channel-planar tiles of 65,536 samples (`shaders/EncodeInputs`); the MLPs run on the
   tiles; a second pass writes the outputs back as the rows ResolvePass reads (`shaders/DecodeOutputs`).
   Here the MLPs run on the CPU, standing in for the NPU.
-- `npu` (OpenHarmony): the same with the MLPs on the NPU through NNRt (`replay_nnrt.h`), in copy mode:
-  the tiles are copied between Vulkan buffers and NNRt tensors.
+- `npu` (OpenHarmony): the same with the MLPs on the NPU through NNRt (`replay_nnrt.h`). The tiles are
+  memory the GPU and the NPU share: an `OH_NativeBuffer` imported into Vulkan as a storage buffer
+  (`VK_OHOS_external_memory`, `Device::makeSharedBuffer`) and given to NNRt by its file descriptor, one
+  tensor per tile at its offset in the buffer (`OH_NNTensor_CreateWithFd`). `--copy-tiles` keeps the
+  tiles in ordinary memory and copies them to and from tensors NNRt owns: the results are the same to
+  the bit, the frame is 216 ms longer.
 - `rows`: the float32 reference on the CPU, lookups included (`replay_nn.h`).
 
 The prefix sums still run on the CPU. Training is described below.
@@ -330,25 +334,26 @@ checkpoint the phone wrote after its 60 frames, loaded into Falcor (D3D12, rende
 Falcor's own 60-frame checkpoint gives (mean difference 0.0012 of the 8-bit range). The PC column was
 measured with the default `randomTrainDir`, the phone column needs it off, for the reason given below.
 
-A frame of online training on the phone at these sizes, steady state, copy mode: about 580 ms.
+A frame of online training on the phone at these sizes, steady state over 60 frames: 364 ms
+(580 ms with `--copy-tiles`).
 
 | Part of the frame | Time |
 |---|---|
-| RandomSmooth + SampleRHS (32,768 samples, 8 RHS paths each) | 54 ms |
-| RHS: compaction, grid lookups for 229,738 queries, outputs | 23 ms |
-| RHS: DiffNet on the NPU, 4 tiles | 13 ms in `RunSync`, about 110 ms copying tiles |
-| LHS: compaction, cone trace (32 rays per specular sample), targets | 8 ms |
-| Training: inputs and targets into tiles | 4 ms |
-| Training: gradients on the NPU, 4 + 5 tiles of 4,096 | 66 ms in `RunSync` (7.3 ms per tile), 43 ms copying |
-| Training: grid gradient scatter and the two grid optimizers | 14 ms |
-| Training: MLP optimizers on the CPU | 1-6 ms |
+| RandomSmooth + SampleRHS (32,768 samples, 8 RHS paths each) | 57 ms |
+| RHS: compaction, grid lookups for 229,738 queries, outputs | 25 ms |
+| RHS: DiffNet on the NPU, 4 tiles | 12 ms |
+| LHS: compaction, cone trace (32 rays per specular sample), targets | 9 ms |
+| Training: inputs and targets into tiles | 5 ms |
+| Training: gradients on the NPU, 4 + 5 tiles of 4,096 | 74-83 ms (7.3-8.3 ms per tile in `RunSync`) |
+| Training: grid gradient scatter and the two grid optimizers | 15 ms |
+| Training: MLP optimizers on the CPU | 1-12 ms |
 | Render: G-buffer, compaction, cone trace | 68 ms |
-| Render: grid lookups, 2 + 2 tiles on the NPU, outputs, resolve, filters | 22 ms on the GPU, 13 ms in `RunSync`, about 100 ms copying |
-| Prefix sums on the CPU | 25-37 ms |
+| Render: grid lookups, outputs, resolve, filters | 22 ms |
+| Render: 2 + 2 tiles on the NPU | 15 ms |
+| Prefix sums on the CPU | 30-54 ms |
 
-The copies between Vulkan buffers and NNRt tensors are 245 ms of that; they go away with buffers shared
-by both. What remains is about 190 ms on the GPU, 90 ms on the NPU and 40 ms on the CPU, and the sample
-counts are the desktop defaults: the configuration for the phone is still to be chosen.
+That is about 200 ms on the GPU, 105 ms on the NPU and 40-65 ms on the CPU, with the sample counts of
+the desktop defaults: the configuration for the phone is still to be chosen.
 
 #### What the comparison showed about the desktop pipeline
 
@@ -409,8 +414,8 @@ triangle, was suspected first and is fine (test `load16`).
 3. Bake and replay. Done: the bake; the replayer rendering the baked frame on the PC and on the phone
    in agreement with Falcor, with the grid lookups on the GPU and the MLPs on the NPU; online training
    in the replayer, frame after frame, with the MLP gradients on the NPU, the grids trained on the GPU
-   and the result in agreement with Falcor's training (above).
-   Next: tiles shared by Vulkan and NNRt instead of copied; the prefix sums on the GPU; sample counts
-   for the phone; the cluster-reuse cone trace; a moving camera; the training schedule.
+   and the result in agreement with Falcor's training (above); the tiles shared by Vulkan and NNRt.
+   Next: the prefix sums on the GPU; sample counts for the phone; the cluster-reuse cone trace; a
+   moving camera; the training schedule.
 4. The HarmonyOS app: platform layer, NNRt backend, zero-copy buffers, frame synchronisation, cross-frame
    training; then performance.

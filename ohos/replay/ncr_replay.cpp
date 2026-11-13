@@ -33,6 +33,8 @@
 //   --no-train        skip recorded training steps
 //   --loss N          every N frames print the training loss of the first tile, computed on the CPU
 //   --dump-train      write the tensors of the first training step for ohos/tools/train_check.py
+//   --copy-tiles      with npu: keep the tiles in ordinary memory and copy them to and from the NPU,
+//                     instead of sharing one buffer between Vulkan and NNRt
 //   --shaders <dir>   the replayer's own SPIR-V (default: shaders next to the executable)
 //   --models <dir>    the NPU models
 //   --per-pass        submit every call on its own and print the time of each (slower overall)
@@ -166,7 +168,7 @@ int main(int argc, char** argv)
     const size_t slash = executable.find_last_of("/\\");
     std::string networksMode = "tiles", modelDir = ".";
     std::string shaderDir = (slash == std::string::npos ? std::string(".") : executable.substr(0, slash)) + "/shaders";
-    bool perPass = false, noTrain = false, dumpTrain = false;
+    bool perPass = false, noTrain = false, dumpTrain = false, copyTiles = false;
     uint32_t frames = 1, trainTile = 4096, lossInterval = 0;
     float learningRate = 0.0f, emaDecay = 0.0f;
     for (int i = 4; i < argc; i++)
@@ -176,6 +178,7 @@ int main(int argc, char** argv)
         if (arg == "--per-pass") perPass = true;
         else if (arg == "--no-train") noTrain = true;
         else if (arg == "--dump-train") dumpTrain = true;
+        else if (arg == "--copy-tiles") copyTiles = true;
         else if (arg == "--networks" && hasValue) networksMode = argv[++i];
         else if (arg == "--shaders" && hasValue) shaderDir = argv[++i];
         else if (arg == "--models" && hasValue) modelDir = argv[++i];
@@ -242,6 +245,14 @@ int main(int argc, char** argv)
         std::memset(b.data, 0, (size_t)bytes);
         return b;
     };
+    // Tiles: what the GPU passes and the MLPs exchange. With the NPU they are shared memory.
+    const bool sharedTiles = networksMode == "npu" && !copyTiles && dev.sharedMemory;
+    auto tileBuffer = [&](VkDeviceSize bytes) {
+        Buffer b = sharedTiles ? dev.makeSharedBuffer(bytes, storage) : dev.makeBuffer(bytes, storage, true);
+        std::memset(b.data, 0, (size_t)bytes);
+        return b;
+    };
+    auto tiles = [](const Buffer& b) { return TileMemory{b.as<uint16_t>(), b.fd, b.sharedSize}; };
     if (useTiles)
     {
         ownPool = makeOwnPool(dev, 48, 256);
@@ -286,7 +297,8 @@ int main(int argc, char** argv)
             return 2;
         }
     }
-    std::printf("networks: %s\n", useTiles ? backend->name() : "CPU (float32) on the sample rows, lookups included");
+    std::printf("networks: %s%s\n", useTiles ? backend->name() : "CPU (float32) on the sample rows, lookups included",
+                networksMode != "npu" ? "" : sharedTiles ? ", tiles shared with the GPU" : ", tiles copied");
     if (training)
         std::printf("training: tiles of %u samples, learning rate %g, EMA decay %g\n", trainTile, learningRate, emaDecay);
 
@@ -298,8 +310,8 @@ int main(int argc, char** argv)
         const uint32_t maxTiles = (b.size + cfg::kTile - 1) / cfg::kTile;
         const VkDeviceSize tile = (VkDeviceSize)cfg::kTile * 2;
         auto create = [&](bool spec, Buffer& x, Buffer& y, OwnPass& encode, OwnPass& decode) {
-            x = zeroed(maxTiles * (spec ? cfg::kSpecInputDim : cfg::kDiffInputDim) * tile);
-            y = dev.makeBuffer(maxTiles * cfg::kOutputChannels * tile, storage, true);
+            x = tileBuffer(maxTiles * (spec ? cfg::kSpecInputDim : cfg::kDiffInputDim) * tile);
+            y = tileBuffer(maxTiles * cfg::kOutputChannels * tile);
             encode.create(dev, ownPool, shaderDir + (spec ? "/EncodeSpec.spv" : "/EncodeDiff.spv"), 4, sizeof(EncodePush), 64);
             decode.create(dev, ownPool, shaderDir + "/DecodeOutputs.spv", 2, sizeof(DecodePush), 64);
             encode.bind(dev, 0, bake.buffer(b.role + (spec ? ".specInput" : ".diffInput")));
@@ -323,9 +335,9 @@ int main(int argc, char** argv)
         const VkDeviceSize tile = (VkDeviceSize)trainTile * 2;
         auto create = [&](bool spec, TrainNet& n) {
             const uint32_t channels = spec ? cfg::kSpecInputDim : cfg::kDiffInputDim;
-            n.x = zeroed(maxTiles * channels * tile);
-            n.target = zeroed(maxTiles * cfg::kOutputChannels * tile);
-            n.gradient = zeroed(maxTiles * channels * tile);
+            n.x = tileBuffer(maxTiles * channels * tile);
+            n.target = tileBuffer(maxTiles * cfg::kOutputChannels * tile);
+            n.gradient = tileBuffer(maxTiles * channels * tile);
             n.weightGradient.resize((spec ? specNet : diffNet).master.size());
             n.encode.create(dev, ownPool, shaderDir + (spec ? "/EncodeSpec.spv" : "/EncodeDiff.spv"), 4, sizeof(EncodePush), 64);
             n.targets.create(dev, ownPool, shaderDir + "/EncodeTargets.spv", 2, sizeof(TargetPush), 64);
@@ -381,8 +393,8 @@ int main(int argc, char** argv)
             flush();
             const auto t0 = std::chrono::steady_clock::now();
             const uint32_t specTiles = (b.specSize + cfg::kTile - 1) / cfg::kTile, diffTiles = (b.diffSize + cfg::kTile - 1) / cfg::kTile;
-            if (b.needSpec) backend->infer(true, t.specX.as<uint16_t>(), t.specY.as<uint16_t>(), specTiles);
-            if (b.needDiff) backend->infer(false, t.diffX.as<uint16_t>(), t.diffY.as<uint16_t>(), diffTiles);
+            if (b.needSpec) backend->infer(true, tiles(t.specX), tiles(t.specY), specTiles);
+            if (b.needDiff) backend->infer(false, tiles(t.diffX), tiles(t.diffY), diffTiles);
             timings.push_back({"MLPs (" + b.role + "), " + std::to_string(specTiles) + " + " + std::to_string(diffTiles) + " tiles", msSince(t0)});
             c = record("outputs to rows (" + b.role + ")");
             if (b.needSpec) t.decodeSpec.dispatch(c, DecodePush{b.specSize, 0}, b.specSize);
@@ -448,8 +460,7 @@ int main(int argc, char** argv)
         for (const Job& j : jobs)
         {
             std::fill(j.net->weightGradient.begin(), j.net->weightGradient.end(), 0.0f);
-            backend->train(j.spec, trainTile, j.tiles, j.net->x.as<uint16_t>(), j.net->target.as<uint16_t>(), j.net->weightGradient.data(),
-                           j.net->gradient.as<uint16_t>());
+            backend->train(j.spec, trainTile, j.tiles, tiles(j.net->x), tiles(j.net->target), j.net->weightGradient.data(), tiles(j.net->gradient));
             // Every tile normalised its loss by its own size: bring the sum to the batch.
             const float toBatch = (float)trainTile / (float)j.rows;
             for (float& g : j.net->weightGradient) g *= toBatch;
@@ -617,10 +628,10 @@ int main(int argc, char** argv)
 #ifdef __OHOS__
     if (auto* npu = dynamic_cast<NnrtBackend*>(backend.get()))
     {
-        std::printf("NPU inference: %u runs, %.1f ms inside RunSync (%.2f ms per tile), %.1f ms copying tiles\n", npu->runs, npu->runMs,
+        std::printf("NPU inference: %u runs, %.1f ms inside RunSync (%.2f ms per tile), %.1f ms around it\n", npu->runs, npu->runMs,
                     npu->runs ? npu->runMs / npu->runs : 0.0, npu->copyMs);
         if (npu->trainRuns)
-            std::printf("NPU training: %u runs, %.1f ms inside RunSync (%.2f ms per tile of %u), %.1f ms copying tiles and gradients\n", npu->trainRuns,
+            std::printf("NPU training: %u runs, %.1f ms inside RunSync (%.2f ms per tile of %u), %.1f ms around it\n", npu->trainRuns,
                         npu->trainRunMs, npu->trainRunMs / npu->trainRuns, trainTile, npu->trainCopyMs);
     }
 #endif
