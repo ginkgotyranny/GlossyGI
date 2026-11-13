@@ -8,9 +8,12 @@
     Rays stay GGX importance sampled through mi.sample() with a frame-varying
     seed — not seed=0, not Hammersley. Variance drops by accumulating ~N_lock
     random samples with α = 1/(n+1), then hard-locking the mixture. A locked
-    pixel traces one ray only to measure residual; the blend is frozen unless
-    the cone test already emptied the slot or the residual exceeds λ for M
-    consecutive frames.
+    pixel traces one ray per frame only to feed the change detector in
+    ClusterHistory (ClusterLockState): the blend stays frozen until hits keep
+    landing outside every mode, or the cone has slid far enough across the frozen
+    anchors since the lock. ClusterReproject measures the drift, unlocks directly
+    when the cone test drops a mode that carried real weight, and keeps pixels
+    that move with the camera from locking at all.
 
     Adaptive extra rays run only while unlocked. Locked silhouettes therefore
     stop being tugged by the near/far coin-flip of the current frame.
@@ -52,8 +55,8 @@ RWTexture2D<float> gRoughness;
 
 // Cluster history (reprojected in place by ClusterReproject, updated here).
 RWStructuredBuffer<SpecClusterHistory> clusterHistory;
-// Consecutive residual-outlier count, ping-ponged with the history.
-RWStructuredBuffer<uint> residualStreak;
+// Packed ClusterLockState (change-detection EMAs), ping-ponged with the history.
+RWStructuredBuffer<uint> clusterLockState;
 
 
 struct ConeTraceScreen
@@ -70,17 +73,23 @@ struct ConeTraceScreen
     /// Scene-scale epsilon, guards the residual denominators.
     float epsScene = 1e-4f;
     /// lambda: normalized residual below which a sample joins an existing mode.
-    float assignThreshold = 2.0f;
+    float assignThreshold = 0.1f;
     /// N_max: caps the per-mode (mu, sigma) count during accumulation.
     float maxCount = 64.0f;
     /// Modes below this weight release their slot.
     float weakWeight = 0.02f;
     /// Newborn sigma = sigmaPriorScale * tanLobe * t.
-    float sigmaPriorScale = 0.5f;
+    float sigmaPriorScale = 0.0f;
     /// Observation count at which the mixture hard-locks (α = 0).
     float lockCount = 32.0f;
-    /// Consecutive residual outliers required to unlock a frozen pixel.
-    uint unlockStreak = 2;
+    /// lambda_d: residual gate of the change detector (wider than assignThreshold).
+    float detectThreshold = 1.0f;
+    /// beta: EMA rate of the change detector, i.e. ~2/beta frames of memory.
+    float detectRate = 0.125f;
+    /// Outlier share at which a locked pixel unlocks (new geometry in the cone).
+    float unlockOutlierRate = 0.2f;
+    /// Anchor drift since lock, in cone radii, at which a locked pixel unlocks.
+    float unlockDrift = 0.5f;
     /// Rays traced per pixel per frame, 1..kMaxRayBudget. Locked pixels use 1.
     uint maxRays = 4;
 
@@ -175,36 +184,24 @@ struct ConeTraceScreen
         SampleGenerator sg = SampleGenerator(pixel, frameCount);
 
         const uint rayBudget = clamp(maxRays, 1u, kMaxRayBudget);
-        const uint streakLimit = max(unlockStreak, 1u);
-        uint streak = residualStreak[pixIdx];
+        ClusterLockState lockState = unpackClusterLockState(clusterLockState[pixIdx]);
         uint numRays = 0;
         uint numOutliers = 0;
 
         if (isClusterLocked(cs, lockCount))
         {
-            // One ray, residual only. Do not fold it into (t, σ, w).
+            // One ray, detection only. Do not fold it into (t, σ, w).
             float rayT = 0.f;
             const bool hitValid = traceDepthSample(sd, mi, sg, rayT);
             ++numRays;
 
-            const float residual = clusterSampleResidual(
-                cs, hitValid, hitValid ? rayT : 0.f, tanLobe, epsScene
+            updateClusterLockOutlier(
+                lockState, cs, hitValid, hitValid ? rayT : 0.f, tanLobe, epsScene, detectThreshold, detectRate
             );
-            const bool outlier = residual >= assignThreshold;
-            if (outlier)
-            {
-                ++numOutliers;
-                streak += 1u;
-            }
-            else
-            {
-                streak = 0;
-            }
 
-            if (streak >= streakLimit)
+            if (lockState.outlier >= unlockOutlierRate || lockState.drift >= unlockDrift)
             {
                 unlockClusterSet(cs);
-                streak = 0;
 
                 bool keepGoing = integrateClusterSample(
                     cs, hitValid, hitValid ? rayT : 0.f, tanLobe, epsScene,
@@ -220,8 +217,6 @@ struct ConeTraceScreen
         }
         else
         {
-            streak = 0;
-
             [loop]
             for (uint r = 0; r < rayBudget; ++r)
             {
@@ -230,8 +225,14 @@ struct ConeTraceScreen
         }
 
         releaseWeakClusters(cs, weakWeight);
+
+        // The detector only measures change since the mixture froze.
+        if (!isClusterLocked(cs, lockCount)) lockState = emptyClusterLockState();
+        const float u0 = sampleNext1D(sg);
+        const float u1 = sampleNext1D(sg);
+
         clusterHistory[pixIdx] = packClusterSet(cs);
-        residualStreak[pixIdx] = streak;
+        clusterLockState[pixIdx] = packClusterLockState(lockState, u0, u1);
     }
 }
 

@@ -60,7 +60,7 @@ struct ClusterSpatialReuse
     /// Scene-scale epsilon, guards the residual denominators.
     float epsScene = 1e-4f;
     /// lambda: residual below which a neighbour depth joins one of our modes.
-    float assignThreshold = 2.0f;
+    float assignThreshold = 0.1f;
     /// Observation count at which the pixel's own mixture is frozen.
     float lockCount = 32.0f;
 
@@ -68,6 +68,8 @@ struct ClusterSpatialReuse
     uint enableSpatialReuse = 1;
     /// 0 keeps the environment color and skips the mirror ray.
     uint enableMirrorAlbedo = 1;
+    /// kEnvColorEncoding* in MirrorAlbedo.slang.
+    uint envColorEncoding = 1;
     /// Number of taps on the gather ring.
     uint numTaps = 5;
     /// Gather radius scale applied to the cone's screen-space projection.
@@ -224,7 +226,7 @@ struct ClusterSpatialReuse
         const float3 envColor = gPrefiltEnv.valid != 0 ? gPrefiltEnv.eval(reflectDir, roughness) :
             (gPrefiltEnv.fallbackValid != 0 ? gScene.envMap.eval(reflectDir) : float3(0.f));
 
-        writeSpecPrimaryOutput(specInput, idx, pos, sampleMirrorAlbedo(pos, reflectDir, envColor, enableMirrorAlbedo), bboxMin, bboxMax);
+        writeSpecPrimaryOutput(specInput, idx, pos, sampleMirrorAlbedo(pos, reflectDir, envColor, enableMirrorAlbedo, envColorEncoding), bboxMin, bboxMax);
     }
 }
 

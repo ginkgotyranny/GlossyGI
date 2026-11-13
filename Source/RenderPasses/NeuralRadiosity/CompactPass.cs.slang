@@ -25,6 +25,12 @@ RWStructuredBuffer<uint> specIndex;
 RWStructuredBuffer<SpecNetInput> specInput;
 RWStructuredBuffer<uint> specSrc;
 
+// Compacted totals from PrefixSum: [0] diffuse, [1] specular (bytes 0 and 4).
+ByteAddressBuffer batchCounts;
+
+// Must match RayBatchBuffer / kModelBatchAlign on the CPU.
+static const uint kModelBatchAlign = 256;
+
 
 struct CompactPass
 {
@@ -32,6 +38,9 @@ struct CompactPass
     uint frameCount = 0;
     uint diffSize = 0;
     uint specSize = 0;
+    /// Diffuse and specular share one input buffer: specular rows first, diffuse
+    /// rows after the padded specular rows (RayBatchBuffer::diffInputOffset()).
+    uint sharedIO = 0;
 
     float3 bboxMin;
     float3 bboxMax;
@@ -43,7 +52,13 @@ struct CompactPass
 
         if (diffActive[pixIdx] != 0)
         {
-            const uint diffIdx = diffIndex[pixIdx];
+            uint diffOffset = 0;
+            if (sharedIO != 0)
+            {
+                const uint specRows = (batchCounts.Load(4) + kModelBatchAlign - 1) & ~(kModelBatchAlign - 1);
+                diffOffset = (specRows * SpecNetInput::paddedDim + DiffNetInput::paddedDim - 1) / DiffNetInput::paddedDim;
+            }
+            const uint diffIdx = diffOffset + diffIndex[pixIdx];
             writeDiffInputGBuffer(
                 diffInput, diffIdx,
                 (Real3) ((gPos[pixel].xyz - bboxMin) / (bboxMax - bboxMin)),

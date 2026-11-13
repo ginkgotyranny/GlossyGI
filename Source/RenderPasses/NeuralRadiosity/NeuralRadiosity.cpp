@@ -97,10 +97,29 @@ namespace
     const char kClusterAssignThreshold[] = "clusterAssignThreshold";
     const char kClusterAlphaWeight[] = "clusterAlphaWeight";
     const char kClusterLockCount[] = "clusterLockCount";
-    const char kClusterUnlockStreak[] = "clusterUnlockStreak";
+    const char kClusterDetectThreshold[] = "clusterDetectThreshold";
+    const char kClusterDetectRate[] = "clusterDetectRate";
+    const char kClusterUnlockDrift[] = "clusterUnlockDrift";
+    const char kClusterMotionDrift[] = "clusterMotionDrift";
+    const char kClusterMotionMemory[] = "clusterMotionMemory";
+    const char kClusterUnlockOutlierRate[] = "clusterUnlockOutlierRate";
     const char kEnablePostFilter[] = "enablePostFilter";
     const char kEnableFXAA[] = "enableFXAA";
     const char kEnableMirrorAlbedo[] = "enableMirrorAlbedo";
+    const char kEnvColorEncoding[] = "envColorEncoding";
+    const char kUseNEE[] = "useNEE";
+    const char kDiffTrainOnGlossy[] = "diffTrainOnGlossy";
+    const char kRhsGlossyBounces[] = "rhsGlossyBounces";
+    const char kEnableTrainSchedule[] = "enableTrainSchedule";
+    const char kTrainLrHot[] = "trainLrHot";
+    const char kTrainLrCold[] = "trainLrCold";
+    const char kTrainEmaHot[] = "trainEmaHot";
+    const char kTrainEmaCold[] = "trainEmaCold";
+    const char kTrainWarmupFrames[] = "trainWarmupFrames";
+    const char kTrainHoldFrames[] = "trainHoldFrames";
+    const char kTrainCoolFrames[] = "trainCoolFrames";
+    const char kTrainCameraHeat[] = "trainCameraHeat";
+    const char kTrainSceneHeat[] = "trainSceneHeat";
     // Headless / scripted control: initial render mode, checkpoint auto-load, training schedule.
     const char kRenderMode[] = "renderMode";
     const char kLoadModelPath[] = "loadModelPath";
@@ -153,9 +172,17 @@ namespace
     }
 }
 
+static void regNeuralRadiosity(pybind11::module& m)
+{
+    pybind11::class_<NeuralRadiosity, RenderPass, ref<NeuralRadiosity>> pass(m, "NeuralRadiosity");
+    pass.def("clearHistory", &NeuralRadiosity::clearHistory);
+    pass.def_property_readonly("trainHeat", &NeuralRadiosity::getTrainHeat);
+}
+
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
 {
     registry.registerClass<RenderPass, NeuralRadiosity>();
+    ScriptBindings::registerBinding(regNeuralRadiosity);
 }
 
 static uint64_t gpuUsedMBs() {
@@ -175,6 +202,34 @@ NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) :
             mEnableFXAA = value;
         else if (key == kEnableMirrorAlbedo)
             mEnableMirrorAlbedo = value;
+        else if (key == kEnvColorEncoding)
+            mEnvColorEncoding = value;
+        else if (key == kUseNEE)
+            mUseNEE = value;
+        else if (key == kDiffTrainOnGlossy)
+            mDiffTrainOnGlossy = value;
+        else if (key == kRhsGlossyBounces)
+            mRhsGlossyBounces = value;
+        else if (key == kEnableTrainSchedule)
+            mEnableTrainSchedule = value;
+        else if (key == kTrainLrHot)
+            mTrainLrHot = value;
+        else if (key == kTrainLrCold)
+            mTrainLrCold = value;
+        else if (key == kTrainEmaHot)
+            mTrainEmaHot = value;
+        else if (key == kTrainEmaCold)
+            mTrainEmaCold = value;
+        else if (key == kTrainWarmupFrames)
+            mTrainWarmupFrames = value;
+        else if (key == kTrainHoldFrames)
+            mTrainHoldFrames = value;
+        else if (key == kTrainCoolFrames)
+            mTrainCoolFrames = value;
+        else if (key == kTrainCameraHeat)
+            mTrainCameraHeat = value;
+        else if (key == kTrainSceneHeat)
+            mTrainSceneHeat = value;
         else if (key == kEnableClusterSpatialReuse)
             mEnableClusterSpatialReuse = value;
         else if (key == kUseReferenceConeTrace)
@@ -189,8 +244,18 @@ NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) :
             mClusterAlphaWeight = value;
         else if (key == kClusterLockCount)
             mClusterLockCount = value;
-        else if (key == kClusterUnlockStreak)
-            mClusterUnlockStreak = value;
+        else if (key == kClusterDetectThreshold)
+            mClusterDetectThreshold = value;
+        else if (key == kClusterDetectRate)
+            mClusterDetectRate = value;
+        else if (key == kClusterUnlockDrift)
+            mClusterUnlockDrift = value;
+        else if (key == kClusterMotionDrift)
+            mClusterMotionDrift = value;
+        else if (key == kClusterMotionMemory)
+            mClusterMotionMemory = value;
+        else if (key == kClusterUnlockOutlierRate)
+            mClusterUnlockOutlierRate = value;
         else if (key == kEnablePostFilter)
             mEnablePostFilter = value;
         else if (key == kRenderMode)
@@ -234,10 +299,29 @@ Properties NeuralRadiosity::getProperties() const
     props[kClusterAssignThreshold] = mClusterAssignThreshold;
     props[kClusterAlphaWeight] = mClusterAlphaWeight;
     props[kClusterLockCount] = mClusterLockCount;
-    props[kClusterUnlockStreak] = mClusterUnlockStreak;
+    props[kClusterDetectThreshold] = mClusterDetectThreshold;
+    props[kClusterDetectRate] = mClusterDetectRate;
+    props[kClusterUnlockDrift] = mClusterUnlockDrift;
+    props[kClusterMotionDrift] = mClusterMotionDrift;
+    props[kClusterMotionMemory] = mClusterMotionMemory;
+    props[kClusterUnlockOutlierRate] = mClusterUnlockOutlierRate;
     props[kEnablePostFilter] = mEnablePostFilter;
     props[kEnableFXAA] = mEnableFXAA;
     props[kEnableMirrorAlbedo] = mEnableMirrorAlbedo;
+    props[kEnvColorEncoding] = mEnvColorEncoding;
+    props[kUseNEE] = mUseNEE;
+    props[kDiffTrainOnGlossy] = mDiffTrainOnGlossy;
+    props[kRhsGlossyBounces] = mRhsGlossyBounces;
+    props[kEnableTrainSchedule] = mEnableTrainSchedule;
+    props[kTrainLrHot] = mTrainLrHot;
+    props[kTrainLrCold] = mTrainLrCold;
+    props[kTrainEmaHot] = mTrainEmaHot;
+    props[kTrainEmaCold] = mTrainEmaCold;
+    props[kTrainWarmupFrames] = mTrainWarmupFrames;
+    props[kTrainHoldFrames] = mTrainHoldFrames;
+    props[kTrainCoolFrames] = mTrainCoolFrames;
+    props[kTrainCameraHeat] = mTrainCameraHeat;
+    props[kTrainSceneHeat] = mTrainSceneHeat;
     props[kTotalTrainSteps] = mTotalTrainSteps;
     props[kSaveCkptInterval] = mSaveCKPTInterval;
     if (!mLoadModelPath.empty()) props[kLoadModelPath] = mLoadModelPath;
@@ -288,6 +372,7 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
     // Train the model.
     if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
     {
+        updateTrainSchedule();
         train(pRenderContext, renderData);
     }
 
@@ -383,8 +468,46 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
     {
         mVarsChanged = true;
     }
+    widget.var("RHS Glossy Bounces", mRhsGlossyBounces, 0u, 8u);
+    widget.tooltip(
+        "Glossy RHS hits continue along a BSDF sample (with NEE) this many times\n"
+        "before the diffuse network is queried. 0 queries it at glossy hits, which\n"
+        "lets the diffuse network drift dark in glossy, high-albedo rooms."
+    );
+    widget.checkbox("Diffuse Trains On Glossy", mDiffTrainOnGlossy);
+    widget.tooltip("Also train the diffuse network on glossy samples. Only useful with 0 glossy bounces.");
     widget.checkbox("Mirror Albedo", mEnableMirrorAlbedo);
     widget.tooltip("Trace one mirror ray and replace the environment color with the hit albedo.");
+    {
+        static const Gui::DropdownList kEnvEncodings = {{0, "Linear"}, {1, "Signed log"}, {2, "Log"}};
+        widget.dropdown("Env Color Encoding", kEnvEncodings, mEnvColorEncoding);
+        widget.tooltip(
+            "How a mirror-ray miss enters the shared env/albedo input channels.\n"
+            "Signed log: -log(1 + env), so misses are negative and bounded; hits keep the albedo."
+        );
+    }
+
+    if (auto group = widget.group("Training Schedule", false))
+    {
+        group.checkbox("Enable", mEnableTrainSchedule);
+        group.tooltip("Off: always train with the hot learning rate and EMA decay.");
+        group.text(fmt::format("Heat {:.2f}  hold {}", mTrainHeat, mTrainHoldLeft));
+        group.var("LR hot", mTrainLrHot, 1e-5f, 1e-1f, 1e-4f, false, "%.5f");
+        group.var("LR cold", mTrainLrCold, 1e-5f, 1e-1f, 1e-4f, false, "%.5f");
+        group.var("EMA hot", mTrainEmaHot, 0.f, 0.9999f, 0.001f, false, "%.4f");
+        group.var("EMA cold", mTrainEmaCold, 0.f, 0.9999f, 0.001f, false, "%.4f");
+        group.var("Warmup frames", mTrainWarmupFrames, 0u, 10000u);
+        group.tooltip("Frames held fully hot after the scene loads or the schedule is reset.");
+        group.var("Hold frames", mTrainHoldFrames, 0u, 10000u);
+        group.tooltip("Frames held at the event level after the last camera or scene change.");
+        group.var("Cool frames", mTrainCoolFrames, 1.f, 10000.f, 1.f);
+        group.tooltip("Time constant of the decay toward cold once nothing changes.");
+        group.var("Camera heat", mTrainCameraHeat, 0.f, 1.f, 0.05f);
+        group.tooltip("Heat while the camera moves. The network is world-space, so this only speeds up newly seen regions.");
+        group.var("Scene heat", mTrainSceneHeat, 0.f, 1.f, 0.05f);
+        group.tooltip("Heat while geometry, lights, materials or the environment change.");
+        if (group.button("Reset schedule")) resetTrainSchedule();
+    }
 
     if (auto group = widget.group("Spatiotemporal Cluster Reuse", true))
     {
@@ -401,10 +524,7 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
             "Off: original per-frame group-wide K-Means cone trace."
         );
 
-        if (group.button("Clear History"))
-        {
-            clearRenderTemporalHistory(mpDevice->getRenderContext());
-        }
+        if (group.button("Clear History")) clearHistory();
 
         if (!mEnableRenderSpecTemporalReuse)
         {
@@ -441,11 +561,29 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
             "Accumulate random GGX samples with alpha = 1/(n+1) until this many\n"
             "observations, then freeze the mixture. Matches the old T=32 one-shot."
         );
-        group.var("Unlock Streak (M)", mClusterUnlockStreak, 1u, 8u);
+        group.var("Detect Gate (lambda_d)", mClusterDetectThreshold, 0.1f, 8.f, 0.05f);
         group.tooltip(
-            "Locked pixels unlock only after M consecutive residual outliers.\n"
-            "A single near/far coin-flip on a silhouette does not reopen the mix.\n"
-            "Cone-fail empties the pixel immediately via reprojection."
+            "Residual gate of the locked-pixel change detector. Separate from lambda,\n"
+            "which is too tight to tell a static pixel from a changed one."
+        );
+        group.var("Detect Rate (beta)", mClusterDetectRate, 0.02f, 0.5f, 0.005f);
+        group.tooltip("EMA rate of the observed ray shares. Lower = steadier, slower to react.");
+        group.var("Unlock Outlier Rate", mClusterUnlockOutlierRate, 0.05f, 1.f, 0.01f);
+        group.tooltip(
+            "When this share of hits lands outside every mode, the pixel unlocks\n"
+            "to grow new modes. Losing real weight through the cone test unlocks directly."
+        );
+        group.var("Motion Drift", mClusterMotionDrift, 0.f, 1.f, 0.001f);
+        group.tooltip("Per-frame drift (cone radii) above which the pixel counts as moving with the camera.");
+        group.var("Motion Memory", mClusterMotionMemory, 1.f, 32.f, 1.f);
+        group.tooltip(
+            "Observation cap while moving: the mixture tracks ~this many recent samples\n"
+            "and only locks once the camera holds still, so no motion trail is frozen."
+        );
+        group.var("Unlock Drift", mClusterUnlockDrift, 0.05f, 4.f, 0.05f);
+        group.tooltip(
+            "Unlock once the cone has slid this many cone radii across the frozen\n"
+            "anchors since the pixel locked (smooth camera motion)."
         );
         group.var("Weight EMA (alpha_w)", mClusterAlphaWeight, 0.01f, 1.f, 0.005f);
         group.tooltip("Unused: weights use 1/(n+1) until lock. Kept for property compatibility.");
@@ -506,10 +644,14 @@ void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& 
     mClusterHistoryValid = false;
     mPrefiltEnvDirty = true;
     mVarsChanged = true;
+    resetTrainSchedule();
 }
 
 void NeuralRadiosity::onSceneUpdates(RenderContext* pRenderContext, IScene::UpdateFlags sceneUpdates)
 {
+    // Consumed by the next updateTrainSchedule().
+    mPendingSceneUpdates |= sceneUpdates;
+
     // Neither camera nor geometry motion invalidates history wholesale. Clusters
     // carry world anchors that are validated one at a time against the current
     // cone, and a mode whose object moved but stayed in the cone is replaced by
@@ -535,6 +677,63 @@ void NeuralRadiosity::onSceneUpdates(RenderContext* pRenderContext, IScene::Upda
 }
 
 // Private methods
+
+void NeuralRadiosity::resetTrainSchedule()
+{
+    mTrainHeat = 1.f;
+    mTrainHoldLeft = mTrainWarmupFrames;
+    mPendingSceneUpdates = IScene::UpdateFlags::None;
+}
+
+void NeuralRadiosity::updateTrainSchedule()
+{
+    using F = IScene::UpdateFlags;
+    const F updates = mPendingSceneUpdates;
+    mPendingSceneUpdates = F::None;
+    if (!mpNRModel) return;
+    if (!mEnableTrainSchedule)
+    {
+        mpNRModel->setOptimizerHyperparams(mTrainLrHot, mTrainEmaHot);
+        return;
+    }
+
+    // Changes to what the network must represent. Radiance changes everywhere the
+    // moved object or light is seen, so these go fully hot.
+    const F sceneChange = F::GeometryMoved | F::LightsMoved | F::LightIntensityChanged | F::LightPropertiesChanged |
+                          F::LightCollectionChanged | F::LightCountChanged | F::MaterialsChanged | F::EmissiveMaterialsChanged |
+                          F::EnvMapChanged | F::EnvMapPropertiesChanged | F::GeometryChanged | F::MeshesChanged |
+                          F::DisplacementChanged | F::SDFGeometryChanged | F::CurvesMoved | F::CustomPrimitivesMoved;
+    // The radiance field is in world space, so camera motion changes nothing it
+    // has learned. It only exposes regions that have had little training.
+    const F cameraChange = F::CameraMoved | F::CameraSwitched | F::CameraPropertiesChanged;
+
+    float target = 0.f;
+    if (is_set(updates, cameraChange)) target = std::max(target, mTrainCameraHeat);
+    if (is_set(updates, sceneChange)) target = std::max(target, mTrainSceneHeat);
+
+    if (target >= mTrainHeat && target > 0.f)
+    {
+        mTrainHeat = target;
+        mTrainHoldLeft = std::max(mTrainHoldLeft, mTrainHoldFrames);
+    }
+    else if (mTrainHoldLeft > 0)
+    {
+        mTrainHoldLeft--;
+    }
+    else
+    {
+        // Relax toward the current event level (0 when nothing changes).
+        const float k = std::exp(-1.f / std::max(mTrainCoolFrames, 1.f));
+        mTrainHeat = target + (mTrainHeat - target) * k;
+    }
+
+    // Interpolate log(lr) and log(1 - decay): each heat step changes the step size
+    // and the EMA half-life by the same factor.
+    const float h = std::clamp(mTrainHeat, 0.f, 1.f);
+    const float lr = mTrainLrCold * std::pow(mTrainLrHot / mTrainLrCold, h);
+    const float oneMinusDecay = (1.f - mTrainEmaCold) * std::pow((1.f - mTrainEmaHot) / (1.f - mTrainEmaCold), h);
+    mpNRModel->setOptimizerHyperparams(lr, 1.f - oneMinusDecay);
+}
 
 void NeuralRadiosity::render(RenderContext* pRenderContext, const RenderData& renderData)
 {
@@ -664,6 +863,11 @@ void NeuralRadiosity::compactPass(RenderContext* pRenderContext, const RenderDat
     var["specInput"] = mpRenderBatch->specInput;
     var["specSrc"] = mpRenderBatch->specSrc;
 
+    // With shared I/O the diffuse rows start after the padded specular rows. The
+    // specular total is only on the GPU here, so the shader reads it from `counts`.
+    var[name]["sharedIO"] = mpRenderBatch->sharedIO ? 1u : 0u;
+    var["batchCounts"] = mpRenderBatch->counts;
+
     mpCompactPass->execute(pRenderContext, uint3(mFrameDim, 1));
 
     stageBatchCounts(pRenderContext, mpRenderBatch);
@@ -679,6 +883,8 @@ void NeuralRadiosity::resolvePass(RenderContext* pRenderContext, const RenderDat
 
     var[name]["diffSize"] = mpRenderBatch->diffSize;
     var[name]["specSize"] = mpRenderBatch->specSize;
+    // Counts were read back at the inference sync, so the CPU knows the offset.
+    var[name]["diffColorOffset"] = mpRenderBatch->diffOutputOffset();
 
     var["diffActive"] = mpRenderBatch->diffActive;
     var["diffIndex"] = mpRenderBatch->diffIndex;
@@ -751,6 +957,7 @@ void NeuralRadiosity::randomSmooth(RenderContext* pRenderContext, std::shared_pt
 
     ShaderVar var = mpRandomSmooth->getRootVar();
     bindRayBatchData(var, pRayBatch, "gRandomSmooth");
+    var["gRandomSmooth"]["diffTrainOnGlossy"] = mDiffTrainOnGlossy ? 1u : 0u;
 
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
@@ -765,6 +972,8 @@ void NeuralRadiosity::sampleRHS(RenderContext* pRenderContext)
     const auto name = "gSampleRHS";
 
     // Bind parameters
+    var[name]["maxGlossyBounces"] = mRhsGlossyBounces;
+    var[name]["queryGlossyFallback"] = (mDiffTrainOnGlossy || mRhsGlossyBounces == 0) ? 1u : 0u;
     var[name]["batchSize"] = mBatchSize;
     var[name]["batchCount"] = mFrameCount;
 
@@ -885,7 +1094,7 @@ void NeuralRadiosity::resolveBatch(RenderContext* pRenderContext, std::shared_pt
 bool NeuralRadiosity::useClusterReuse() const
 {
     return mEnableRenderSpecTemporalReuse && mpClusterHistory[0] && mpClusterHistory[1] &&
-        mpResidualStreak[0] && mpResidualStreak[1] && mpPrevPos;
+        mpClusterLockState[0] && mpClusterLockState[1] && mpPrevPos;
 }
 
 void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, const RenderData& renderData, std::shared_ptr<RayBatchBuffer> pRayBatch)
@@ -963,6 +1172,7 @@ void NeuralRadiosity::specPrimaryPass(RenderContext* pRenderContext, std::shared
     var[name]["frameDim"] = mFrameDim;
     var[name]["useScreenGBuffer"] = pRayBatch->needAll ? 0u : 1u;
     var[name]["enableMirrorAlbedo"] = mEnableMirrorAlbedo ? 1u : 0u;
+    var[name]["envColorEncoding"] = mEnvColorEncoding;
 
     const AABB& aabb = mpScene->getSceneBounds();
     var[name]["bboxMin"] = aabb.minPoint;
@@ -1003,11 +1213,11 @@ void NeuralRadiosity::clusterReuse(RenderContext* pRenderContext, const RenderDa
 
     clusterReprojectPass(pRenderContext, renderData);
     pRenderContext->uavBarrier(mpClusterHistory[mClusterHistoryWriteIdx].get());
-    pRenderContext->uavBarrier(mpResidualStreak[mClusterHistoryWriteIdx].get());
+    pRenderContext->uavBarrier(mpClusterLockState[mClusterHistoryWriteIdx].get());
 
     coneTraceScreenPass(pRenderContext, renderData);
     pRenderContext->uavBarrier(mpClusterHistory[mClusterHistoryWriteIdx].get());
-    pRenderContext->uavBarrier(mpResidualStreak[mClusterHistoryWriteIdx].get());
+    pRenderContext->uavBarrier(mpClusterLockState[mClusterHistoryWriteIdx].get());
 
     clusterSpatialReusePass(pRenderContext, renderData);
 
@@ -1031,6 +1241,8 @@ void NeuralRadiosity::clusterReprojectPass(RenderContext* pRenderContext, const 
     var[name]["normalThreshold"] = mClusterNormalThreshold;
     var[name]["roughnessThreshold"] = mClusterRoughnessThreshold;
     var[name]["posThresholdRel"] = mClusterPosThresholdRel;
+    var[name]["motionDrift"] = mClusterMotionDrift;
+    var[name]["motionMemory"] = mClusterMotionMemory;
 
     var["gPos"] = renderData.getTexture(kOutputPos);
     var["gDir"] = renderData.getTexture(kOutputDir);
@@ -1047,8 +1259,8 @@ void NeuralRadiosity::clusterReprojectPass(RenderContext* pRenderContext, const 
     var["specActive"] = mpRenderBatch->specActive;
     var["clusterHistoryIn"] = mpClusterHistory[1 - mClusterHistoryWriteIdx];
     var["clusterHistoryOut"] = mpClusterHistory[mClusterHistoryWriteIdx];
-    var["residualStreakIn"] = mpResidualStreak[1 - mClusterHistoryWriteIdx];
-    var["residualStreakOut"] = mpResidualStreak[mClusterHistoryWriteIdx];
+    var["clusterLockStateIn"] = mpClusterLockState[1 - mClusterHistoryWriteIdx];
+    var["clusterLockStateOut"] = mpClusterLockState[mClusterHistoryWriteIdx];
 
     mpScene->bindShaderData(var["gScene"]);
 
@@ -1074,7 +1286,10 @@ void NeuralRadiosity::coneTraceScreenPass(RenderContext* pRenderContext, const R
     var[name]["weakWeight"] = mClusterWeakWeight;
     var[name]["sigmaPriorScale"] = mClusterSigmaPriorScale;
     var[name]["lockCount"] = mClusterLockCount;
-    var[name]["unlockStreak"] = mClusterUnlockStreak;
+    var[name]["detectThreshold"] = mClusterDetectThreshold;
+    var[name]["detectRate"] = mClusterDetectRate;
+    var[name]["unlockDrift"] = mClusterUnlockDrift;
+    var[name]["unlockOutlierRate"] = mClusterUnlockOutlierRate;
     var[name]["maxRays"] = mClusterMaxRays;
 
     var["specSrc"] = mpRenderBatch->specSrc;
@@ -1085,7 +1300,7 @@ void NeuralRadiosity::coneTraceScreenPass(RenderContext* pRenderContext, const R
     var["gNormal"] = renderData.getTexture(kOutputNormal);
     var["gRoughness"] = renderData.getTexture(kOutputRoughness);
     var["clusterHistory"] = mpClusterHistory[mClusterHistoryWriteIdx];
-    var["residualStreak"] = mpResidualStreak[mClusterHistoryWriteIdx];
+    var["clusterLockState"] = mpClusterLockState[mClusterHistoryWriteIdx];
 
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
@@ -1113,6 +1328,7 @@ void NeuralRadiosity::clusterSpatialReusePass(RenderContext* pRenderContext, con
     var[name]["lockCount"] = mClusterLockCount;
     var[name]["enableSpatialReuse"] = mEnableClusterSpatialReuse ? 1u : 0u;
     var[name]["enableMirrorAlbedo"] = mEnableMirrorAlbedo ? 1u : 0u;
+    var[name]["envColorEncoding"] = mEnvColorEncoding;
     var[name]["numTaps"] = mClusterNumTaps;
     var[name]["gatherRadiusScale"] = mClusterGatherRadiusScale;
     var[name]["maxGatherRadius"] = mClusterMaxGatherRadius;
@@ -1475,7 +1691,15 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
     if (!mpBindDummyBatch)
         mpBindDummyBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, 1, mNumClusters, "BindDummy", true, true, true);
     if (!mpRenderBatch)
-        mpRenderBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mFrameDim.x * mFrameDim.y, mNumClusters, "RenderBatch", false, true, true);
+    {
+        // Shared diffuse/specular network I/O binds one buffer as both
+        // RWStructuredBuffer<DiffNetInput> and <SpecNetInput>. Vulkan addresses each
+        // binding with the shader's stride; D3D12 views use the buffer's struct size
+        // (SpecNetInput), which would misplace every diffuse row. D3D12 keeps
+        // separate buffers.
+        const bool sharedIO = mpDevice->getType() == Device::Type::Vulkan;
+        mpRenderBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mFrameDim.x * mFrameDim.y, mNumClusters, "RenderBatch", false, true, true, sharedIO);
+    }
     if (!mpTrainLHSBatch)
         mpTrainLHSBatch = std::make_shared<RayBatchBuffer>(mpDevice, var, mBatchSize, mNumClusters, "LHSBatch", true, true, true);
     if (!mpTrainRHSBatch)
@@ -1500,7 +1724,7 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
         for (uint32_t i = 0; i < 2; ++i)
         {
             mpClusterHistory[i] = nullptr;
-            mpResidualStreak[i] = nullptr;
+            mpClusterLockState[i] = nullptr;
         }
         mpPrevSpecActive = nullptr;
         mpPrevPos = nullptr;
@@ -1515,7 +1739,7 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
 
         const bool historyResized =
             !mpClusterHistory[0] || mpClusterHistory[0]->getElementCount() != pixelCount ||
-            !mpResidualStreak[0] || mpResidualStreak[0]->getElementCount() != pixelCount;
+            !mpClusterLockState[0] || mpClusterLockState[0]->getElementCount() != pixelCount;
 
         if (pixelCount > 0 && historyResized)
         {
@@ -1532,15 +1756,15 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
                 );
                 mpClusterHistory[i]->setName(fmt::format("NeuralRadiosity.ClusterHistory{}", i));
 
-                mpResidualStreak[i] = mpDevice->createStructuredBuffer(
-                    reprojectVar["residualStreakOut"],
+                mpClusterLockState[i] = mpDevice->createStructuredBuffer(
+                    reprojectVar["clusterLockStateOut"],
                     pixelCount,
                     ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
                     MemoryType::DeviceLocal,
                     nullptr,
                     false
                 );
-                mpResidualStreak[i]->setName(fmt::format("NeuralRadiosity.ResidualStreak{}", i));
+                mpClusterLockState[i]->setName(fmt::format("NeuralRadiosity.ClusterLockState{}", i));
             }
 
             mpPrevSpecActive = mpDevice->createStructuredBuffer(
@@ -1617,7 +1841,7 @@ void NeuralRadiosity::clearRenderTemporalHistory(RenderContext* pRenderContext)
     for (uint32_t i = 0; i < 2; ++i)
     {
         if (mpClusterHistory[i]) pRenderContext->clearUAV(mpClusterHistory[i]->getUAV().get(), uint4(0));
-        if (mpResidualStreak[i]) pRenderContext->clearUAV(mpResidualStreak[i]->getUAV().get(), uint4(0));
+        if (mpClusterLockState[i]) pRenderContext->clearUAV(mpClusterLockState[i]->getUAV().get(), uint4(0));
     }
 
     if (mpPrevSpecActive) pRenderContext->clearUAV(mpPrevSpecActive->getUAV().get(), uint4(0));

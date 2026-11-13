@@ -70,9 +70,24 @@ struct PostFilterPass
         return tempColor[clampPixel(pixel)];
     }
 
+    /// FXAA runs on HDR radiance, where one bilinear tap of an emitter or a window
+    /// (~100) turns a neighbouring wall pixel white. Filter in a reversible
+    /// tone-mapped space instead (c / (1 + luma(c)), Karis 2014), so a bright
+    /// neighbour weighs at most ~1 and the result maps back to HDR afterwards.
+    float3 fxaaCompress(const float3 c)
+    {
+        return c / (1.f + luma(max(c, 0.f)));
+    }
+
+    float3 fxaaExpand(const float3 c)
+    {
+        return c / max(1.f - luma(max(c, 0.f)), 1e-4f);
+    }
+
     float4 loadFxaaColor(const int2 pixel)
     {
-        return gFxaaInput[clampPixel(pixel)];
+        const float4 c = gFxaaInput[clampPixel(pixel)];
+        return float4(fxaaCompress(c.xyz), c.w);
     }
 
     float luma(const float3 color)
@@ -133,7 +148,7 @@ struct PostFilterPass
         const float3 rgbB = 0.5f * rgbA + 0.25f * (sampleB0 + sampleB1);
 
         const float lumaB = luma(rgbB);
-        return (lumaB < lumaMin || lumaB > lumaMax) ? rgbA : rgbB;
+        return fxaaExpand((lumaB < lumaMin || lumaB > lumaMax) ? rgbA : rgbB);
     }
 
     void executeBilateral(const uint2 pixel)
@@ -194,7 +209,7 @@ struct PostFilterPass
     {
         if (any(pixel >= frameDim)) return;
 
-        const float4 centerSample = loadFxaaColor(int2(pixel));
+        const float4 centerSample = gFxaaInput[pixel];
         gColor[pixel] = enableFXAA != 0 ? float4(fxaaPixel(pixel), centerSample.w) : centerSample;
     }
 }

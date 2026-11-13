@@ -300,6 +300,20 @@ NRModel::~NRModel() {
     }
 }
 
+void NRModel::setOptimizerHyperparams(float learningRate, float emaDecay)
+{
+    if (learningRate == mLearningRate && emaDecay == mEmaDecay) return;
+    mLearningRate = learningRate;
+    mEmaDecay = emaDecay;
+    const tcnn::json emaParams = {{"decay", emaDecay}};
+    for (auto* pOpt : {&mpPrimGridOpt, &mpClsGridOpt, &mpDiffNetOpt, &mpSpecNetOpt})
+    {
+        if (!*pOpt) continue;
+        (*pOpt)->set_learning_rate(learningRate);
+        (*pOpt)->update_hyperparams(emaParams);
+    }
+}
+
 void NRModel::setOnline(bool online)
 {
     if (online == mOnline) {
@@ -327,8 +341,8 @@ void NRModel::setOnline(bool online)
 }
 
 void NRModel::inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
-    const uint32_t diffBatchSize = (diffPtrs.inputPtr && diffPtrs.outputPtr) ? padUp(diffPtrs.size, 256) : 0;
-    const uint32_t specBatchSize = (specPtrs.inputPtr && specPtrs.outputPtr) ? padUp(specPtrs.size, 256) : 0;
+    const uint32_t diffBatchSize = (diffPtrs.inputPtr && diffPtrs.outputPtr) ? padUp(diffPtrs.size, kModelBatchAlign) : 0;
+    const uint32_t specBatchSize = (specPtrs.inputPtr && specPtrs.outputPtr) ? padUp(specPtrs.size, kModelBatchAlign) : 0;
 
     if (diffBatchSize > 0) {
         tcnn::GPUMatrix<precision_t> diffInput(diffPtrs.inputPtr, mDiffInputDim, diffBatchSize);
@@ -378,8 +392,8 @@ void NRModel::inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
 }
 
 void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
-    const uint32_t diffBatchSize = (diffPtrs.inputPtr && diffPtrs.outputPtr) ? padUp(diffPtrs.size, 256) : 0;
-    const uint32_t specBatchSize = (specPtrs.inputPtr && specPtrs.outputPtr) ? padUp(specPtrs.size, 256) : 0;
+    const uint32_t diffBatchSize = (diffPtrs.inputPtr && diffPtrs.outputPtr) ? padUp(diffPtrs.size, kModelBatchAlign) : 0;
+    const uint32_t specBatchSize = (specPtrs.inputPtr && specPtrs.outputPtr) ? padUp(specPtrs.size, kModelBatchAlign) : 0;
 
     const float lossScale = tcnn::default_loss_scale<precision_t>();
     CUDA_CHECK_THROW(cudaMemsetAsync(mpPrimGridsGradient->data(), 0, mpPrimGridsGradient->bytes(), mTrainStream));

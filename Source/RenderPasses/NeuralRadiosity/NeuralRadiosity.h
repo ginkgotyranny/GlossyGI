@@ -57,6 +57,15 @@ struct RayBatchBuffer
     bool needDiff = true;
     /// Compacted specular network I/O and specSrc (G-Buffer is gathered on demand).
     bool needSpec = true;
+    /// Diffuse and specular share one network-input buffer and one output buffer.
+    /// Specular rows start at 0 and diffuse rows follow the padded specular rows,
+    /// so the diffuse offset changes every frame (see diffRowOffset()). Only the
+    /// render batch uses this: diff + spec <= pixel count, so the pool needs
+    /// 128 B per pixel instead of 64 + 128 B. The same buffer is bound as both
+    /// RWStructuredBuffer<DiffNetInput> and <SpecNetInput>; Vulkan takes the
+    /// stride from the shader, D3D12 would need a ByteAddressBuffer instead.
+    bool sharedIO = false;
+    uint32_t diffStride = 0;
 
     /// G-buffer
     ref<Buffer> pos;
@@ -92,7 +101,8 @@ struct RayBatchBuffer
         const std::string& name,
         bool needAll = true,
         bool needDiff = true,
-        bool needSpec = true
+        bool needSpec = true,
+        bool sharedIO = false
     )
         : pDevice(pDevice)
         , var(var)
@@ -102,6 +112,7 @@ struct RayBatchBuffer
         , needAll(needAll)
         , needDiff(needDiff)
         , needSpec(needSpec)
+        , sharedIO(sharedIO && needDiff && needSpec)
     {
         initBuffers();
     }
@@ -144,8 +155,11 @@ struct RayBatchBuffer
         {
             diffActive = pDevice->createStructuredBuffer(var["diffActive"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
             diffIndex = pDevice->createStructuredBuffer(var["diffIndex"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
-            diffInput = pDevice->createStructuredBuffer(var["diffInput"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
-            diffColor = pDevice->createStructuredBuffer(var["diffColor"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
+            if (!sharedIO)
+            {
+                diffInput = pDevice->createStructuredBuffer(var["diffInput"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
+                diffColor = pDevice->createStructuredBuffer(var["diffColor"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
+            }
         }
 
         if (needSpec)
@@ -153,8 +167,26 @@ struct RayBatchBuffer
             specSrc = pDevice->createStructuredBuffer(var["specSrc"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
             specActive = pDevice->createStructuredBuffer(var["specActive"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
             specIndex = pDevice->createStructuredBuffer(var["specIndex"], size, kBind, MemoryType::DeviceLocal, nullptr, false);
-            specInput = pDevice->createStructuredBuffer(var["specInput"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
-            specColor = pDevice->createStructuredBuffer(var["specColor"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
+            if (sharedIO)
+            {
+                // Worst case with diff + spec <= size and a diffuse row no wider than a
+                // specular row: size SpecNetInput rows, plus kModelBatchAlign rows for
+                // each of the two paddings and one more for rounding the diffuse start.
+                // The outputs are 16 B for both, so size + 2 * kModelBatchAlign rows.
+                const uint32_t inputRows = size + 2 * kModelBatchAlign + 1;
+                const uint32_t outputRows = size + 2 * kModelBatchAlign;
+                diffStride = (uint32_t)var["diffInput"].getType()->unwrapArray()->asResourceType()->getStructType()->getSlangTypeLayout()->getStride();
+                specInput = pDevice->createStructuredBuffer(var["specInput"], inputRows, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
+                FALCOR_CHECK(diffStride <= specInput->getStructSize(), "Shared network I/O assumes DiffNetInput is not wider than SpecNetInput.");
+                specColor = pDevice->createStructuredBuffer(var["specColor"], outputRows, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
+                diffInput = specInput;
+                diffColor = specColor;
+            }
+            else
+            {
+                specInput = pDevice->createStructuredBuffer(var["specInput"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
+                specColor = pDevice->createStructuredBuffer(var["specColor"], size, kBindCuda, MemoryType::DeviceLocal, nullptr, false);
+            }
         }
 
         counts = pDevice->createBuffer(2 * sizeof(uint32_t), kBind, MemoryType::DeviceLocal, nullptr);
@@ -171,15 +203,39 @@ struct RayBatchBuffer
         countsReadback->unmap();
     }
 
+    /// First diffuse row in the shared output buffer (NetworkOutput rows). Needs
+    /// specSize, i.e. readCounts(); shaders that run before that use `counts`.
+    uint32_t diffOutputOffset() const { return sharedIO ? padUp(specSize, kModelBatchAlign) : 0; }
+
+    /// First diffuse row in the shared input buffer (DiffNetInput rows): the end of
+    /// the padded specular rows, rounded up to a whole diffuse row. CompactPass
+    /// computes the same value on the GPU.
+    uint32_t diffInputOffset() const
+    {
+        if (!sharedIO)
+            return 0;
+        const uint64_t specBytes = uint64_t(diffOutputOffset()) * specInput->getStructSize();
+        // Not named diffStride: MSVC (C4458, /WX) rejects a local hiding the member.
+        const uint32_t rowStride = diffInputStride();
+        return uint32_t((specBytes + rowStride - 1) / rowStride);
+    }
+
+    /// Bytes per DiffNetInput row. With sharedIO the buffer was created for
+    /// SpecNetInput, so this stride is taken from the shader reflection.
+    uint32_t diffInputStride() const { return sharedIO ? diffStride : diffInput->getStructSize(); }
+
     ModelIOPtrs getDiffPtrs()
     {
         if (!needDiff || !diffInput || !diffColor)
             return { nullptr, nullptr, 0 };
-        return {
-            (precision_t*) diffInput->getCudaMemory()->getMappedData(),
-            (float*) diffColor->getCudaMemory()->getMappedData(),
-            diffSize
-        };
+        uint8_t* input = (uint8_t*) diffInput->getCudaMemory()->getMappedData();
+        float* output = (float*) diffColor->getCudaMemory()->getMappedData();
+        if (sharedIO)
+        {
+            input += uint64_t(diffInputOffset()) * diffInputStride();
+            output += uint64_t(diffOutputOffset()) * (diffColor->getStructSize() / sizeof(float));
+        }
+        return { (precision_t*) input, output, diffSize };
     }
 
     ModelIOPtrs getSpecPtrs()
@@ -235,6 +291,11 @@ public:
     virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
 
+    /// Drop the render-path cluster history (same as the "Clear History" button). Scriptable.
+    void clearHistory() { clearRenderTemporalHistory(mpDevice->getRenderContext()); }
+    /// Current training-schedule heat (0 = cold/settled, 1 = hot/adapting).
+    float getTrainHeat() const { return mTrainHeat; }
+
 private:
     void render(RenderContext* pRenderContext, const RenderData& renderData);
     void train(RenderContext* pRenderContext, const RenderData& renderData);
@@ -273,6 +334,8 @@ private:
     bool prepareLighting(RenderContext* pRenderContext);
     void preparePrefiltEnvCubemap(RenderContext* pRenderContext);
     void clearRenderTemporalHistory(RenderContext* pRenderContext);
+    void resetTrainSchedule();
+    void updateTrainSchedule();
     void bindScreenData(ShaderVar& var, const RenderData& renderData, const std::string &name);
     void bindPrefiltEnv(ShaderVar& var);
     void bindRayBatchData(ShaderVar& var, std::shared_ptr<RayBatchBuffer> pRayBatch, const std::string &name);
@@ -306,9 +369,50 @@ private:
     float mSpecularRoughnessThreshold = NCR_SPECULAR_ROUGHNESS_THRESHOLD;
     /// Replace the specular environment color with the mirror-hit albedo.
     bool mEnableMirrorAlbedo = true;
+    /// kEnvColorEncoding* in MirrorAlbedo.slang: how a mirror miss enters the shared
+    /// env/albedo channels. 1 = signed log, which keeps 10-1000 sky radiance and [0, 1]
+    /// albedo in one bounded range and marks misses by their sign.
+    uint32_t mEnvColorEncoding = 1;
+
+    /// Online training schedule. "Heat" h in [0, 1] interpolates log(lr) and
+    /// log(1 - emaDecay) between the cold (settled) and hot (adapting) settings.
+    /// h starts at 1, holds for mTrainWarmupFrames, then relaxes toward 0 with time
+    /// constant mTrainCoolFrames. Camera motion pulls it up to mTrainCameraHeat and
+    /// scene changes to mTrainSceneHeat, held mTrainHoldFrames after the last event.
+    ///
+    /// Tuned on the 10 eval scenes (static 2400 frames, animation, stop 600 frames,
+    /// vs ptdn 4096 spp): flicker between frames halves (static and after stopping);
+    /// mean PSNR equal to the fixed hot setting. A cold LR of 1e-3 or a 300-frame
+    /// warmup stops the network while it is still improving (-0.3 to -0.5 dB static).
+    /// Camera heat 0 loses ~1 dB on camera-only paths (bathroom2).
+    bool mEnableTrainSchedule = true;
+    float mTrainLrHot = NCR_ADAM_LR;
+    float mTrainLrCold = NCR_ADAM_LR_COLD;
+    float mTrainEmaHot = NCR_EMA_DECAY;
+    float mTrainEmaCold = NCR_EMA_DECAY_COLD;
+    uint32_t mTrainWarmupFrames = 600;
+    uint32_t mTrainHoldFrames = 30;
+    float mTrainCoolFrames = 300.f;
+    float mTrainCameraHeat = 0.5f;
+    float mTrainSceneHeat = 1.f;
+    float mTrainHeat = 1.f;
+    uint32_t mTrainHoldLeft = 600;
+    IScene::UpdateFlags mPendingSceneUpdates = IScene::UpdateFlags::None;
+    /// SampleRHS::maxGlossyBounces: glossy RHS hits continue along a BSDF sample (with
+    /// NEE at each) up to this many times before the diffuse network is queried.
+    /// With 0 the diffuse network must also represent glossy, view-dependent radiance;
+    /// in living-room-2 it then collapses after ~1000 frames (LR 5e-3) to a state ~40%
+    /// too dark that it never leaves. Cost over 0: +0.2-0.4 ms/frame with 2, +0.4-0.8
+    /// with 4; 4 gains ~0.1 dB mean, +1.1 dB on living-room-2.
+    uint32_t mRhsGlossyBounces = 2;
+    /// Train the diffuse network on glossy LHS samples as well. Only needed when glossy
+    /// RHS hits query it (mRhsGlossyBounces = 0); training it on glossy targets is
+    /// itself what makes it collapse. When off, an RHS path still on a glossy surface
+    /// after mRhsGlossyBounces ends there instead of querying the untrained network.
+    bool mDiffTrainOnGlossy = false;
     /// Enable spatiotemporal cluster reuse on the render path. When off, the render
     /// path falls back to the original per-frame group-wide K-Means cone trace.
-    bool mEnableRenderSpecTemporalReuse = false;
+    bool mEnableRenderSpecTemporalReuse = NCR_ENABLE_CLUSTER_REUSE != 0;
     /// Enable the neighbourhood gather stage of the cluster reuse pipeline.
     bool mEnableClusterSpatialReuse = true;
     /// Wipe all history whenever the scene reports moved geometry. Off by default:
@@ -332,8 +436,25 @@ private:
     float mClusterMaxCount = 64.0f;
     /// Observation count at which the mixture hard-locks (α = 0). Aligns with old T=32.
     float mClusterLockCount = 32.0f;
-    /// Consecutive residual outliers required to unlock a frozen pixel.
-    uint32_t mClusterUnlockStreak = 1;
+    /// Change detector for locked pixels (see ClusterLockState in ClusterHistory.slang).
+    /// lambda_d: residual gate of the detector. Must be well above the assignment gate
+    /// lambda: with lambda = 0.1 a converged static pixel already puts ~30% of its rays
+    /// outside every gate, while lambda_d = 1 leaves ~1%.
+    float mClusterDetectThreshold = 1.0f;
+    /// beta: EMA rate of the detector shares (~2/beta frames of memory).
+    float mClusterDetectRate = 0.125f;
+    /// Outlier share at which a locked pixel unlocks to grow new modes.
+    float mClusterUnlockOutlierRate = 0.2f;
+    /// Lateral drift of the frozen anchors since lock, in cone radii, at which a locked
+    /// pixel unlocks. Catches smooth camera motion, which the per-frame cone test misses.
+    float mClusterUnlockDrift = 0.5f;
+    /// Per-frame drift (cone radii) above which a pixel counts as moving with the camera.
+    /// A still camera gives ~1e-6 (float round-off); on the bathroom2 camera path 0.02
+    /// missed many moving pixels.
+    float mClusterMotionDrift = 0.002f;
+    /// Observation cap for moving pixels: they re-accumulate from ~this many recent samples
+    /// and cannot lock until the camera holds still, so no motion trail gets frozen.
+    float mClusterMotionMemory = 4.0f;
     /// Modes below this weight release their slot.
     float mClusterWeakWeight = 0.02f;
     /// Newborn sigma = mClusterSigmaPriorScale * tanLobe * t.
@@ -382,8 +503,8 @@ private:
 
     /// Per-pixel cluster mixture, ping-ponged: [1 - write] holds the previous frame.
     ref<Buffer> mpClusterHistory[2];
-    /// Consecutive residual-outlier count, ping-ponged with the mixture.
-    ref<Buffer> mpResidualStreak[2];
+    /// Packed change-detector state (one u32 per pixel), ping-ponged with the mixture.
+    ref<Buffer> mpClusterLockState[2];
     uint32_t mClusterHistoryWriteIdx = 0;
     /// False until one full frame of history exists (after a clear or a resize).
     bool mClusterHistoryValid = false;

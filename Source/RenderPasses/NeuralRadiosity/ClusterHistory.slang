@@ -21,6 +21,10 @@ import NetworkParams;
 #define NUM_CLUSTERS NCR_NUM_CLUSTERS
 #endif
 
+#ifndef NCR_NORMALIZE_CLS_SCALE
+#error "NCRConfig.h must define NCR_NORMALIZE_CLS_SCALE (0 or 1)."
+#endif
+
 /// Slots addressable by the 24 B packed layout below.
 #define CLUSTER_MAX_SLOTS 4
 
@@ -125,9 +129,45 @@ void evalConeLobe(float roughness, out float tanLobe, out float cosLobe)
     Packing
 ******************************************************************************/
 
+/** fp32 -> fp16 bits, round to nearest even, in integer math.
+
+    The history is unpacked, updated and re-packed every frame, so the rounding of
+    the pack accumulates. The f32tof16 intrinsic does not round the same way on
+    every backend: on D3D12 (DXIL) the reuse path drifted ~2% darker than Vulkan
+    in bathroom once clsScale was bbox-normalized, and this function removed the
+    gap. On Vulkan it reproduces f32tof16 exactly (identical images).
+*/
+uint f32tof16Rne(float f)
+{
+    const uint x = asuint(f);
+    const uint sign = (x >> 16) & 0x8000u;
+    const uint e8 = (x >> 23) & 0xffu;
+    uint mant = x & 0x7fffffu;
+    if (e8 == 0xffu) return sign | 0x7c00u | (mant != 0u ? 0x200u : 0u); // Inf / NaN
+    const int e = int(e8) - 127 + 15;
+    if (e >= 31) return sign | 0x7c00u; // Overflow to Inf.
+    if (e <= 0)
+    {
+        // fp16 denormal or zero.
+        if (e < -10) return sign;
+        mant |= 0x800000u;
+        const uint shift = uint(14 - e);
+        uint h = mant >> shift;
+        const uint rem = mant & ((1u << shift) - 1u);
+        const uint halfway = 1u << (shift - 1u);
+        if (rem > halfway || (rem == halfway && (h & 1u) != 0u)) h++;
+        return sign | h;
+    }
+    // A mantissa carry propagates into the exponent, which is the correct rounding.
+    uint h = sign | (uint(e) << 10) | (mant >> 13);
+    const uint rem = mant & 0x1fffu;
+    if (rem > 0x1000u || (rem == 0x1000u && (h & 1u) != 0u)) h++;
+    return h;
+}
+
 uint packHalf2(float a, float b)
 {
-    return (f32tof16(a) & 0xffffu) | ((f32tof16(b) & 0xffffu) << 16);
+    return (f32tof16Rne(a) & 0xffffu) | ((f32tof16Rne(b) & 0xffffu) << 16);
 }
 
 float2 unpackHalf2(uint v)
@@ -435,22 +475,6 @@ void unlockClusterSet(inout ClusterSet cs)
     }
 }
 
-/** Residual of one depth sample against the current mixture.
-
-    A miss has no depth, so it is not a residual outlier — the cone test in
-    ClusterReproject is what unlocks geometry that has left the lobe. Empty
-    mixtures report a huge residual so a locked-but-empty pixel (should not
-    happen) still unlocks.
-*/
-float clusterSampleResidual(ClusterSet cs, bool hitValid, float t, float tanLobe, float epsScene)
-{
-    if (!hitValid) return 0.f;
-    float bestDist = FLT_MAX;
-    int best = findNearestCluster(cs, t, tanLobe, epsScene, bestDist);
-    if (best < 0) return FLT_MAX;
-    return bestDist;
-}
-
 /** EMA estimate of p_k = T_k / T. `hitSlot < 0` means the ray escaped to the
     environment, in which case every weight decays and sum(w_k) drops below 1 -
     the same semantics as `clsWeight = size / numSpecRays` on the training path,
@@ -480,6 +504,126 @@ void releaseWeakClusters(inout ClusterSet cs, float weakWeight)
         cs.n[k] = 0.f;
     }
 }
+
+/******************************************************************************
+    Change detection for locked pixels
+
+    A locked mixture is frozen, so a locked pixel needs its own evidence that the
+    cone now sees something else. Two signals, both kept in the u32 that travels
+    with the mixture (ClusterLockState), so detection costs no memory:
+
+    outlier  EMA (rate beta) of "this frame's ray hit outside every mode". The gate
+             here is lambda_d, deliberately separate from the assignment gate
+             lambda: lambda is tuned small (0.1) to partition the cone as finely as
+             the training K-Means, so a converged static pixel already puts ~30% of
+             its rays outside every lambda gate, while lambda_d = 1 leaves ~1%.
+             A "M consecutive outliers" rule on lambda either unlocks constantly
+             (M=1, static flicker) or almost never (M=4, smearing in motion).
+
+    drift    Lateral offset of the mode anchors from the current cone axis, in
+             units of the cone radius tanLobe * t, summed since the pixel locked.
+             ClusterReproject re-expresses every anchor as a depth on the *current*
+             axis, so the anchor slides along with the cone and the per-cluster
+             cone test only fires on a large single-frame jump. Smooth camera
+             motion would otherwise leave a stale mixture locked indefinitely.
+
+    outlier and drift are reset to 0 whenever the pixel is not locked, so they only
+    measure change since the mixture froze.
+
+    While the camera moves relative to a pixel, ClusterReproject also caps its
+    observation count (capClusterObservations), so the pixel cannot lock on a
+    mixture averaged along the motion path. Without the cap such a mixture locks,
+    the camera stops, every smeared mode still sits inside a detection gate, and
+    the reflection's motion trail stays frozen on screen.
+******************************************************************************/
+
+struct ClusterLockState
+{
+    float outlier;
+    float drift;
+};
+
+/// Drift quantization: 8 bits in units of 1/64 cone radius (saturates at ~4).
+static const float kLockDriftScale = 64.f;
+
+ClusterLockState emptyClusterLockState()
+{
+    ClusterLockState s;
+    s.outlier = 0.f;
+    s.drift = 0.f;
+    return s;
+}
+
+ClusterLockState unpackClusterLockState(uint packed)
+{
+    ClusterLockState s;
+    s.outlier = float(packed & 0xffu) * (1.f / 255.f);
+    s.drift = float((packed >> 8) & 0xffu) * (1.f / kLockDriftScale);
+    return s;
+}
+
+/** `u0`, `u1` are uniforms in [0,1) for stochastic rounding, which keeps the 8-bit
+    EMA and the 8-bit running sum unbiased under small per-frame increments.
+*/
+uint packClusterLockState(ClusterLockState s, float u0, float u1)
+{
+    const uint o = (uint)clamp(floor(saturate(s.outlier) * 255.f + u0), 0.f, 255.f);
+    const uint d = (uint)clamp(floor(max(s.drift, 0.f) * kLockDriftScale + u1), 0.f, 255.f);
+    return o | (d << 8);
+}
+
+/** Fold one locked-pixel ray into the outlier EMA. A miss is not an outlier: an
+    escaping ray has no depth to compare, and the escape share is part of the
+    mixture (1 - sum(w)).
+*/
+void updateClusterLockOutlier(
+    inout ClusterLockState s,
+    ClusterSet cs,
+    bool hitValid,
+    float t,
+    float tanLobe,
+    float epsScene,
+    float detectThreshold,
+    float rate)
+{
+    bool outlier = false;
+    if (hitValid)
+    {
+        float bestDist = FLT_MAX;
+        const int best = findNearestCluster(cs, t, tanLobe, epsScene, bestDist);
+        outlier = best < 0 || bestDist >= detectThreshold;
+    }
+    s.outlier += rate * ((outlier ? 1.f : 0.f) - s.outlier);
+}
+
+/** Rescale the counts so the mixture holds at most `maxObs` observations' worth of
+    evidence (n_obs = sum(n)/sum(w)), keeping (t, sigma, w). Each live mode keeps
+    n >= 1. Further samples then move (t, sigma, w) at roughly 1/(maxObs+1), i.e.
+    the mixture tracks a short recent window, and it cannot reach lockCount.
+*/
+void capClusterObservations(inout ClusterSet cs, float maxObs)
+{
+    const float nObs = clusterObservationCount(cs);
+    if (nObs <= maxObs) return;
+    const float scale = maxObs / nObs;
+    [unroll]
+    for (uint k = 0; k < kClusterCount; ++k)
+    {
+        if (!isClusterActive(cs, k)) continue;
+        cs.n[k] = max(1.f, floor(cs.n[k] * scale));
+    }
+}
+
+/** Lateral distance of `anchor` from the cone axis, in units of the cone radius at
+    its depth `t` along that axis.
+*/
+float clusterLateralDrift(float3 anchor, float3 pos, float3 reflectDir, float t, float tanLobe, float epsScene)
+{
+    const float3 d = anchor - pos;
+    const float lateral = length(d - t * reflectDir);
+    return lateral / max(tanLobe * t, epsScene);
+}
+
 
 /** Integrate a single depth sample into the mixture.
 
@@ -609,14 +753,19 @@ void accumulateNeighborCluster(inout ClusterAccum acc, int slot, float weight, f
 struct ClusterOutput
 {
     float3 clsPos;    ///< bbox-normalized world position of the cluster center.
-    float clsScale;   ///< Hash grid query radius.
+    float clsScale;   ///< Hash grid query radius, bbox-normalized like clsPos.
     float clsWeight;  ///< Mixture weight.
 };
 
 /** Single source of truth for the cluster formulas:
       clsPos    = (pos + t * reflectDir - bboxMin) / (bboxMax - bboxMin)
-      clsScale  = (sigma + tanLobe * t) / 2
+      clsScale  = (sigma + tanLobe * t) / 2 / max(bboxMax - bboxMin)
       clsWeight = w
+
+    HashGridInterp picks levels by comparing clsScale with 1/resolution, a
+    bbox-normalized length, so clsScale is normalized too. One scalar (the
+    longest bbox axis) keeps the footprint isotropic; it is the voxel's longest
+    side that matches the footprint at the chosen level.
 */
 ClusterOutput evalClusterOutput(
     float3 pos,
@@ -631,6 +780,10 @@ ClusterOutput evalClusterOutput(
     ClusterOutput o;
     o.clsPos = (pos + t * reflectDir - bboxMin) / (bboxMax - bboxMin);
     o.clsScale = (sigma + tanLobe * t) / 2;
+#if NCR_NORMALIZE_CLS_SCALE
+    const float3 extent = bboxMax - bboxMin;
+    o.clsScale /= max(max(extent.x, extent.y), max(extent.z, 1e-6f));
+#endif
     o.clsWeight = weight;
     return o;
 }
@@ -706,7 +859,8 @@ ClusterSet sortClusterSetByDepth(ClusterSet cs)
 }
 
 /** Write the per-pixel (non-cluster) part of the specular network input:
-    the normalized shading position and the prefiltered environment color.
+    the normalized shading position and the encoded reflected color
+    (sampleMirrorAlbedo: hit albedo, or the encoded environment color on a miss).
 */
 void writeSpecPrimaryOutput(
     RWStructuredBuffer<SpecNetInput> buffer,

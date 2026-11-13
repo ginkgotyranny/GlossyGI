@@ -49,18 +49,25 @@ struct ResolveBatch
     {
         if (any(idx >= batchSize)) return;
 
-        float4 thp = allColor[idx];
+        // allColor is the BSDF-path throughput when the path ended on a surface the
+        // network evaluates, and its finished radiance otherwise (emitter hit, miss,
+        // backface, invalid sample). allEmission is the NEE term of the same RHS
+        // sample. It is independent of where the BSDF ray went, so it must be added
+        // in every case: dropping it for terminated paths loses direct light in
+        // proportion to how often BSDF rays hit emitters (living-room-2 windows).
+        float4 color = allColor[idx];
 
         if (enableSpec != 0 && specActive[idx] != 0)
         {
             const uint specIdx = specIndex[idx];
-            allColor[idx] = thp * specColor[specIdx].toFloat4() + allEmission[idx];
+            color *= specColor[specIdx].toFloat4();
         }
         else if (enableDiff != 0 && diffActive[idx] != 0)
         {
             const uint diffIdx = diffIndex[idx];
-            allColor[idx] = thp * diffColor[diffIdx].toFloat4() + allEmission[idx];
+            color *= diffColor[diffIdx].toFloat4();
         }
+        allColor[idx] = color + allEmission[idx];
     }
 }
 

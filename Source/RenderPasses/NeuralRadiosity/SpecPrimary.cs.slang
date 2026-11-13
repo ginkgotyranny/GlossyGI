@@ -44,6 +44,8 @@ struct SpecPrimary
     uint useScreenGBuffer = 0;
     /// 0 keeps the environment color and skips the mirror ray.
     uint enableMirrorAlbedo = 1;
+    /// kEnvColorEncoding* in MirrorAlbedo.slang.
+    uint envColorEncoding = 1;
 
     float3 bboxMin;
     float3 bboxMax;
@@ -83,7 +85,7 @@ struct SpecPrimary
 
         float3 envColor = gPrefiltEnv.valid != 0 ? gPrefiltEnv.eval(reflectDir, roughness) :
             (gPrefiltEnv.fallbackValid != 0 ? gScene.envMap.eval(reflectDir) : float3(0.f));
-        envColor = sampleMirrorAlbedo(sd.posW, reflectDir, envColor, enableMirrorAlbedo);
+        envColor = sampleMirrorAlbedo(sd.posW, reflectDir, envColor, enableMirrorAlbedo, envColorEncoding);
         writeSpecPrimaryOutput(specInput, idx, pos, envColor, bboxMin, bboxMax);
     }
 }

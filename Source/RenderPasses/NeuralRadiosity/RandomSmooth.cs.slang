@@ -76,6 +76,8 @@ struct RandomSmooth
     uint specSize = 0;
     uint enableDiff = 1;
     uint enableSpec = 1;
+    /// 0: the diffuse network trains on rough samples only (NeuralRadiosity::mDiffTrainOnGlossy).
+    uint diffTrainOnGlossy = 0;
 
     void generatePath(const uint idx, const uint loopIdx, out PathState path)
     {
@@ -238,7 +240,7 @@ struct RandomSmooth
 
         // Diffuse network trains on every valid LHS sample so it can evaluate
         // glossy RHS hits. Specular network still trains on glossy only.
-        uint diffAct = path.isActive() ? 1 : 0;
+        uint diffAct = (path.isActive() && (diffTrainOnGlossy != 0 || roughness > kSpecularRoughnessThreshold)) ? 1 : 0;
         uint specAct = (path.isActive() && (roughness <= kSpecularRoughnessThreshold)) ? 1 : 0;
 
         // Write outputs

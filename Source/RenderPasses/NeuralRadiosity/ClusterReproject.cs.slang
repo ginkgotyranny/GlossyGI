@@ -16,9 +16,24 @@
 
     Emptying the pixel (every mode fails the cone, or the pixel is rejected) is
     also the immediate unlock: n_obs drops to 0, so ConeTraceScreen starts a new
-    1/(n+1) accumulation window. The residual-outlier streak is copied only when
-    at least one mode survives, so a new occupant cannot inherit the previous
-    pixel's unlock countdown.
+    1/(n+1) accumulation window. Losing only some modes unlocks too once the lost
+    weight is real (kConeDropUnlockWeight): n_obs = sum(n)/sum(w) barely moves when
+    a mode is dropped, so without this the pixel would stay locked with weights
+    that no longer sum to its hit ratio, which the network reads as "escapes to
+    the environment".
+
+    Each kept anchor is re-expressed as a depth on the *current* axis, i.e. it is
+    slid back onto the axis every frame. That keeps t well defined, but it also
+    means a smoothly moving cone never pushes an anchor out of the cone test. The
+    per-frame lateral offset is therefore added to the pixel's ClusterLockState
+    drift, which ConeTraceScreen compares against unlockDrift. While the camera
+    moves (its view-projection matrix changed this frame), or this frame's offset
+    alone exceeds motionDrift, the pixel's observation count is capped at
+    motionMemory: it keeps re-accumulating
+    from a short recent window and cannot lock on samples smeared along the
+    motion path (see capClusterObservations). The detector state is copied only
+    when at least one mode survives, so a new occupant cannot inherit the
+    previous pixel's evidence.
 */
 import Scene.Shading;
 import Utils.Math.MathHelpers;
@@ -45,10 +60,22 @@ RWStructuredBuffer<uint> specActive;
 // Cluster history ping-pong.
 StructuredBuffer<SpecClusterHistory> clusterHistoryIn;
 RWStructuredBuffer<SpecClusterHistory> clusterHistoryOut;
-// Residual-outlier streak travels with the mixture so a new occupant of this
-// screen pixel cannot inherit the previous occupant's unlock countdown.
-StructuredBuffer<uint> residualStreakIn;
-RWStructuredBuffer<uint> residualStreakOut;
+// Packed ClusterLockState travels with the mixture so a new occupant of this
+// screen pixel cannot inherit the previous occupant's detector evidence.
+StructuredBuffer<uint> clusterLockStateIn;
+RWStructuredBuffer<uint> clusterLockStateOut;
+
+/// Weight that must leave through the cone test before a locked pixel unlocks.
+static const float kConeDropUnlockWeight = 0.1f;
+
+/// Uniform in [0,1) from a 32-bit hash (PCG output permutation), for stochastic
+/// rounding of the drift sum. Quality is irrelevant, only independence per pixel.
+float hashUniform(uint v)
+{
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return float((word >> 22u) ^ word) * (1.f / 4294967296.f);
+}
 
 
 struct ClusterReproject
@@ -67,6 +94,27 @@ struct ClusterReproject
     float roughnessThreshold = 0.05f;
     /// Maximum |p_prev - p_cur|, relative to the distance to the camera.
     float posThresholdRel = 0.02f;
+    /// Per-frame anchor drift (cone radii) above which the pixel counts as moving.
+    float motionDrift = 0.002f;
+    /// Observation cap while moving: the mixture only remembers ~this many samples.
+    float motionMemory = 4.f;
+
+    /** True when the camera moved since the previous frame. A still camera gives
+        bit-identical matrices. Per-pixel drift alone is not enough: on a rough
+        surface the cone is so wide that a moving camera barely shifts the anchors
+        relative to it, yet the reflection still smears along the motion path.
+    */
+    bool cameraMoved()
+    {
+        const float4x4 a = gScene.camera.data.viewProjMatNoJitter;
+        const float4x4 b = gScene.camera.data.prevViewProjMatNoJitter;
+        [unroll]
+        for (uint r = 0; r < 4; ++r)
+        {
+            if (any(a[r] != b[r])) return true;
+        }
+        return false;
+    }
 
     /** Screen position of a world point in the previous frame, in pixels. */
     bool reprojectPixel(const uint2 pixel, const float3 worldPos, out int2 prevPixel)
@@ -93,8 +141,11 @@ struct ClusterReproject
         const uint pixIdx = pixel.y * frameDim.x + pixel.x;
 
         ClusterSet cs = emptyClusterSet();
-        uint streakOut = 0;
+        uint lockStateOut = 0;
         bool anyKept = false;
+        float droppedWeight = 0.f;
+        float driftSum = 0.f;
+        float keptWeight = 0.f;
 
         if (specActive[pixIdx] != 0 && historyValid != 0)
         {
@@ -142,7 +193,14 @@ struct ClusterReproject
                             const float3 anchor = clusterAnchor(posPrev, reflectPrev, prev.t[k]);
 
                             float tCur = 0.f;
-                            if (!clusterInCone(anchor, posCur, reflectCur, cosLobe, tCur)) continue;
+                            if (!clusterInCone(anchor, posCur, reflectCur, cosLobe, tCur))
+                            {
+                                droppedWeight += prev.w[k];
+                                continue;
+                            }
+
+                            driftSum += prev.w[k] * clusterLateralDrift(anchor, posCur, reflectCur, tCur, tanLobe, epsScene);
+                            keptWeight += prev.w[k];
 
                             // Slot index is the mode identity: never reorder.
                             cs.t[k] = tCur;
@@ -153,16 +211,25 @@ struct ClusterReproject
                         }
 
                         // Cone-fail of every mode empties the pixel (n_obs = 0),
-                        // which is the immediate unlock. Only copy the streak
-                        // when the mixture itself survived.
-                        if (anyKept) streakOut = residualStreakIn[prevIdx];
+                        // which is the immediate unlock. Only carry the detector
+                        // state when the mixture itself survived.
+                        if (anyKept)
+                        {
+                            ClusterLockState lockState = unpackClusterLockState(clusterLockStateIn[prevIdx]);
+                            const float frameDrift = keptWeight > 0.f ? driftSum / keptWeight : 0.f;
+                            lockState.drift += frameDrift;
+                            if (cameraMoved() || frameDrift > motionDrift) capClusterObservations(cs, motionMemory);
+                            const uint seed = pixIdx * 2u + frameCount * 0x9E3779B9u;
+                            lockStateOut = packClusterLockState(lockState, hashUniform(seed), hashUniform(seed + 1u));
+                            if (droppedWeight >= kConeDropUnlockWeight) unlockClusterSet(cs);
+                        }
                     }
                 }
             }
         }
 
         clusterHistoryOut[pixIdx] = packClusterSet(cs);
-        residualStreakOut[pixIdx] = streakOut;
+        clusterLockStateOut[pixIdx] = lockStateOut;
     }
 }
 

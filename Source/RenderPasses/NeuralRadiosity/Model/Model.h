@@ -53,6 +53,9 @@ struct ModelIOPtrs
 };
 
 inline constexpr uint32_t padUp(uint32_t x, uint32_t align) { return (x + align - 1) & ~(align - 1); }
+/// NRModel pads every batch to this many rows. The hash-grid encoders and the
+/// MLP read and write the padded rows, so I/O buffers must have room for them.
+inline constexpr uint32_t kModelBatchAlign = 256;
 
 
 class NRModel
@@ -65,6 +68,10 @@ public:
     void saveState(const std::string& path);
 
     void setOnline(bool online);
+    /// Learning rate and EMA decay for all four online optimizers (grids and MLPs).
+    /// Takes effect on the next train() step. Adam keeps its moments and the EMA
+    /// keeps its weights, so changing them mid-run is continuous.
+    void setOptimizerHyperparams(float learningRate, float emaDecay);
 
     void inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
     void train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
@@ -78,6 +85,8 @@ private:
     cudaStream_t mInferenceStream;
     cudaStream_t mTrainStream;
     bool mOnline = false;
+    float mLearningRate = NCR_ADAM_LR;
+    float mEmaDecay = NCR_EMA_DECAY;
 
     std::shared_ptr<tcnn::pcg32> mpRng;
 

@@ -5,7 +5,7 @@
 // overridable by getShaderDefines(); the numbers live only here.
 
 // Sampling. Train/render ray counts are selected at runtime by the pass.
-#define NCR_NUM_SPEC_RAYS_TRAIN 8
+#define NCR_NUM_SPEC_RAYS_TRAIN 32
 #define NCR_NUM_SPEC_RAYS_RENDER 32
 #define NCR_NUM_KMEANS_ITERS_TRAIN 10
 #define NCR_NUM_KMEANS_ITERS_RENDER 3
@@ -14,6 +14,10 @@
 #define NCR_BATCH_SIZE_INIT (1u << 15)
 #define NCR_RS_RR_PROB 0.4f
 #define NCR_SPECULAR_ROUGHNESS_THRESHOLD 0.5f
+
+// Render-path spatiotemporal cluster reuse (default of the "enableTemporalSpecReuse"
+// property and the UI "Enable" box). 0 = per-frame K-Means cone trace.
+#define NCR_ENABLE_CLUSTER_REUSE 1
 
 // Primary hash grid.
 #define NCR_N_LEVELS 6
@@ -29,17 +33,25 @@
 #define NCR_BASE_RESOLUTION_SPEC 16
 #define NCR_PER_LEVEL_SCALE_SPEC 2.0f
 #define NCR_INTERP_RATIO 1.0f
+// 1: divide the cluster query radius by the longest scene-bbox axis, so it is in
+// the same normalized units as clsPos and the grid's 1/resolution level scales.
+// 0: legacy world-space radius (level choice then depends on the scene's size).
+#define NCR_NORMALIZE_CLS_SCALE 1
 
 // Fused MLP. Output width stays 16 so it matches the fully fused layout.
-#define NCR_DIFF_N_NEURONS 32
-#define NCR_DIFF_N_HIDDEN_LAYERS 1
-#define NCR_SPEC_N_NEURONS 32
-#define NCR_SPEC_N_HIDDEN_LAYERS 2
-#define NCR_OUTPUT_DIM 16
+#define NCR_DIFF_N_NEURONS 64
+#define NCR_DIFF_N_HIDDEN_LAYERS 3
+#define NCR_SPEC_N_NEURONS 64
+#define NCR_SPEC_N_HIDDEN_LAYERS 3
+#define NCR_OUTPUT_DIM 4
 #define NCR_USE_FP16 1
 
-// Optimizer.
-#define NCR_ADAM_LR 5e-3f
-#define NCR_EMA_DECAY 0.95f
+// Optimizer. With the training schedule on (NeuralRadiosity::updateTrainSchedule),
+// LR and EMA decay move between the hot values (start, scene change, camera motion)
+// and the cold values (steady state); with it off the hot values are used throughout.
+#define NCR_ADAM_LR 5e-3f          // hot (also the initial value)
+#define NCR_EMA_DECAY 0.95f        // hot (also the initial value)
+#define NCR_ADAM_LR_COLD 2.5e-3f   // steady state
+#define NCR_EMA_DECAY_COLD 0.99f   // steady state
 
 #endif

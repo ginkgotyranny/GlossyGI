@@ -49,6 +49,8 @@ struct ResolvePass
     uint frameCount = 0;
     uint diffSize = 0;
     uint specSize = 0;
+    /// First diffuse row in diffColor; nonzero when it shares a buffer with specColor.
+    uint diffColorOffset = 0;
 
     void execute(const uint2 pixel)
     {
@@ -64,7 +66,7 @@ struct ResolvePass
         }
         else if (diffActive[pixIdx] != 0)
         {
-            const uint diffIdx = diffIndex[pixIdx];
+            const uint diffIdx = diffColorOffset + diffIndex[pixIdx];
             gColor[pixel] = thp * diffColor[diffIdx].toFloat4();
         }
 

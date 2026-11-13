@@ -72,6 +72,16 @@ struct SampleRHS
     uint batchCount = 0;
 
     bool useNEE = false;
+    /// Glossy RHS hits (roughness <= threshold) continue along a BSDF sample, like
+    /// delta hits, up to this many times before the diffuse network is queried.
+    /// The diffuse network then only has to represent rough surfaces. 0 queries it
+    /// at the first non-delta hit (legacy).
+    uint maxGlossyBounces = 0;
+    /// What a glossy hit does once the glossy budget is spent: nonzero queries the
+    /// diffuse network there, zero ends the path (keeping the NEE gathered so far).
+    /// Querying is only safe when the diffuse network also trains on glossy samples;
+    /// otherwise it extrapolates and, e.g., lit the kitchen floor under the table 2x.
+    uint queryGlossyFallback = 1;
     bool useEmissiveLights = false;
     bool useAnalyticLights = false;
     bool useEnvLights = false;
@@ -94,6 +104,37 @@ struct SampleRHS
         // - path.origin
         // - path.dir
         // - path.setHit(hit);
+    }
+
+    /// Probability that sampleDirect picks the emissive geometry.
+    float emissiveSelectionPdf()
+    {
+        const float n = (useEnvLights ? 1.f : 0.f) + (useEmissiveLights ? 1.f : 0.f) + (useAnalyticLights ? 1.f : 0.f);
+        return (useEmissiveLights && n > 0.f) ? 1.f / n : 0.f;
+    }
+
+    /// Next-event estimation at one surface vertex: MIS-weighted direct light toward
+    /// the outgoing direction of sd, not yet multiplied by the path throughput.
+    /// Environment light selection returns zero (no env NEE); misses carry it instead.
+    float3 sampleDirect(const ShadingData sd, const IMaterialInstance mi, inout SampleGenerator sg)
+    {
+        uint lightType;
+        float selectionPdf;
+        if (!selectLightType(lightType, selectionPdf, sg, useEmissiveLights, useAnalyticLights, useEnvLights)) return float3(0.f);
+
+        LightSample ls = {};
+        bool ok = false;
+        if (lightType == (uint)LightType::Analytic) ok = generateAnalyticLightSample(sd, sg, ls);
+        else if (lightType == (uint)LightType::Emissive) ok = generateEmissiveSample(emissiveSampler, sd, true, sg, ls);
+        if (!ok) return float3(0.f);
+
+        ls.pdf *= selectionPdf;
+        ls.Li /= selectionPdf;
+        SceneRayQuery<kUseAlphaTest> visibilityQuery;
+        if (!visibilityQuery.traceVisibilityRay(ls.getVisibilityRay(), kRayFlags)) return float3(0.f);
+
+        const float mis = (lightType == (uint)LightType::Analytic) ? 1.f : ls.pdf / (ls.pdf + mi.evalPdf(sd, ls.dir, true));
+        return ls.Li * mi.eval(sd, ls.dir, sg) * mis;
     }
 
     void execute(const uint idx, const uint rhsIdx)
@@ -139,52 +180,26 @@ struct SampleRHS
         float3 albedo = float3(0.f);
         float roughness = 1.f;
 
-        // Sample NEE.
-        LightSample ls = {};
-        bool neeValid = false;
-        if (valid && useNEE)
-        {
-            uint lightType;
-            float selectionPdf;
-            if (!selectLightType(lightType, selectionPdf, path.sg, useEmissiveLights, useAnalyticLights, useEnvLights))
-            {
-                neeValid = false;
-            }
-            else if (lightType == (uint)LightType::Analytic)
-            {
-                // Sample analytic light.
-                neeValid = generateAnalyticLightSample(lSd, path.sg, ls);
-                ls.lightType = (uint)LightType::Analytic;
-            }
-            else if (lightType == (uint)LightType::Emissive)
-            {
-                // Sample emissive light.
-                neeValid = generateEmissiveSample(emissiveSampler, lSd, true, path.sg, ls);
-                ls.lightType = (uint)LightType::Emissive;
-            }
-            
-            if (neeValid)
-            {
-                ls.pdf *= selectionPdf;
-                ls.Li /= selectionPdf;
-                neeValid &= sceneRayQuery.traceVisibilityRay(ls.getVisibilityRay(), kRayFlags);
-            }
-        }
+        // NEE terms of every scatter vertex, already times the path throughput.
+        float3 direct = float3(0.f);
+        if (valid && useNEE) direct = sampleDirect(lSd, lMi, path.sg);
 
         // Sample BSDF.
         BSDFSample bs = {};
         bool bsdfValid = false;
         if (valid) bsdfValid = lMi.sample(lSd, path.sg, bs);
-        if (valid) bsdfValid = generateScatterRay(bs, lSd, lMi, path, kSpecularRoughnessThreshold);
+        if (bsdfValid) bsdfValid = generateScatterRay(bs, lSd, lMi, path, kSpecularRoughnessThreshold);
 
-        // Cross-term pdfs for MIS
-        float pEdB = 0;  // wait until first hit
-        float pBdE = neeValid ? lMi.evalPdf(lSd, ls.dir, true) : 0.f;
-        float3 neeWeight = neeValid ? lMi.eval(lSd, ls.dir, path.sg) : 0.f;
+        // MIS state of the last scatter vertex, used when its BSDF ray hits an emitter.
+        float3 misPos = lSd.posW;
+        float3 misFaceN = lSd.getOrientedFaceNormal();
+        float misBsdfPdf = bs.pdf;
+        bool misNeeDone = valid && useNEE && !bs.isLobe(LobeType::Delta);
 
         // Update ray.
         Ray ray = path.getScatterRay();
 
+        uint glossyBounces = 0;
         if (bsdfValid)
         {
             // Trace the "first smooth" ray
@@ -193,7 +208,8 @@ struct SampleRHS
                 float rayT = 0;
                 hit = sceneRayQuery.traceRay(ray, rayT, kRayFlags);
 
-                // Miss: Write background color.
+                // Miss: Write background color. Environment NEE is not implemented, so
+                // the BSDF sample carries the full weight.
                 if (!hit.isValid())
                 {
                     if (kUseEnvLight)
@@ -220,16 +236,18 @@ struct SampleRHS
                 path.origin = sd.computeRayOrigin();
                 path.dir = ray.dir;
 
-                // NEE pdf for BSDF sample.
-                if ((i == 0) && (ls.lightType == (uint)LightType::Emissive))
-                {
-                    pEdB = emissiveSampler.evalPdf(lSd.posW, lSd.getOrientedFaceNormal(), true, getTriangleLightHit(hit, sd));
-                }
-
-                // Emissive surface: terminate path and write emitted radiance.
+                // Emissive surface: terminate path and write emitted radiance, MIS-weighted
+                // against the NEE done at the vertex the ray left from.
                 if (any(bsdfProperties.emission > 0.f))
                 {
-                    color = bsdfProperties.emission * path.thp;
+                    float mis = 1.f;
+                    if (misNeeDone)
+                    {
+                        const float lightPdf = emissiveSelectionPdf() *
+                            emissiveSampler.evalPdf(misPos, misFaceN, true, getTriangleLightHit(hit, sd));
+                        mis = misBsdfPdf / (misBsdfPdf + lightPdf);
+                    }
+                    color = bsdfProperties.emission * path.thp * mis;
                     path.terminate();
                     break;
                 }
@@ -241,8 +259,18 @@ struct SampleRHS
                     break;
                 }
 
-                // Break the loop if the hit is not on delta only material
-                if (!sd.mtl.isDeltaSpecular())
+                // Query the network at the first rough hit. Delta hits and glossy hits
+                // within the budget continue the path; a glossy hit past the budget
+                // either queries the network or ends the path (queryGlossyFallback).
+                const bool isDelta = sd.mtl.isDeltaSpecular();
+                const bool isGlossy = bsdfProperties.roughness <= kSpecularRoughnessThreshold;
+                const bool budgetSpent = isGlossy && glossyBounces >= maxGlossyBounces;
+                if (!isDelta && budgetSpent && queryGlossyFallback == 0)
+                {
+                    path.terminate();
+                    break;
+                }
+                if (!isDelta && (!isGlossy || budgetSpent))
                 {
                     pos = path.origin;
                     dir = path.dir;
@@ -253,6 +281,14 @@ struct SampleRHS
 
                     color = path.thp;
                     break;
+                }
+
+                // Glossy pass-through vertex: it needs its own NEE, or light that only
+                // NEE can reach (analytic lights) is lost on every glossy reflection.
+                if (!isDelta)
+                {
+                    glossyBounces++;
+                    if (useNEE) direct += path.thp * sampleDirect(sd, mi, path.sg);
                 }
 
                 // Sample next ray segment.
@@ -267,6 +303,11 @@ struct SampleRHS
                     break;
                 }
 
+                misPos = sd.posW;
+                misFaceN = sd.getOrientedFaceNormal();
+                misBsdfPdf = result.pdf;
+                misNeeDone = !isDelta && useNEE && !result.isLobe(LobeType::Delta);
+
                 // Update ray.
                 ray = path.getScatterRay();
             }
@@ -276,16 +317,12 @@ struct SampleRHS
             path.terminate();
         }
 
-        // MIS evaluation
-        float misNEE = neeValid ? ((ls.lightType == (uint)LightType::Analytic) ? 1.0f : (ls.pdf / (ls.pdf + pBdE))) : 0.f;
-        float misBSDF = bsdfValid ? (bs.pdf / (bs.pdf + pEdB)) : 0.f;
-
-        // RHS supervision always queries the diffuse network, including glossy hits.
+        // RHS supervision queries the diffuse network at the vertex the loop stopped on.
         uint diffAct = path.isActive() ? 1 : 0;
 
         // Write outputs
-        rhsColor[rayIdx] = float4(color * misBSDF, 0.f);
-        rhsEmission[rayIdx] = float4(ls.Li * neeWeight * misNEE, 0.f);
+        rhsColor[rayIdx] = float4(color, 0.f);
+        rhsEmission[rayIdx] = float4(direct, 0.f);
         rhsVBuffer[rayIdx] = hit.pack();
 
         // Write G-Buffer
