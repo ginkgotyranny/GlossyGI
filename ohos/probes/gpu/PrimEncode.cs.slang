@@ -26,7 +26,7 @@ void main(uint3 tid : SV_DispatchThreadID)
     {
         const GridLevel l = gridLevel(kPrimBaseRes, level);
         const float3 posGrid = pos * float(l.res);
-        const uint3 base = uint3(posGrid);
+        const uint3 base = gridBase(posGrid);
         const float3 frac = posGrid - float3(base);
 
         float2 entry = 0.0f;

@@ -7,8 +7,6 @@
 
 static const uint kLog2HashMapSize = 18;                 // NCR_LOG2_HASHMAP_SIZE(_SPEC)
 static const uint kHashMapSize = 1u << kLog2HashMapSize;
-static const uint kPrimeY = 19349663u;                   // PRIME_X is 1
-static const uint kPrimeZ = 83492791u;
 
 static const uint kPrimLevels = 6;       // NCR_N_LEVELS
 static const uint kPrimFeatures = 2;     // NCR_N_FEATURES_PER_LEVEL
@@ -22,9 +20,8 @@ static const float kInterpRatio = 1.0f;  // NCR_INTERP_RATIO
 struct GridLevel
 {
     uint res;      // cells per axis; the level has (res + 1)^3 vertices
-    uint size;     // entries stored: all vertices, or the hash table size
+    uint size;     // entries stored: all vertices, or the table size if there are more
     uint offset;   // first entry of the level in the grid buffer
-    bool hashed;
 };
 
 uint levelEntries(uint baseRes, uint level)
@@ -38,8 +35,6 @@ GridLevel gridLevel(uint baseRes, uint level)
 {
     GridLevel l;
     l.res = baseRes << level;
-    const uint res1 = l.res + 1;
-    l.hashed = res1 * res1 * res1 > kHashMapSize;
     l.size = levelEntries(baseRes, level);
     l.offset = 0;
     [ForceUnroll]
@@ -50,12 +45,21 @@ GridLevel gridLevel(uint baseRes, uint level)
     return l;
 }
 
-/// Entry of grid vertex p. 32-bit wrap-around gives the low bits the CUDA code keeps.
+/// Entry of grid vertex p: the dense vertex index modulo the level size, for every level. The CUDA
+/// code has a prime hash for levels larger than the table, but its test compares the already clamped
+/// level size with the table size and never selects it; checkpoints are trained with this indexing.
 uint gridIndex(uint3 p, GridLevel l)
 {
-    if (l.hashed) return (p.x + p.y * kPrimeY + p.z * kPrimeZ) & (kHashMapSize - 1);
     const uint res1 = l.res + 1;
     return ((res1 * p.x + p.y) * res1 + p.z) % l.size;
+}
+
+/// Lower corner of the cell that contains a position in grid units. CUDA converts float to unsigned
+/// with saturation, so a negative coordinate (cluster positions do leave the unit cube) gives cell 0
+/// and weights that extrapolate; SPIR-V leaves that conversion undefined, hence the explicit clamp.
+uint3 gridBase(float3 posGrid)
+{
+    return uint3(max(posGrid, 0.0f));
 }
 
 uint3 cornerOffset(uint c)

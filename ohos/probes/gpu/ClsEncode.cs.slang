@@ -18,7 +18,7 @@ float4 lookup(float3 pos, uint level)
 {
     const GridLevel l = gridLevel(kClsBaseRes, level);
     const float3 posGrid = pos * float(l.res);
-    const uint3 base = uint3(posGrid);
+    const uint3 base = gridBase(posGrid);
     const float3 frac = posGrid - float3(base);
     float4 entry = 0.0f;
     [ForceUnroll]

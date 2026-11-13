@@ -274,11 +274,10 @@ static double timeCompute(const Pipeline& p, const void* push, uint32_t pushSize
 // ---------------------------------------------------------------------------------------------
 // Hash grids on the CPU: the reference, mirroring Model/HashGrid.cu and Model/HashGridInterp.cu.
 static const uint32_t kHashMapSize = 1u << 18;
-static const uint32_t kPrimeY = 19349663u, kPrimeZ = 83492791u;
 static const uint32_t kPrimLevels = 6, kPrimFeatures = 2, kPrimBaseRes = 32;
 static const uint32_t kClsLevels = 6, kClsFeatures = 4, kClsBaseRes = 16, kNumClusters = 4;
 
-struct GridLevel { uint32_t res, size, offset; bool hashed; };
+struct GridLevel { uint32_t res, size, offset; };
 
 static uint32_t levelEntries(uint32_t baseRes, uint32_t level)
 {
@@ -290,8 +289,6 @@ static GridLevel gridLevel(uint32_t baseRes, uint32_t level)
 {
     GridLevel l;
     l.res = baseRes << level;
-    const uint64_t res1 = (uint64_t)l.res + 1;
-    l.hashed = res1 * res1 * res1 > kHashMapSize;
     l.size = levelEntries(baseRes, level);
     l.offset = 0;
     for (uint32_t i = 0; i < level; i++) l.offset += levelEntries(baseRes, i);
@@ -305,9 +302,10 @@ static uint32_t gridEntries(uint32_t baseRes, uint32_t levels)
     return total;
 }
 
+// Dense vertex index modulo the level size, for every level: what the CUDA code does (its prime hash
+// is never selected, see HashGrid.slang).
 static uint32_t gridIndex(uint32_t x, uint32_t y, uint32_t z, const GridLevel& l)
 {
-    if (l.hashed) return (x + y * kPrimeY + z * kPrimeZ) & (kHashMapSize - 1);
     const uint32_t res1 = l.res + 1;
     return ((res1 * x + y) * res1 + z) % l.size;
 }
@@ -322,7 +320,7 @@ static Corners corners(const float* pos, const GridLevel& l)
     for (int a = 0; a < 3; a++)
     {
         grid[a] = pos[a] * (float)l.res;
-        base[a] = (uint32_t)grid[a];
+        base[a] = grid[a] > 0.0f ? (uint32_t)grid[a] : 0u;   // CUDA's saturating float -> unsigned
         frac[a] = grid[a] - (float)base[a];
     }
     for (uint32_t k = 0; k < 8; k++)
@@ -411,7 +409,9 @@ static void testEncode(const std::string& dir)
     for (uint32_t i = 0; i < clsCapacity * kNumClusters; i++)
     {
         float* c = clusters.as<float>() + i * 4;
-        c[0] = rnd(); c[1] = rnd(); c[2] = rnd();
+        // Slightly beyond the unit cube on both sides: cluster positions do leave it, and the lookup
+        // then extrapolates from the border cell. Kept small so the random grid stays within fp16.
+        c[0] = rnd() * 1.04f - 0.02f; c[1] = rnd() * 1.04f - 0.02f; c[2] = rnd() * 1.04f - 0.02f;
         c[3] = std::exp2(-11.0f + 9.0f * rnd());   // 2^-11 .. 2^-2; the level scales are 2^-4 .. 2^-9
         weights.as<float>()[i] = rnd();
     }
@@ -449,7 +449,7 @@ static void testEncode(const std::string& dir)
                         }
                         const float ref = (l * lowerWeight + u * upperWeight) * weights.as<float>()[n * kNumClusters + k];
                         const float gpu = halfToFloat(clsEnc.as<uint16_t>()[(k * kClsFeatures + f) * clsCapacity + n]);
-                        maxError = std::max(maxError, (double)std::fabs(gpu - ref));
+                        maxError = std::max(maxError, (double)std::fabs(gpu - ref) / std::max(1.0f, std::fabs(ref)));   // extrapolated values are large
                     }
                 }
             }
@@ -467,7 +467,7 @@ static void testScatter(const std::string& dir)
     printf("== scatter: hash-grid gradient scatter with integer atomics\n");
     const uint32_t primEntries = gridEntries(kPrimBaseRes, kPrimLevels);
     const uint32_t capacity = 1u << 16;
-    const float gradScale = 4096.0f;
+    const float gradScale = 16777216.0f;   // 2^24, the scale the port uses (GRID_GRADIENT_SCALE in ncr_reference.py)
     Buffer samples = makeBuffer(capacity * 16ull, kStorageUsage);
     Buffer gradIn = makeBuffer(capacity * 2ull * kPrimLevels * kPrimFeatures, kStorageUsage);
     Buffer grad = makeBuffer(primEntries * kPrimFeatures * 4ull, kStorageUsage);

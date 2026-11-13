@@ -51,11 +51,18 @@ SPEC = NetSpec("spec", input_dim=64, width=64, hidden_layers=4, encoding_dim=12 
 NETS = {"diff": DIFF, "spec": SPEC}
 
 
+SQUAREPLUS_RANGE = 64.0   # the square is taken of q / 64, see squareplus()
+
+
 def squareplus(z):
-    """Returns y = squareplus(z) and dy/dz. The derivative is tiny-cuda-nn's y'^2 / (y'^2 + 1) with
-    y' = K_ACT * y, written as 0.5 * (1 + q / s) so that nothing larger than q^2 is formed."""
+    """Returns y = squareplus(z) = (q + sqrt(q^2 + 4)) / (2 K) with q = K z, and dy/dz.
+    The NPU computes in fp16 (largest value 65504), where q^2 overflows from z = 25.6 on, a radiance
+    HDR scenes do reach. So the root is taken as 64 * sqrt((q / 64)^2 + 4 / 64^2), which is the same
+    number and holds up to z = 1638. The derivative is tiny-cuda-nn's y'^2 / (y'^2 + 1) with
+    y' = K y, written as 0.5 * (1 + q / s) for the same reason."""
     q = z * K_ACT
-    s = torch.sqrt(q * q + 4.0)
+    r = q * (1.0 / SQUAREPLUS_RANGE)
+    s = torch.sqrt(r * r + 4.0 / (SQUAREPLUS_RANGE * SQUAREPLUS_RANGE)) * SQUAREPLUS_RANGE
     y = (q + s) * (0.5 / K_ACT)
     dy_dz = q / s * 0.5 + 0.5
     return y, dy_dz

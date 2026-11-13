@@ -4,6 +4,8 @@
 // #include "NeuralModel.h"
 // #include "NeuralConeModel.h"
 #include <cuda_runtime.h>
+#include <algorithm>
+#include <cstdlib>
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -78,6 +80,59 @@ static uint64_t gpuUsedMBs() {
     CUDA_CHECK_THROW(cudaMemGetInfo(&freeBytes, &totalBytes));
     return (totalBytes - freeBytes) / (1024 * 1024);
 }
+
+// Reference data for the OpenHarmony port (ohos/npu/verify_tcnn.py), which re-implements this model
+// without tiny-cuda-nn. With the environment variable NCR_DUMP_DIR set, the train() call number
+// NCR_DUMP_STEP (default 50) writes everything that step read and produced, and the next render
+// inference writes its inputs and outputs. Each array is a raw <name>.bin; manifest.txt lists
+// "array name dtype rows cols" and "scalar name value" lines.
+struct DebugDump {
+    bool enabled = false;
+    std::string dir;
+    uint32_t step = 50;
+    uint32_t trainCalls = 0;
+    bool trainDone = false;
+    bool inferenceDone = false;
+
+    DebugDump() {
+        const char* d = std::getenv("NCR_DUMP_DIR");
+        enabled = d && *d;
+        if (!enabled) return;
+        dir = d;
+        if (const char* s = std::getenv("NCR_DUMP_STEP")) step = (uint32_t)std::atoi(s);
+        std::ofstream(dir + "/manifest.txt", std::ios::trunc);
+    }
+
+    void note(const std::string& line) {
+        std::ofstream f(dir + "/manifest.txt", std::ios::app);
+        f << line << "\n";
+    }
+
+    void writeHost(const std::string& name, const char* dtype, size_t rows, size_t cols, const void* data, size_t bytes) {
+        std::ofstream f(dir + "/" + name + ".bin", std::ios::binary);
+        f.write(static_cast<const char*>(data), (std::streamsize)bytes);
+        if (!f.good()) throw std::runtime_error("NCR_DUMP_DIR: cannot write " + name);
+        note(fmt::format("array {} {} {} {}", name, dtype, rows, cols));
+    }
+
+    void writeDevice(const std::string& name, const char* dtype, size_t rows, size_t cols, const void* devPtr, size_t elemBytes) {
+        std::vector<char> host(rows * cols * elemBytes);
+        if (!host.empty()) CUDA_CHECK_THROW(cudaMemcpy(host.data(), devPtr, host.size(), cudaMemcpyDeviceToHost));
+        writeHost(name, dtype, rows, cols, host.data(), host.size());
+    }
+
+    // Adam moments, per-parameter step counts and the step counter of an EMA(Adam) optimizer.
+    void writeOptimizer(const std::string& name, const tcnn::Optimizer<precision_t>& optimizer) {
+        const tcnn::json data = optimizer.serialize();
+        const tcnn::json& adam = data["nested"];
+        for (const char* key : {"first_moments", "second_moments", "param_steps"}) {
+            const auto& binary = adam[std::string(key) + "_binary"].get_binary();
+            writeHost(name + "_" + key, std::string(key) == "param_steps" ? "u32" : "f32", binary.size() / 4, 1, binary.data(), binary.size());
+        }
+        note(fmt::format("scalar {}_step {}", name, adam["current_step"].get<uint32_t>()));
+    }
+};
+DebugDump gDump;
 
 } // namespace
 
@@ -389,6 +444,19 @@ void NRModel::inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
         );
         mpSpecNet->inference(mInferenceStream, specInput, specOutput);
     }
+    // The first render inference (both networks) after the dumped training step. It reads the EMA
+    // weights stored in train_after.ckpt.
+    if (gDump.enabled && gDump.trainDone && !gDump.inferenceDone && diffBatchSize > 0 && specBatchSize > 0) {
+        CUDA_CHECK_THROW(cudaStreamSynchronize(mInferenceStream));
+        const uint32_t diffRows = std::min(diffPtrs.size, 65536u);
+        const uint32_t specRows = std::min(specPtrs.size, 65536u);
+        gDump.writeDevice("infer_diff_input", "f16", diffRows, mDiffInputDim, diffPtrs.inputPtr, sizeof(precision_t));
+        gDump.writeDevice("infer_diff_output", "f32", diffRows, mOutputDim, diffPtrs.outputPtr, sizeof(float));
+        gDump.writeDevice("infer_spec_input", "f16", specRows, mSpecInputDim, specPtrs.inputPtr, sizeof(precision_t));
+        gDump.writeDevice("infer_spec_output", "f32", specRows, mOutputDim, specPtrs.outputPtr, sizeof(float));
+        gDump.inferenceDone = true;
+        fmt::print("NRModel: wrote a render inference to {}\n", gDump.dir);
+    }
 }
 
 void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
@@ -396,6 +464,25 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
     const uint32_t specBatchSize = (specPtrs.inputPtr && specPtrs.outputPtr) ? padUp(specPtrs.size, kModelBatchAlign) : 0;
 
     const float lossScale = tcnn::default_loss_scale<precision_t>();
+    const bool dump = gDump.enabled && !gDump.trainDone && ++gDump.trainCalls == gDump.step;
+    if (dump) {
+        // What the step starts from: f32 masters and EMA copies (a checkpoint), the fp16 training
+        // copies the forward pass reads, and the moments of the optimizers.
+        saveState(gDump.dir + "/train_before.ckpt");
+        gDump.note(fmt::format("scalar learning_rate {}", mLearningRate));
+        gDump.note(fmt::format("scalar ema_decay {}", mEmaDecay));
+        gDump.note(fmt::format("scalar loss_scale {}", lossScale));
+        gDump.note(fmt::format("scalar diff_size {}", diffBatchSize > 0 ? diffPtrs.size : 0));
+        gDump.note(fmt::format("scalar spec_size {}", specBatchSize > 0 ? specPtrs.size : 0));
+        gDump.writeDevice("before_prim_grid_half", "f16", mpPrimGrids->size(), 1, mpPrimGrids->data(), sizeof(precision_t));
+        gDump.writeDevice("before_cls_grid_half", "f16", mpClsGrids->size(), 1, mpClsGrids->data(), sizeof(precision_t));
+        gDump.writeDevice("before_diff_params_half", "f16", mpDiffParams->size(), 1, mpDiffParams->data(), sizeof(precision_t));
+        gDump.writeDevice("before_spec_params_half", "f16", mpSpecParams->size(), 1, mpSpecParams->data(), sizeof(precision_t));
+        gDump.writeOptimizer("prim_grid_opt", *mpPrimGridOpt);
+        gDump.writeOptimizer("cls_grid_opt", *mpClsGridOpt);
+        gDump.writeOptimizer("diff_opt", *mpDiffNetOpt);
+        gDump.writeOptimizer("spec_opt", *mpSpecNetOpt);
+    }
     CUDA_CHECK_THROW(cudaMemsetAsync(mpPrimGridsGradient->data(), 0, mpPrimGridsGradient->bytes(), mTrainStream));
     CUDA_CHECK_THROW(cudaMemsetAsync(mpClsGridsGradient->data(), 0, mpClsGridsGradient->bytes(), mTrainStream));
 
@@ -438,6 +525,16 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
             mDiffPosOffset,
             mPrimGridConfig
         );
+        if (dump) {
+            CUDA_CHECK_THROW(cudaStreamSynchronize(mTrainStream));
+            gDump.writeDevice("train_diff_input", "f16", diffBatchSize, mDiffInputDim, diffInput.data(), sizeof(precision_t));
+            gDump.writeDevice("train_diff_target", "f32", diffBatchSize, mOutputDim, diffTarget.data(), sizeof(float));
+            gDump.writeDevice("train_diff_output", "f16", diffBatchSize, mPaddedOutputDim, networkOutput.data(), sizeof(precision_t));
+            gDump.writeDevice("train_diff_dL_doutput", "f16", diffBatchSize, mPaddedOutputDim, dL_dnetworkOutput.data(), sizeof(precision_t));
+            gDump.writeDevice("train_diff_dL_dinput", "f16", diffBatchSize, mDiffInputDim, dL_dnetworkInput.data(), sizeof(precision_t));
+            // The primary grid gradient so far: the diffuse batch alone.
+            gDump.writeDevice("train_prim_grid_grad_diff", "f16", mpPrimGridsGradient->size(), 1, mpPrimGridsGradient->data(), sizeof(precision_t));
+        }
     }
     if (specBatchSize > 0) {
         tcnn::GPUMatrix<precision_t> specInput(specPtrs.inputPtr, mSpecInputDim, specBatchSize);
@@ -502,6 +599,21 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
             mSpecClsWeightOffset,
             mClsGridConfig
         );
+        if (dump) {
+            CUDA_CHECK_THROW(cudaStreamSynchronize(mTrainStream));
+            gDump.writeDevice("train_spec_input", "f16", specBatchSize, mSpecInputDim, specInput.data(), sizeof(precision_t));
+            gDump.writeDevice("train_spec_target", "f32", specBatchSize, mOutputDim, specTarget.data(), sizeof(float));
+            gDump.writeDevice("train_spec_output", "f16", specBatchSize, mPaddedOutputDim, networkOutput.data(), sizeof(precision_t));
+            gDump.writeDevice("train_spec_dL_doutput", "f16", specBatchSize, mPaddedOutputDim, dL_dnetworkOutput.data(), sizeof(precision_t));
+            gDump.writeDevice("train_spec_dL_dinput", "f16", specBatchSize, mSpecInputDim, dL_dnetworkInput.data(), sizeof(precision_t));
+        }
+    }
+    if (dump) {
+        CUDA_CHECK_THROW(cudaStreamSynchronize(mTrainStream));
+        gDump.writeDevice("train_diff_params_grad", "f16", mpDiffParamsGradient->size(), 1, mpDiffParamsGradient->data(), sizeof(precision_t));
+        gDump.writeDevice("train_spec_params_grad", "f16", mpSpecParamsGradient->size(), 1, mpSpecParamsGradient->data(), sizeof(precision_t));
+        gDump.writeDevice("train_prim_grid_grad", "f16", mpPrimGridsGradient->size(), 1, mpPrimGridsGradient->data(), sizeof(precision_t));
+        gDump.writeDevice("train_cls_grid_grad", "f16", mpClsGridsGradient->size(), 1, mpClsGridsGradient->data(), sizeof(precision_t));
     }
     if (diffBatchSize > 0) {
         mpDiffNetOpt->step(mTrainStream, lossScale, mpDiffParamsFull->data(), mpDiffParams->data(), mpDiffParamsGradient->data());
@@ -512,6 +624,11 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
     }
     if (diffBatchSize > 0 || specBatchSize > 0) {
         mpPrimGridOpt->step(mTrainStream, lossScale, mpPrimGridsFull->data(), mpPrimGrids->data(), mpPrimGridsGradient->data());
+    }
+    if (dump) {
+        saveState(gDump.dir + "/train_after.ckpt");
+        gDump.trainDone = true;
+        fmt::print("NRModel: wrote training step {} to {}\n", gDump.step, gDump.dir);
     }
 }
 

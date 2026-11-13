@@ -28,11 +28,49 @@ import torch
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
 import ncr_npu_graphs as graphs  # noqa: E402
+import ncr_reference as ref  # noqa: E402
 
 DEFAULT_OUT = os.path.join(os.path.dirname(HERE), "_build", "npu_models")
 DEFAULT_OMG = r"E:\MyProjects\MRRCGI\device_mrrc_benchmark-ddk-chs\scripts\hiai\DDK_tools_100.600.010.010\tools\tools_omg\omg"
 OPSET = 9
 VECTOR_LIMIT = 16 << 20  # bytes of fp16 input above which no test vectors are written
+
+
+def real_configurations(folder):
+    """Graphs fed with what the CUDA implementation actually computed on: the inputs and weights of
+    one training step and one render inference, dumped by a Falcor run with NCR_DUMP_DIR set. They
+    show the NPU on real value ranges (HDR targets, trained weights) instead of random numbers."""
+    dump = ref.Dump(folder)
+    after = ref.load_checkpoint(os.path.join(folder, "train_after.ckpt"))
+    nets = {"diff": (graphs.DIFF, ref.DIFF_LAYERS), "spec": (graphs.SPEC, ref.SPEC_LAYERS)}
+
+    def kernels(params, layers):
+        return [torch.from_numpy(k.astype(np.float32)) for k in ref.split_layers(params, layers)]
+
+    def inference(name):
+        spec, layers = nets[name]
+        model = graphs.Inference(spec, 256, 256)
+        rows = dump[f"infer_{name}_input"][:65536].astype(np.float32)
+        x = torch.from_numpy(np.ascontiguousarray(rows.T).reshape(1, spec.input_dim, 256, 256))
+        model.inputs = [x] + kernels(after[name + "_ema"], layers)
+        return model
+
+    def training(name, batch=4096):
+        spec, layers = nets[name]
+        model = graphs.Training(spec, batch)
+        rows = dump[f"train_{name}_input"][:batch].astype(np.float32)
+        target = np.zeros((batch, ref.OUTPUT_PAD), dtype=np.float32)
+        target[:, :ref.OUTPUT_DIM] = dump[f"train_{name}_target"][:batch]
+        model.inputs = kernels(dump[f"before_{name}_params_half"], layers) + [
+            torch.from_numpy(ref.rows_to_planar(rows)), torch.from_numpy(ref.rows_to_planar(target))]
+        return model
+
+    return {
+        "ncr_real_diff_inf_256x256": lambda: inference("diff"),
+        "ncr_real_spec_inf_256x256": lambda: inference("spec"),
+        "ncr_real_diff_train_4096": lambda: training("diff"),
+        "ncr_real_spec_train_4096": lambda: training("spec"),
+    }
 
 
 def configurations():
@@ -192,9 +230,14 @@ def main():
     parser.add_argument("--om", action="store_true")
     parser.add_argument("--omc", nargs="?", const="Kirin9050", default=None, metavar="SOC")
     parser.add_argument("--list", action="store_true")
+    parser.add_argument("--real", metavar="DUMP_DIR",
+                        help="add the ncr_real_* configurations, built from a Falcor dump (see verify_tcnn.py)")
     options = parser.parse_args()
 
-    selected = {name: factory for name, factory in configurations().items()
+    available = configurations()
+    if options.real:
+        available.update(real_configurations(options.real))
+    selected = {name: factory for name, factory in available.items()
                 if not options.only or any(part in name for part in options.only)}
     if options.list:
         print("\n".join(selected))
