@@ -6,7 +6,7 @@
 # Usage (Git Bash, phone connected over hdc):
 #   ohos/replay/run_device.sh <bake dir> <checkpoint.ckpt> [replayer options, e.g. --networks npu --stages]
 # The bake must have been packed (python ohos/tools/bake_pack.py <bake dir>). For --networks npu the
-# models must exist: python ohos/npu/export_models.py --only inf_256x256 --om
+# models must exist: python ohos/npu/export_models.py --only inf_256x256 --only _train_ --om
 # Results: ohos/_build/replay/device_out (the same files the PC replayer writes) and device.log.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,10 +27,16 @@ SLANG_ARGS=(-I "$HERE/shaders" -target spirv -entry main -stage compute)
 "$SLANGC" "$HERE/shaders/EncodeInputs.cs.slang" -DSPECULAR=0 "${SLANG_ARGS[@]}" -o "$OUT/device/shaders/EncodeDiff.spv"
 "$SLANGC" "$HERE/shaders/EncodeInputs.cs.slang" -DSPECULAR=1 "${SLANG_ARGS[@]}" -o "$OUT/device/shaders/EncodeSpec.spv"
 "$SLANGC" "$HERE/shaders/DecodeOutputs.cs.slang" "${SLANG_ARGS[@]}" -o "$OUT/device/shaders/DecodeOutputs.spv"
+"$SLANGC" "$HERE/shaders/EncodeTargets.cs.slang" "${SLANG_ARGS[@]}" -o "$OUT/device/shaders/EncodeTargets.spv"
+"$SLANGC" "$HERE/shaders/ScatterGradients.cs.slang" -DSPECULAR=0 "${SLANG_ARGS[@]}" -o "$OUT/device/shaders/ScatterDiff.spv"
+"$SLANGC" "$HERE/shaders/ScatterGradients.cs.slang" -DSPECULAR=1 "${SLANG_ARGS[@]}" -o "$OUT/device/shaders/ScatterSpec.spv"
+"$SLANGC" "$HERE/shaders/GridOptimizer.cs.slang" "${SLANG_ARGS[@]}" -o "$OUT/device/shaders/GridOptimizer.spv"
 "$SDK/llvm/bin/clang++.exe" --target=aarch64-linux-ohos --sysroot="$SDK/sysroot" -std=c++17 -O2 \
   "$HERE/ncr_replay.cpp" -o "$OUT/device/ncr_replay" -lvulkan -lneural_network_core -lqos -static-libstdc++
 for net in diff spec; do
-  if [ -f "$MODELS/ncr_${net}_inf_256x256_fp16.om" ]; then cp "$MODELS/ncr_${net}_inf_256x256_fp16.om" "$OUT/device/models/"; fi
+  for graph in inf_256x256 train_4096 train_8192 train_16384; do
+    if [ -f "$MODELS/ncr_${net}_${graph}_fp16.om" ]; then cp "$MODELS/ncr_${net}_${graph}_fp16.om" "$OUT/device/models/"; fi
+  done
 done
 cp "$CHECKPOINT" "$OUT/device/checkpoint.ckpt"
 

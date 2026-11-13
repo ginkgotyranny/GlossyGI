@@ -61,6 +61,7 @@ def training_gradients(spec, rows, target, kernels):
     model = graphs.Training(spec, rows.shape[0], mask="sign").double()
     padded_target = np.zeros((rows.shape[0], ref.OUTPUT_PAD), dtype=np.float64)
     padded_target[:, :ref.OUTPUT_DIM] = target
+    padded_target[:, graphs.MASK_CHANNEL] = 1.0   # every row of the batch counts, as in tiny-cuda-nn
     inputs = [torch.from_numpy(k.astype(np.float64)) for k in kernels]
     inputs += [torch.from_numpy(ref.rows_to_planar(rows.astype(np.float64))), torch.from_numpy(ref.rows_to_planar(padded_target))]
     with torch.no_grad():

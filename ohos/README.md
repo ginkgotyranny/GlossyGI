@@ -30,11 +30,14 @@ ohos/npu/train_loop_check.py   convergence of the NPU-style training loop agains
 ohos/npu/export_models.py      gradient check vs autograd, ONNX, test vectors, .om / .omc conversion (WSL)
 ohos/probes/npu_mlp/           on-device probe: load a model through NNRt, check the outputs, time RunSync
 ohos/probes/gpu/               on-device probe: hash grids in compute, ray query throughput, shader features, baked pipelines
-ohos/replay/                   the replayer: runs the baked passes on any Vulkan device (PC and phone), networks on the CPU for now
+ohos/replay/                   the replayer: runs baked frames on any Vulkan device (PC and phone), rendering and training,
+                               with the MLPs on the NPU (phone) or on the CPU
 ohos/tools/spirv_info.py       capabilities and bindings of a SPIR-V module (and .layout files for the probe)
 ohos/tools/bake_check.py       resolves every SPIR-V binding of a bake to the resource the bake recorded for it
 ohos/tools/bake_pack.py        joins bake and SPIR-V into the index the replayer reads; repairs the SPIR-V (spirv_fix.py)
 ohos/tools/replay_compare.py   a replay's images and buffers against Falcor's from the baked frame
+ohos/tools/train_check.py      one training step of the replayer against the reference model, stage by stage, and against Falcor
+ohos/tools/train_compare.py    N frames of training in the replayer against N frames of training in Falcor
 ohos/tools/raw_to_png.py       a dumped RGBA32F image as PNG
 ohos/tools/png_stats.py        mean / saturation / difference of PNG frames, standard library only
 ohos/_build/                   generated files (git-ignored)
@@ -232,7 +235,7 @@ The networks run the way they will in the app (`--networks`):
   the tiles are copied between Vulkan buffers and NNRt tensors.
 - `rows`: the float32 reference on the CPU, lookups included (`replay_nn.h`).
 
-The prefix sums still run on the CPU.
+The prefix sums still run on the CPU. Training is described below.
 
 ```bat
 python ohos/tools/bake_pack.py <bake dir>
@@ -271,6 +274,110 @@ zero-copy buffers remove; outputs back to rows about 3 ms. The whole frame, firs
 The prefix sums run on the CPU (1.5 ms on a local copy of the buffer; 82 ms when walking the shared
 buffer directly).
 
+### Training
+
+A frame baked in a training mode contains the training step (`host <k> train lhs`), and the bake holds
+the model before and after the frame (`before.ckpt`, `after.ckpt`) and the learning rate and EMA decay
+the step ran with. With `--networks tiles` or `npu` the replayer executes it:
+
+| Step | Where | What |
+|---|---|---|
+| Inputs and targets | GPU: `EncodeInputs` with the training grids, `EncodeTargets` | tiles of the training graph's size (4,096 samples by default); the target tile carries a weight per slot, 0 beyond the batch |
+| Gradients of the MLP | NPU: `ncr_<net>_train_<N>_fp16.om`, one run per tile | dL/dw, summed over the tiles on the CPU, and dL/d(input) per sample |
+| Gradients of the grids | GPU: `ScatterGradients` | the encoding channels of dL/d(input) added to the grid entries the lookup read, in 2^-24 fixed point (integer atomics) |
+| Grid optimizers | GPU: `GridOptimizer`, once per grid | Adam on the float32 masters where the gradient is not zero, per-entry step counts; EMA over all entries; fp16 copies rounded to nearest even |
+| MLP optimizers | CPU | Adam + EMA on 28,672 weights, then the new weights go into the graphs' weight tensors |
+
+`--frames N` replays the frame N times as consecutive frames: the frame counter that seeds the samplers
+advances and the uniforms that depend on the sample counts are set as `NeuralRadiosity.cpp` sets them;
+camera and scene stay as baked. The weights after the last frame are written as `trained.ckpt`, a
+checkpoint Falcor loads.
+
+```bat
+set NCR_BAKE_DIR=<bake0> & set NCR_BAKE_FRAME=0 & set NCR_SMOKE_FRAMES=1 & set NCR_SMOKE_MODE=onlineTrain
+set NCR_SMOKE_PROPS={'loadModelPath': '<start.ckpt>'}
+build\windows-vs2022\bin\Release\Mogwai.exe --headless --device-type vulkan --script scripts/ncr_smoke.py
+python ohos/tools/bake_pack.py <bake0>
+python ohos/npu/export_models.py --only inf_256x256 --only _train_ --om
+bash ohos/replay/run_device.sh <bake0> <bake0>/before.ckpt --networks npu --dump-train
+python ohos/tools/train_check.py <bake0> ohos/_build/replay/device_out --npu      # one step
+bash ohos/replay/run_device.sh <bake0> <bake0>/before.ckpt --networks npu --frames 60 --loss 10
+python ohos/tools/train_compare.py <bake0> ohos/_build/replay/device_out <bake59>  # <bake59>: the same run baked at frame 59
+```
+
+Falcor has to start from a loaded checkpoint and the bake has to be of frame 0: then Falcor and the
+replayer both begin with the fp16 training copies rebuilt from the masters and with empty Adam moments.
+
+Results, bathroom at 640x360, online training from a 300-step checkpoint, 32,768 training samples per
+frame (18,429 diffuse and 14,339 specular rows, 229,738 RHS queries), learning rate 5e-3, EMA 0.95,
+`randomTrainDir` off (see below), 2026-11-13:
+
+| | PC, MLPs on the CPU | Phone, MLPs on the NPU |
+|---|---|---|
+| One step, each stage against the reference model from its own inputs: encodings | 2e-4 | 2e-4 |
+| MLP weight gradients / input gradients | 1e-4 / 2e-4 | 8e-3 to 2e-2 / 9e-3 to 1e-2 |
+| Grid gradients after the scatter | 1e-5 | 1e-5 |
+| Masters after the optimizers | within 2e-7 | within 2e-7 |
+| One step against Falcor: cosine between the two updates, primary / cluster grid | 0.9996 / 0.9996 | 0.995 / 0.993 |
+| the same, DiffNet / SpecNet | 0.993 / 0.980 | 0.983 / 0.969 |
+| Image rendered after that step, against Falcor's | 53.5 dB | 54.4 dB |
+| 60 frames against Falcor: cosine between the two updates, grids | 0.991 / 0.992 | 0.985 / 0.987 |
+| the same, DiffNet / SpecNet | 0.992 / 0.984 | 0.958 / 0.940 |
+| Image after frame 60, against Falcor's after its 60 frames | 51.3 dB | 50.9 dB |
+
+For scale: Falcor's own image moves by 17-19 dB between its first and its 60th frame of that run. The
+checkpoint the phone wrote after its 60 frames, loaded into Falcor (D3D12, render mode), gives the image
+Falcor's own 60-frame checkpoint gives (mean difference 0.0012 of the 8-bit range). The PC column was
+measured with the default `randomTrainDir`, the phone column needs it off, for the reason given below.
+
+A frame of online training on the phone at these sizes, steady state, copy mode: about 580 ms.
+
+| Part of the frame | Time |
+|---|---|
+| RandomSmooth + SampleRHS (32,768 samples, 8 RHS paths each) | 54 ms |
+| RHS: compaction, grid lookups for 229,738 queries, outputs | 23 ms |
+| RHS: DiffNet on the NPU, 4 tiles | 13 ms in `RunSync`, about 110 ms copying tiles |
+| LHS: compaction, cone trace (32 rays per specular sample), targets | 8 ms |
+| Training: inputs and targets into tiles | 4 ms |
+| Training: gradients on the NPU, 4 + 5 tiles of 4,096 | 66 ms in `RunSync` (7.3 ms per tile), 43 ms copying |
+| Training: grid gradient scatter and the two grid optimizers | 14 ms |
+| Training: MLP optimizers on the CPU | 1-6 ms |
+| Render: G-buffer, compaction, cone trace | 68 ms |
+| Render: grid lookups, 2 + 2 tiles on the NPU, outputs, resolve, filters | 22 ms on the GPU, 13 ms in `RunSync`, about 100 ms copying |
+| Prefix sums on the CPU | 25-37 ms |
+
+The copies between Vulkan buffers and NNRt tensors are 245 ms of that; they go away with buffers shared
+by both. What remains is about 190 ms on the GPU, 90 ms on the NPU and 40 ms on the CPU, and the sample
+counts are the desktop defaults: the configuration for the phone is still to be chosen.
+
+#### What the comparison showed about the desktop pipeline
+
+Two properties of the pipeline as it runs on the desktop, found because the replay did not agree at first:
+
+1. **The first training step after a random initialisation changes nothing.** The fp16 copies of the
+   weights that training reads are first written by the optimizers; before that they are zero, the
+   network output is constant and every gradient is zero. From a loaded checkpoint this does not
+   happen: loading rebuilds the copies. (Baked frame 0 of a fresh run: Falcor's grids unchanged, MLP
+   weights changed by rounding and weight decay only.)
+2. **29% of the training samples are shaded from behind their surface**, and their direct light is
+   decided by how a GPU treats an intersection 1e-4 from a ray's origin. RandomSmooth gives each
+   sample a random direction and flips it to the side the path came from, but the test multiplies
+   components of a local-space vector with the world-space face normal (`dot(wiLocal, sd.faceN)`), so
+   the outcome depends on the orientation of the surface in the world (9,364 of 32,768 samples here).
+   SampleRHS then shades such a sample from the back, while its stored position is offset to the
+   front: the shadow ray toward a light behind the surface starts 1.2e-4 in front of the triangle it
+   has to pass. On thick walls the far side stops that ray anyway. On the thin panel beside the
+   bathroom's window, with the window light 0.4 behind it, the RTX lets most of those rays through and
+   the Maleoon stops most: 17,387 against 7,425 in summed direct light on 2,228 samples of one frame,
+   the whole difference between the two GPUs (elsewhere 19,261 against 19,168). With the default
+   setting the phone therefore drifts from Falcor (35.6 dB after 60 frames) although every stage agrees
+   with the reference model.
+
+The pass property `randomTrainDir` (default on, the behaviour as it was) turns the random direction
+off: a sample then keeps the direction its path arrived with. The comparisons above use that to have a
+frame both GPUs must agree on. Whether the test in RandomSmooth should be corrected is a question for
+the training algorithm, not for the port; it changes what the desktop learns from.
+
 ### What the phone's driver does differently
 
 Each of these made the first replays on the phone wrong while the PC was right. The first two are
@@ -299,10 +406,11 @@ triangle, was suspected first and is fine (test `load16`).
 
 1. Device probes (done).
 2. The network split on the PC against the CUDA implementation (done, above).
-3. Bake and replay. Done: the bake, and the replayer rendering the baked frame on the PC and on the
-   phone in agreement with Falcor (above), with the grid lookups on the GPU and the MLPs on the NPU.
-   Next: training in the replayer (RHS inference, the NPU training graphs, gradient scatter and the
-   optimizers), frame after frame; zero-copy tiles; the prefix sums on the GPU; the cluster-reuse cone
-   trace; a moving camera.
+3. Bake and replay. Done: the bake; the replayer rendering the baked frame on the PC and on the phone
+   in agreement with Falcor, with the grid lookups on the GPU and the MLPs on the NPU; online training
+   in the replayer, frame after frame, with the MLP gradients on the NPU, the grids trained on the GPU
+   and the result in agreement with Falcor's training (above).
+   Next: tiles shared by Vulkan and NNRt instead of copied; the prefix sums on the GPU; sample counts
+   for the phone; the cluster-reuse cone trace; a moving camera; the training schedule.
 4. The HarmonyOS app: platform layer, NNRt backend, zero-copy buffers, frame synchronisation, cross-frame
    training; then performance.

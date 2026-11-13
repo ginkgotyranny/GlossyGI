@@ -109,6 +109,7 @@ namespace
     const char kEnvColorEncoding[] = "envColorEncoding";
     const char kUseNEE[] = "useNEE";
     const char kDiffTrainOnGlossy[] = "diffTrainOnGlossy";
+    const char kRandomTrainDir[] = "randomTrainDir";
     const char kRhsGlossyBounces[] = "rhsGlossyBounces";
     const char kEnableTrainSchedule[] = "enableTrainSchedule";
     const char kTrainLrHot[] = "trainLrHot";
@@ -217,6 +218,8 @@ NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) :
             mUseNEE = value;
         else if (key == kDiffTrainOnGlossy)
             mDiffTrainOnGlossy = value;
+        else if (key == kRandomTrainDir)
+            mRandomTrainDir = value;
         else if (key == kRhsGlossyBounces)
             mRhsGlossyBounces = value;
         else if (key == kEnableTrainSchedule)
@@ -326,6 +329,7 @@ Properties NeuralRadiosity::getProperties() const
     props[kEnvColorEncoding] = mEnvColorEncoding;
     props[kUseNEE] = mUseNEE;
     props[kDiffTrainOnGlossy] = mDiffTrainOnGlossy;
+    props[kRandomTrainDir] = mRandomTrainDir;
     props[kRhsGlossyBounces] = mRhsGlossyBounces;
     props[kEnableTrainSchedule] = mEnableTrainSchedule;
     props[kTrainLrHot] = mTrainLrHot;
@@ -2147,6 +2151,7 @@ DefineList NeuralRadiosity::getShaderDefines(const RenderData& renderData) const
     defines.add("NUM_RHS", std::to_string(mNumRHS));
     // Add random smooth parameters
     defines.add("RS_RR_PROB", std::to_string(mRSRRProb));
+    defines.add("RS_RANDOM_WI", mRandomTrainDir ? "1" : "0");
     // Setup ray flags.
     RayFlags rayFlags = RayFlags::None;
     if (mForceCullMode && mCullMode == RasterizerState::CullMode::Front)

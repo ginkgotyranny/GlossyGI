@@ -61,6 +61,7 @@ def real_configurations(folder):
         rows = dump[f"train_{name}_input"][:batch].astype(np.float32)
         target = np.zeros((batch, ref.OUTPUT_PAD), dtype=np.float32)
         target[:, :ref.OUTPUT_DIM] = dump[f"train_{name}_target"][:batch]
+        target[:, graphs.MASK_CHANNEL] = 1.0
         model.inputs = kernels(dump[f"before_{name}_params_half"], layers) + [
             torch.from_numpy(ref.rows_to_planar(rows)), torch.from_numpy(ref.rows_to_planar(target))]
         return model
@@ -85,6 +86,8 @@ def configurations():
         "ncr_diff_inf_512x512": lambda: graphs.Inference(D, 512, 512),
         "ncr_spec_inf_512x512": lambda: graphs.Inference(S, 512, 512),
         "ncr_diff_train_4096": lambda: graphs.Training(D, 4096),
+        "ncr_diff_train_8192": lambda: graphs.Training(D, 8192),
+        "ncr_diff_train_16384": lambda: graphs.Training(D, 16384),
         "ncr_spec_train_2048": lambda: graphs.Training(S, 2048),
         "ncr_spec_train_4096": lambda: graphs.Training(S, 4096),
         "ncr_spec_train_8192": lambda: graphs.Training(S, 8192),

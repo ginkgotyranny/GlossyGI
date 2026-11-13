@@ -10,6 +10,9 @@
 //   data/*.bin         the contents of every buffer and texture those passes had bound (the scene's
 //                      geometry, materials and lights, and this pass's own buffers as they are at the
 //                      end of the frame, which serve as reference results), and their uniform blocks.
+//   before.ckpt, after.ckpt   the model before and after the frame (NRCK checkpoints). A frame that
+//                      trains is replayed from before.ckpt; a bake of frame 0 starts, like the replay,
+//                      with fresh optimizer moments, so after.ckpt is what the replay should arrive at.
 //   bake.txt           the index, one record per line, fields separated by spaces:
 //       frame <width> <height> <frameCount>
 //       pass <Pass> <groupSizeX> <groupSizeY> <groupSizeZ>
@@ -385,6 +388,8 @@ void NeuralRadiosity::bakeBegin()
     }
     gBaker = std::make_unique<Baker>(mpDevice.get(), gBake.dir);
     gBaker->record("frame {} {} {}", mFrameDim.x, mFrameDim.y, mFrameCount);
+    if (mpNRModel)
+        mpNRModel->saveState((gBake.dir / "before.ckpt").string());
 }
 
 void NeuralRadiosity::executePass(RenderContext* pRenderContext, const ref<ComputePass>& pPass, const char* name, const uint3& dims)
@@ -453,6 +458,13 @@ void NeuralRadiosity::bakeExport(RenderContext* pRenderContext)
     baker.record("value numSpecRays {}", mNumSpecRays);
     baker.record("value numRHS {}", mNumRHS);
     baker.record("value clusterReuse {}", useClusterReuse() ? 1 : 0);
+    if (mpNRModel)
+    {
+        // The optimizer settings the frame's training step ran with (the training schedule sets them).
+        baker.record("value train.learningRate {}", mpNRModel->learningRate());
+        baker.record("value train.emaDecay {}", mpNRModel->emaDecay());
+        mpNRModel->saveState((gBake.dir / "after.ckpt").string());
+    }
 
     baker.writeResources(pRenderContext);
 

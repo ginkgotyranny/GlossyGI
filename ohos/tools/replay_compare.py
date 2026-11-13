@@ -65,8 +65,8 @@ def main():
     failures = 0
     rows = []
     for file in sorted(os.listdir(arguments[1])):
-        if not file.endswith(".bin"):
-            continue
+        if not file.endswith(".bin") or not file.startswith(("texture", "buffer")):
+            continue   # e.g. the tensors of a training step, which train_check.py reads
         kind = "texture" if file.startswith("texture") else "buffer"
         id_ = int(file[len(kind):-4])
         reference = np.fromfile(os.path.join(arguments[0], "data", file), dtype=np.uint8)

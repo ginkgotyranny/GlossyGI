@@ -68,7 +68,7 @@ struct RandomSmooth
     static const float kSpecularRoughnessThreshold = SPECULAR_ROUGHNESS_THRESHOLD;
     static const uint kRandomBase = 2654435761u;
     static const float kRSRRProb = RS_RR_PROB;
-    static const bool kRandomWi = true;
+    static const bool kRandomWi = RS_RANDOM_WI;
 
     uint batchSize = 0;
     uint batchCount = 0;

@@ -51,6 +51,7 @@ def main():
     rows = dump["train_spec_input"][:int(dump.scalars["spec_size"])].astype(np.float64)
     target = np.zeros((rows.shape[0], ref.OUTPUT_PAD))
     target[:, :ref.OUTPUT_DIM] = dump["train_spec_target"][:rows.shape[0]]
+    target[:, graphs.MASK_CHANNEL] = 1.0
     x_all = torch.from_numpy(ref.rows_to_planar(rows))
     t_all = torch.from_numpy(ref.rows_to_planar(target))
     print(f"{rows.shape[0]} specular samples, target radiance up to {target.max():.1f}, {steps} steps of {BATCH}")

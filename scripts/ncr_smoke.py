@@ -15,7 +15,9 @@ The clock is paused and stepped manually so results are deterministic per frame 
 import os
 from falcor import *
 
-out_dir = os.environ.get("NCR_SMOKE_OUT", "ncr_smoke_out")
+# Absolute: Mogwai resolves a relative capture directory against the executable's directory, not
+# the working directory, and aborts when the image writer cannot create its file there.
+out_dir = os.path.abspath(os.environ.get("NCR_SMOKE_OUT", "ncr_smoke_out"))
 frames = [int(f) for f in os.environ.get("NCR_SMOKE_FRAMES", "30,90").split(",")]
 res = os.environ.get("NCR_SMOKE_RES", "640x360").lower().split("x")
 props = eval(os.environ.get("NCR_SMOKE_PROPS", "{}"))

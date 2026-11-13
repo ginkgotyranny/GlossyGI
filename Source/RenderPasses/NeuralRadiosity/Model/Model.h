@@ -72,6 +72,8 @@ public:
     /// Takes effect on the next train() step. Adam keeps its moments and the EMA
     /// keeps its weights, so changing them mid-run is continuous.
     void setOptimizerHyperparams(float learningRate, float emaDecay);
+    float learningRate() const { return mLearningRate; }
+    float emaDecay() const { return mEmaDecay; }
 
     void inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
     void train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);

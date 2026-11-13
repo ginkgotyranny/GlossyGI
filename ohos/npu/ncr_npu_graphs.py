@@ -23,6 +23,7 @@ LOSS_EPS = 0.01       # RelativeL2Luminance: luminance^2 + 0.01
 LOSS_SCALE = 128.0    # tcnn::default_loss_scale<__half>()
 OUTPUT_DIM = 4        # NCR_OUTPUT_DIM: channels supervised by the loss
 OUTPUT_PAD = 16       # FullyFusedMLP pads the output layer to 16
+MASK_CHANNEL = 15     # channel of the target tensor that says whether the sample counts (1) or is padding (0)
 MASK_EPS = 1e-4       # ReLU derivative as a / (a + eps); representable in fp16
 
 
@@ -116,9 +117,13 @@ class Inference(nn.Module):
 
 class Training(nn.Module):
     """One training step's gradients, written by hand (the NPU has no autograd).
-    Inputs: w0..wk; x (1, Cin, N, 1); target (1, 16, N, 1), channels >= OUTPUT_DIM unused.
+    Inputs: w0..wk; x (1, Cin, N, 1); target (1, 16, N, 1): the radiance in channels 0..OUTPUT_DIM-1
+    and in channel MASK_CHANNEL a weight, 1 for a sample and 0 for padding. A batch is cut into
+    chunks of N samples, the graph's fixed size, and the rows of the last chunk beyond the batch
+    must not contribute.
     Outputs: g_w0..g_wk in the weight layout, and g_x (1, Cin, N, 1): the loss gradient with respect
     to the network input, of which the GPU scatters the encoding channels into the hash grids.
+    The loss is normalised by this chunk's N; the caller rescales by N / (rows of the whole batch).
     All gradients carry the factor LOSS_SCALE, as in tiny-cuda-nn; the optimizer divides it out."""
 
     def __init__(self, spec, batch, mask="div"):
@@ -132,7 +137,9 @@ class Training(nn.Module):
             self.inputs.append((torch.rand(cout, cin, 1, 1) - 0.5) * 0.5)
             self.input_names.append(f"w{i}")
             self.output_names.append(f"g_w{i}")
-        self.inputs += [torch.rand(1, spec.input_dim, batch, 1), torch.rand(1, OUTPUT_PAD, batch, 1)]
+        target = torch.rand(1, OUTPUT_PAD, batch, 1)
+        target[:, MASK_CHANNEL] = (torch.rand(batch, 1) > 0.2).float()
+        self.inputs += [torch.rand(1, spec.input_dim, batch, 1), target]
         self.input_names += ["x", "target"]
         self.output_names.append("g_x")
 
@@ -140,8 +147,11 @@ class Training(nn.Module):
         luminance[0, :3, 0, 0] = torch.tensor([0.299, 0.587, 0.114])
         supervised = torch.zeros(1, OUTPUT_PAD, 1, 1)
         supervised[0, :OUTPUT_DIM] = 1.0
+        mask = torch.zeros(1, OUTPUT_PAD, 1, 1)
+        mask[0, MASK_CHANNEL] = 1.0
         self.register_buffer("luminance_kernel", luminance)
         self.register_buffer("supervised", supervised)
+        self.register_buffer("mask_kernel", mask)
 
     def forward(self, inputs):
         n_layers = len(self.shapes)
@@ -157,7 +167,8 @@ class Training(nn.Module):
 
         luminance = F.conv2d(y, self.luminance_kernel)                 # (1, 1, N, 1)
         scale = 2.0 * LOSS_SCALE / (self.batch * OUTPUT_DIM)
-        g = (y - target) * self.supervised * scale / (luminance * luminance + LOSS_EPS)
+        mask = F.conv2d(target, self.mask_kernel)                      # (1, 1, N, 1): picks the weight channel
+        g = (y - target) * self.supervised * scale / (luminance * luminance + LOSS_EPS) * mask
         g = g * dy_dz                                                  # dL/dz of the output layer
 
         gradients = [None] * n_layers
@@ -184,6 +195,7 @@ def reference_gradients(spec, weights, x, target):
     luminance = (0.299 * y[:, 0:1] + 0.587 * y[:, 1:2] + 0.114 * y[:, 2:3]).detach()
     n_total = x.shape[2] * x.shape[3] * OUTPUT_DIM
     difference = y[:, :OUTPUT_DIM] - target[:, :OUTPUT_DIM]
-    loss = LOSS_SCALE * (difference * difference / (luminance * luminance + LOSS_EPS)).sum() / n_total
+    weight = target[:, MASK_CHANNEL:MASK_CHANNEL + 1]
+    loss = LOSS_SCALE * (weight * difference * difference / (luminance * luminance + LOSS_EPS)).sum() / n_total
     loss.backward()
     return [w.grad for w in weights] + [x.grad]

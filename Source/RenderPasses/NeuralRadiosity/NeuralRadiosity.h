@@ -437,6 +437,9 @@ private:
     /// itself what makes it collapse. When off, an RHS path still on a glossy surface
     /// after mRhsGlossyBounces ends there instead of querying the untrained network.
     bool mDiffTrainOnGlossy = false;
+    /// RandomSmooth gives a training sample a random direction instead of the direction the path
+    /// arrived with. Off: every sample is shaded from the side it was reached from (`randomTrainDir`).
+    bool mRandomTrainDir = true;
     /// Enable spatiotemporal cluster reuse on the render path. When off, the render
     /// path falls back to the original per-frame group-wide K-Means cone trace.
     bool mEnableRenderSpecTemporalReuse = NCR_ENABLE_CLUSTER_REUSE != 0;

@@ -3,8 +3,10 @@
 // The NCR passes write one row of fp16 values per sample (NetworkParams.slang: DiffNetInput 32 values,
 // SpecNetInput 64), with the encoding channels still empty; on the desktop a CUDA kernel fills those
 // in place. The NPU takes channel-planar tensors of a fixed shape instead: tiles of TILE samples,
-// (1, C, TILE_H, TILE_W), channel c of sample n at ((n / TILE) * C + c) * TILE + n % TILE.
-// This pass does both: it copies a row into its tile and writes the encodings there.
+// channel c of sample n at ((n / TILE) * C + c) * TILE + n % TILE. The inference graphs take tiles
+// of 65,536 samples, (1, C, 256, 256); the training graphs smaller ones, (1, C, TILE, 1).
+// This pass does both: it copies a row into its tile and writes the encodings there. Which grids
+// it reads is the caller's choice: the EMA copies for inference, the training copies for training.
 //
 // Compiled twice: SPECULAR=0 for DiffNet (primary grid), SPECULAR=1 for SpecNet (primary grid and
 // the four cluster lookups).
@@ -14,7 +16,6 @@ import HashGrid;
 #define SPECULAR 0
 #endif
 
-static const uint kTile = 65536;                 // samples per NPU tile (256 x 256)
 #if SPECULAR
 static const uint kChannels = 64;                // SpecNetInput::paddedDim
 static const uint kPosOffset = 28;               // after the primary (12) and cluster (16) encodings
@@ -31,6 +32,7 @@ struct Params
 {
     uint count;      // samples
     uint rowBase;    // index of the first value of the first row in gRows (the diffuse rows of a shared buffer start after the specular ones)
+    uint tileShift;  // log2 of the samples per tile
 };
 [[vk::push_constant]] ConstantBuffer<Params> gParams;
 
@@ -46,7 +48,8 @@ float16_t row(uint n, uint channel)
 
 uint tileIndex(uint n, uint channel)
 {
-    return ((n / kTile) * kChannels + channel) * kTile + n % kTile;
+    const uint tile = 1u << gParams.tileShift;
+    return (((n >> gParams.tileShift) * kChannels + channel) << gParams.tileShift) + (n & (tile - 1));
 }
 
 #if SPECULAR
