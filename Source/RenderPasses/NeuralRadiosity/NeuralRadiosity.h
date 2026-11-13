@@ -336,6 +336,7 @@ private:
     void clearRenderTemporalHistory(RenderContext* pRenderContext);
     void resetTrainSchedule();
     void updateTrainSchedule();
+    void logTrainSchedule(uint32_t events, bool heatRaised, float lr, float emaDecay);
     void bindScreenData(ShaderVar& var, const RenderData& renderData, const std::string &name);
     void bindPrefiltEnv(ShaderVar& var);
     void bindRayBatchData(ShaderVar& var, std::shared_ptr<RayBatchBuffer> pRayBatch, const std::string &name);
@@ -379,6 +380,9 @@ private:
     /// h starts at 1, holds for mTrainWarmupFrames, then relaxes toward 0 with time
     /// constant mTrainCoolFrames. Camera motion pulls it up to mTrainCameraHeat and
     /// scene changes to mTrainSceneHeat, held mTrainHoldFrames after the last event.
+    /// While the camera is fixed, scene changes are graded instead (local addition):
+    /// discrete edits mTrainSceneHeat, moving lights mTrainLightMotionHeat, moving
+    /// non-emissive geometry only mTrainObjectMotionHeat.
     ///
     /// Tuned on the 10 eval scenes (static 2400 frames, animation, stop 600 frames,
     /// vs ptdn 4096 spp): flicker between frames halves (static and after stopping);
@@ -398,6 +402,19 @@ private:
     float mTrainHeat = 1.f;
     uint32_t mTrainHoldLeft = 600;
     IScene::UpdateFlags mPendingSceneUpdates = IScene::UpdateFlags::None;
+    /// Fixed-camera targets (local addition, not in the Linux snapshots). Moving lights
+    /// (analytic, or emissive geometry) change radiance everywhere they reach, so they
+    /// stay warm enough to keep up. With only non-emissive geometry moving, most of the
+    /// image is unaffected and should settle; the moving objects' own shading, shadows
+    /// and reflections lag more (EMA half-life ~50 frames at 0.2).
+    float mTrainLightMotionHeat = 0.7f;
+    float mTrainObjectMotionHeat = 0.2f;
+    /// Schedule log (local addition, not in the Linux snapshots): every this many
+    /// training frames, and on the frame an event raises the heat, print frame, heat,
+    /// hold/cooling, LR, EMA decay and the events seen since the previous line. 0 = off.
+    uint32_t mTrainHeatLogInterval = 30;
+    uint32_t mTrainHeatLogFramesLeft = 0;
+    uint32_t mTrainHeatLogEvents = 0;
     /// SampleRHS::maxGlossyBounces: glossy RHS hits continue along a BSDF sample (with
     /// NEE at each) up to this many times before the diffuse network is queried.
     /// With 0 the diffuse network must also represent glossy, view-dependent radiance;

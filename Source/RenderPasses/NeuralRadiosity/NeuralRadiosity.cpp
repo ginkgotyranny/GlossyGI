@@ -120,11 +120,20 @@ namespace
     const char kTrainCoolFrames[] = "trainCoolFrames";
     const char kTrainCameraHeat[] = "trainCameraHeat";
     const char kTrainSceneHeat[] = "trainSceneHeat";
+    const char kTrainLightMotionHeat[] = "trainLightMotionHeat";
+    const char kTrainObjectMotionHeat[] = "trainObjectMotionHeat";
+    const char kTrainHeatLogInterval[] = "trainHeatLogInterval";
     // Headless / scripted control: initial render mode, checkpoint auto-load, training schedule.
     const char kRenderMode[] = "renderMode";
     const char kLoadModelPath[] = "loadModelPath";
     const char kTotalTrainSteps[] = "totalTrainSteps";
     const char kSaveCkptInterval[] = "saveCkptInterval";
+
+    // Training-schedule event classes (bit mask), as graded and logged by updateTrainSchedule().
+    constexpr uint32_t kTrainEventCamera = 1u << 0;
+    constexpr uint32_t kTrainEventEdit = 1u << 1;
+    constexpr uint32_t kTrainEventLight = 1u << 2;
+    constexpr uint32_t kTrainEventObject = 1u << 3;
 
     float3 parseFloat3(const nlohmann::json& value, std::string_view key)
     {
@@ -230,6 +239,12 @@ NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) :
             mTrainCameraHeat = value;
         else if (key == kTrainSceneHeat)
             mTrainSceneHeat = value;
+        else if (key == kTrainLightMotionHeat)
+            mTrainLightMotionHeat = value;
+        else if (key == kTrainObjectMotionHeat)
+            mTrainObjectMotionHeat = value;
+        else if (key == kTrainHeatLogInterval)
+            mTrainHeatLogInterval = value;
         else if (key == kEnableClusterSpatialReuse)
             mEnableClusterSpatialReuse = value;
         else if (key == kUseReferenceConeTrace)
@@ -322,6 +337,9 @@ Properties NeuralRadiosity::getProperties() const
     props[kTrainCoolFrames] = mTrainCoolFrames;
     props[kTrainCameraHeat] = mTrainCameraHeat;
     props[kTrainSceneHeat] = mTrainSceneHeat;
+    props[kTrainLightMotionHeat] = mTrainLightMotionHeat;
+    props[kTrainObjectMotionHeat] = mTrainObjectMotionHeat;
+    props[kTrainHeatLogInterval] = mTrainHeatLogInterval;
     props[kTotalTrainSteps] = mTotalTrainSteps;
     props[kSaveCkptInterval] = mSaveCKPTInterval;
     if (!mLoadModelPath.empty()) props[kLoadModelPath] = mLoadModelPath;
@@ -492,6 +510,9 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
         group.checkbox("Enable", mEnableTrainSchedule);
         group.tooltip("Off: always train with the hot learning rate and EMA decay.");
         group.text(fmt::format("Heat {:.2f}  hold {}", mTrainHeat, mTrainHoldLeft));
+        group.var("Log every N frames", mTrainHeatLogInterval, 0u, 10000u);
+        group.tooltip("Print heat, hold/cooling, LR, EMA decay and the events seen to the log every N training frames,\n"
+                      "and at once when a camera or scene event raises the heat. 0 = off.");
         group.var("LR hot", mTrainLrHot, 1e-5f, 1e-1f, 1e-4f, false, "%.5f");
         group.var("LR cold", mTrainLrCold, 1e-5f, 1e-1f, 1e-4f, false, "%.5f");
         group.var("EMA hot", mTrainEmaHot, 0.f, 0.9999f, 0.001f, false, "%.4f");
@@ -505,7 +526,13 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
         group.var("Camera heat", mTrainCameraHeat, 0.f, 1.f, 0.05f);
         group.tooltip("Heat while the camera moves. The network is world-space, so this only speeds up newly seen regions.");
         group.var("Scene heat", mTrainSceneHeat, 0.f, 1.f, 0.05f);
-        group.tooltip("Heat while geometry, lights, materials or the environment change.");
+        group.tooltip("Heat on discrete scene edits (materials, light parameters, environment, added or removed geometry),\n"
+                      "and on any scene change while the camera moves.");
+        group.var("Light motion heat", mTrainLightMotionHeat, 0.f, 1.f, 0.05f);
+        group.tooltip("Camera fixed: heat while lights move (analytic lights, or emissive geometry).");
+        group.var("Object motion heat", mTrainObjectMotionHeat, 0.f, 1.f, 0.05f);
+        group.tooltip("Camera fixed: heat while only non-emissive geometry moves.\n"
+                      "Lower settles the rest of the image; the moving objects' own lighting then lags more.");
         if (group.button("Reset schedule")) resetTrainSchedule();
     }
 
@@ -683,6 +710,9 @@ void NeuralRadiosity::resetTrainSchedule()
     mTrainHeat = 1.f;
     mTrainHoldLeft = mTrainWarmupFrames;
     mPendingSceneUpdates = IScene::UpdateFlags::None;
+    // Print on the first training frame after a reset.
+    mTrainHeatLogFramesLeft = 0;
+    mTrainHeatLogEvents = 0;
 }
 
 void NeuralRadiosity::updateTrainSchedule()
@@ -694,27 +724,59 @@ void NeuralRadiosity::updateTrainSchedule()
     if (!mEnableTrainSchedule)
     {
         mpNRModel->setOptimizerHyperparams(mTrainLrHot, mTrainEmaHot);
+        logTrainSchedule(0, false, mTrainLrHot, mTrainEmaHot);
         return;
     }
 
-    // Changes to what the network must represent. Radiance changes everywhere the
-    // moved object or light is seen, so these go fully hot.
-    const F sceneChange = F::GeometryMoved | F::LightsMoved | F::LightIntensityChanged | F::LightPropertiesChanged |
-                          F::LightCollectionChanged | F::LightCountChanged | F::MaterialsChanged | F::EmissiveMaterialsChanged |
-                          F::EnvMapChanged | F::EnvMapPropertiesChanged | F::GeometryChanged | F::MeshesChanged |
-                          F::DisplacementChanged | F::SDFGeometryChanged | F::CurvesMoved | F::CustomPrimitivesMoved;
+    // Changes to what the network must represent, split by what changed (local
+    // addition; ver4 sent all of them to mTrainSceneHeat). Together they are the
+    // same flag set as ver4's.
+    // One-off edits.
+    const F editChange = F::LightIntensityChanged | F::LightPropertiesChanged | F::LightCountChanged | F::MaterialsChanged |
+                         F::EmissiveMaterialsChanged | F::EnvMapChanged | F::EnvMapPropertiesChanged | F::GeometryChanged |
+                         F::DisplacementChanged | F::SDFGeometryChanged;
+    // Moving lights. Analytic lights raise LightsMoved. For emissive geometry the scene
+    // raises LightCollectionChanged (only when a mesh light's transform changed) next
+    // to GeometryMoved.
+    const F lightMotion = F::LightsMoved | F::LightCollectionChanged;
+    // Moving geometry. GeometryMoved is raised for every animated instance, emissive or not.
+    const F objectMotion = F::GeometryMoved | F::MeshesChanged | F::CurvesMoved | F::CustomPrimitivesMoved;
+    const F sceneChange = editChange | lightMotion | objectMotion;
     // The radiance field is in world space, so camera motion changes nothing it
     // has learned. It only exposes regions that have had little training.
     const F cameraChange = F::CameraMoved | F::CameraSwitched | F::CameraPropertiesChanged;
 
-    float target = 0.f;
-    if (is_set(updates, cameraChange)) target = std::max(target, mTrainCameraHeat);
-    if (is_set(updates, sceneChange)) target = std::max(target, mTrainSceneHeat);
+    uint32_t events = 0;
+    if (is_set(updates, cameraChange)) events |= kTrainEventCamera;
+    if (is_set(updates, editChange)) events |= kTrainEventEdit;
+    if (is_set(updates, lightMotion)) events |= kTrainEventLight;
+    if (is_set(updates, objectMotion)) events |= kTrainEventObject;
 
+    float target = 0.f;
+    if ((events & kTrainEventCamera) != 0)
+    {
+        // Camera moving: ver4 behavior, any scene change goes to mTrainSceneHeat.
+        target = mTrainCameraHeat;
+        if (is_set(updates, sceneChange)) target = std::max(target, mTrainSceneHeat);
+    }
+    else
+    {
+        // Camera fixed: grade scene changes so the image can settle while only
+        // non-emissive geometry moves, and stays warm enough to follow moving lights.
+        if ((events & kTrainEventEdit) != 0) target = std::max(target, mTrainSceneHeat);
+        if ((events & kTrainEventLight) != 0) target = std::max(target, mTrainLightMotionHeat);
+        if ((events & kTrainEventObject) != 0) target = std::max(target, mTrainObjectMotionHeat);
+    }
+
+    const float prevHeat = mTrainHeat;
     if (target >= mTrainHeat && target > 0.f)
     {
         mTrainHeat = target;
-        mTrainHoldLeft = std::max(mTrainHoldLeft, mTrainHoldFrames);
+        // Keep a longer pending hold (the warmup) counting down while events repeat
+        // (local fix). ver4 froze it here, so a camera path over an animated scene kept
+        // the whole warmup pending until the camera stopped. Same as ver4 for holds up
+        // to mTrainHoldFrames.
+        mTrainHoldLeft = std::max(mTrainHoldLeft > 0 ? mTrainHoldLeft - 1 : 0u, mTrainHoldFrames);
     }
     else if (mTrainHoldLeft > 0)
     {
@@ -733,6 +795,40 @@ void NeuralRadiosity::updateTrainSchedule()
     const float lr = mTrainLrCold * std::pow(mTrainLrHot / mTrainLrCold, h);
     const float oneMinusDecay = (1.f - mTrainEmaCold) * std::pow((1.f - mTrainEmaHot) / (1.f - mTrainEmaCold), h);
     mpNRModel->setOptimizerHyperparams(lr, 1.f - oneMinusDecay);
+    logTrainSchedule(events, mTrainHeat > prevHeat, lr, 1.f - oneMinusDecay);
+}
+
+void NeuralRadiosity::logTrainSchedule(uint32_t events, bool heatRaised, float lr, float emaDecay)
+{
+    if (mTrainHeatLogInterval == 0) return;
+    // Events are reported for the whole span since the previous line, not just this frame.
+    mTrainHeatLogEvents |= events;
+    if (mTrainHeatLogFramesLeft > 0 && !heatRaised)
+    {
+        mTrainHeatLogFramesLeft--;
+        return;
+    }
+
+    std::string state = "cooling";
+    if (!mEnableTrainSchedule) state = "off";
+    else if (mTrainHoldLeft > 0) state = fmt::format("hold {}", mTrainHoldLeft);
+    static const std::pair<uint32_t, const char*> kEventNames[] = {
+        {kTrainEventCamera, "camera"}, {kTrainEventEdit, "edit"}, {kTrainEventLight, "light"}, {kTrainEventObject, "object"}};
+    std::string eventNames;
+    for (const auto& [bit, name] : kEventNames)
+    {
+        if ((mTrainHeatLogEvents & bit) == 0) continue;
+        if (!eventNames.empty()) eventNames += '+';
+        eventNames += name;
+    }
+    if (eventNames.empty()) eventNames = "none";
+    // With the schedule off the hot values are in use, i.e. an effective heat of 1.
+    const float heat = mEnableTrainSchedule ? mTrainHeat : 1.f;
+    logInfo("[TrainSchedule] frame {:>6}  heat {:.3f}  {:<9}  lr {:.2e}  ema {:.4f}  events {}{}", mFrameCount, heat, state, lr,
+            emaDecay, eventNames, heatRaised ? "  <- raised" : "");
+
+    mTrainHeatLogFramesLeft = mTrainHeatLogInterval - 1;
+    mTrainHeatLogEvents = 0;
 }
 
 void NeuralRadiosity::render(RenderContext* pRenderContext, const RenderData& renderData)
