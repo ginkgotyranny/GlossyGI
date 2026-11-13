@@ -2,28 +2,34 @@
 //
 // The phone has neither Falcor nor a shader compiler. It replays the compute passes of this render
 // pass from what Falcor compiled and bound on the desktop. With the environment variable
-// NCR_BAKE_DIR set (Vulkan backend), frame NCR_BAKE_FRAME (default 5) writes into that directory:
+// NCR_BAKE_DIR set (Vulkan backend), frame NCR_BAKE_FRAME (default 5) is recorded as it executes
+// and written into that directory:
 //
-//   spirv/<Pass>.spv   the SPIR-V of every compute pass, as compiled for the loaded scene and the
-//                      current settings. The modules name their bindings by shader path.
-//   data/*.bin         the contents of every buffer and texture those passes have bound (the scene's
+//   spirv/<Pass>.spv   the SPIR-V of every compute pass that ran, as compiled for the loaded scene
+//                      and the current settings. The modules name their bindings by shader path.
+//   data/*.bin         the contents of every buffer and texture those passes had bound (the scene's
 //                      geometry, materials and lights, and this pass's own buffers as they are at the
 //                      end of the frame, which serve as reference results), and their uniform blocks.
 //   bake.txt           the index, one record per line, fields separated by spaces:
 //       frame <width> <height> <frameCount>
 //       pass <Pass> <groupSizeX> <groupSizeY> <groupSizeZ>
+//       uniform <Pass> <blockPath> <memberPath> <byteOffset> <byteSize>   layout of the uniform blocks
+//     the frame, in execution order (<k> counts calls and host steps together):
+//       call <k> <Pass> <dimX> <dimY> <dimZ>          one execution; group counts are dims / group size, rounded up
+//       cbind <k> <path> <index> buffer|texture|sampler <id>           what that execution had bound; <index> is the array element
+//       cbind <k> <path> <index> uniform <bytes> <file>                the uniform block of a parameter block, as it was then
+//       cbind <k> <path> <index> accel | null
+//       host <k> clearcounts <batch>                  what Falcor does between passes on the CPU or in CUDA:
+//       host <k> prefixsum <batch> diff|spec <elementCount>             exclusive scan of the index buffer, total into counts
+//       host <k> infer <batch> | train <batch>                          network inference / one training step on that batch
+//     resources:
 //       buffer <id> <bytes> <structSize> <elementCount>                    contents in data/buffer<id>.bin
 //       texture <id> <type> <format> <width> <height> <depth> <mips> <layers>
 //                                         contents in data/texture<id>.bin: for each layer, for each mip
 //       sampler <id> <min> <mag> <mip> <addressU> <addressV> <addressW> <maxAnisotropy> <lodBias>
 //               <minLod> <maxLod> <comparison> <borderR> <borderG> <borderB> <borderA>
-//       bind <Pass> <path> <index> buffer|texture|sampler <id>          <index> is the array element
-//       bind <Pass> <path> <index> uniform <bytes> <file>               the uniform block of a parameter block
-//       bind <Pass> <path> <index> accel | null
-//       uniform <Pass> <blockPath> <memberPath> <byteOffset> <byteSize>  layout of the uniform blocks
-//       named <name> buffer <id>                 the buffers of the three ray batches, by role: the passes are
-//                                                rebound to a different batch at each call site
-//       value <name> <number>                    sizes and switches of the batches at the baked frame
+//       named <batch>.<member> buffer <id>       the buffers of the ray batches (render, lhs, rhs, dummy) by role
+//       value <name> <number>                    sizes and switches at the baked frame
 //       geometry <globalInstanceID> <tlasInstance> <geometryIndex> <meshID> <materialID> <vbOffset>
 //                <ibOffset> <vertexCount> <indexCount> <index16> <frontFaceCW> <opaque> <12 floats: 3x4 transform>
 //
@@ -38,6 +44,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <set>
 
 namespace
@@ -95,8 +102,7 @@ Resource* boundResource(const ShaderVar& var)
 class Baker
 {
 public:
-    Baker(Device* pDevice, RenderContext* pRenderContext, const std::filesystem::path& dir)
-        : mpDevice(pDevice), mpRenderContext(pRenderContext), mDir(dir)
+    Baker(Device* pDevice, const std::filesystem::path& dir) : mpDevice(pDevice), mDir(dir)
     {
         std::filesystem::create_directories(mDir / "data");
         mIndex.open(mDir / "bake.txt", std::ios::trunc);
@@ -108,22 +114,74 @@ public:
         mIndex << fmt::format(format, std::forward<Args>(args)...) << std::endl;
     }
 
-    /// Records a buffer under a role name (and dumps it, if no pass had it bound).
+    /// A host-side step between passes.
+    void host(const std::string& what) { record("host {} {}", mStep++, what); }
+
+    /// One execution of a compute pass, with everything it had bound.
+    void call(const std::string& name, const ref<ComputePass>& pPass, const uint3& dims)
+    {
+        mPass = name;
+        mRecordLayout = mPasses.insert(name).second;
+        if (mRecordLayout)
+        {
+            const auto pKernels = pPass->getProgram()->getActiveVersion()->getKernels(mpDevice, pPass->getVars().get());
+            const auto blob = pKernels->getKernel(ShaderType::Compute)->getBlobData();
+            writeFile(mDir / "spirv" / (name + ".spv"), blob.data, blob.size);
+            const uint3 group = pPass->getThreadGroupSize();
+            record("pass {} {} {} {}", name, group.x, group.y, group.z);
+        }
+        mCall = mStep++;
+        record("call {} {} {} {} {}", mCall, name, dims.x, dims.y, dims.z);
+        walk("", "", pPass->getRootVar());
+    }
+
+    /// Records a buffer under a role name.
     void named(const std::string& name, const ref<Buffer>& pBuffer)
     {
         if (pBuffer)
             record("named {} buffer {}", name, bufferId(pBuffer.get()));
     }
 
-    void addPass(const std::string& name, const ref<ComputePass>& pPass)
+    /// The contents of every resource seen, as they are now.
+    void writeResources(RenderContext* pRenderContext)
     {
-        const auto pKernels = pPass->getProgram()->getActiveVersion()->getKernels(mpDevice, pPass->getVars().get());
-        const auto blob = pKernels->getKernel(ShaderType::Compute)->getBlobData();
-        writeFile(mDir / "spirv" / (name + ".spv"), blob.data, blob.size);
-        const uint3 group = pPass->getThreadGroupSize();
-        record("pass {} {} {} {}", name, group.x, group.y, group.z);
-        mPass = name;
-        walk("", "", pPass->getRootVar());
+        for (const auto& [pBuffer, id] : mBuffers)
+        {
+            std::vector<uint8_t> data(pBuffer->getSize());
+            pBuffer->getBlob(data.data(), 0, data.size());
+            writeFile(mDir / fmt::format("data/buffer{}.bin", id), data.data(), data.size());
+            record("buffer {} {} {} {}", id, pBuffer->getSize(), pBuffer->getStructSize(), pBuffer->getElementCount());
+        }
+        for (const auto& [pTexture, id] : mTextures)
+        {
+            const bool cube = pTexture->getType() == Resource::Type::TextureCube;
+            const uint32_t layers = pTexture->getArraySize() * (cube ? 6 : 1);
+            std::ofstream f(mDir / fmt::format("data/texture{}.bin", id), std::ios::binary);
+            for (uint32_t layer = 0; layer < layers; ++layer)
+            {
+                for (uint32_t mip = 0; mip < pTexture->getMipCount(); ++mip)
+                {
+                    const std::vector<uint8_t> data = pRenderContext->readTextureSubresource(pTexture, pTexture->getSubresourceIndex(layer, mip));
+                    f.write(reinterpret_cast<const char*>(data.data()), (std::streamsize)data.size());
+                }
+            }
+            const char* type = cube ? "Cube" : pTexture->getType() == Resource::Type::Texture3D ? "3D" : "2D";
+            record(
+                "texture {} {} {} {} {} {} {} {}",
+                id, type, to_string(pTexture->getFormat()), pTexture->getWidth(), pTexture->getHeight(), pTexture->getDepth(),
+                pTexture->getMipCount(), layers
+            );
+        }
+        for (const auto& [pSampler, id] : mSamplers)
+        {
+            const Sampler::Desc& d = pSampler->getDesc();
+            record(
+                "sampler {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+                id, (int)d.minFilter, (int)d.magFilter, (int)d.mipFilter, (int)d.addressModeU, (int)d.addressModeV, (int)d.addressModeW,
+                d.maxAnisotropy, d.lodBias, d.minLod, d.maxLod, (int)d.comparisonFunc, d.borderColor.x, d.borderColor.y, d.borderColor.z,
+                d.borderColor.w
+            );
+        }
     }
 
 private:
@@ -152,7 +210,7 @@ private:
             if (elementKind == ReflectionType::Kind::Resource)
             {
                 for (uint32_t i = 0; i < pArray->getElementCount(); ++i)
-                    resource(path, i, block, var[i]);
+                    resource(path, i, var[i]);
             }
             else if (elementKind == ReflectionType::Kind::Struct && pArray->getElementCount() <= 16)
             {
@@ -169,7 +227,7 @@ private:
             uniform(path, block, var, pType->getByteSize());
             break;
         case ReflectionType::Kind::Resource:
-            resource(path, 0, block, var);
+            resource(path, 0, var);
             break;
         default:
             break;
@@ -178,16 +236,17 @@ private:
 
     void uniform(const std::string& path, const std::string& block, const ShaderVar& var, size_t size)
     {
-        if (block.empty())
+        if (block.empty() || !mRecordLayout)
             return;
         // Member path relative to the block.
         const std::string member = path.size() > block.size() ? path.substr(block.size() + 1) : path;
         record("uniform {} {} {} {} {}", mPass, block, member, var.getByteOffset(), size);
     }
 
-    void resource(const std::string& path, uint32_t index, const std::string& block, const ShaderVar& var)
+    void resource(const std::string& path, uint32_t index, const ShaderVar& var)
     {
         const ReflectionResourceType* pType = var.getType()->asResourceType();
+        const std::string where = fmt::format("cbind {} {} {}", mCall, path, index);
         try
         {
             switch (pType->getType())
@@ -197,9 +256,9 @@ private:
                 Resource* pResource = boundResource(var);
                 ref<Texture> pTexture = pResource ? pResource->asTexture() : nullptr;
                 if (pTexture)
-                    record("bind {} {} {} texture {}", mPass, path, index, textureId(pTexture.get()));
+                    record("{} texture {}", where, textureId(pTexture.get()));
                 else
-                    record("bind {} {} {} null", mPass, path, index);
+                    record("{} null", where);
                 break;
             }
             case ReflectionResourceType::Type::StructuredBuffer:
@@ -209,22 +268,22 @@ private:
                 Resource* pResource = boundResource(var);
                 ref<Buffer> pBuffer = pResource ? pResource->asBuffer() : nullptr;
                 if (pBuffer)
-                    record("bind {} {} {} buffer {}", mPass, path, index, bufferId(pBuffer.get()));
+                    record("{} buffer {}", where, bufferId(pBuffer.get()));
                 else
-                    record("bind {} {} {} null", mPass, path, index);
+                    record("{} null", where);
                 break;
             }
             case ReflectionResourceType::Type::Sampler:
             {
                 ref<Sampler> pSampler = var.getSampler();
                 if (pSampler)
-                    record("bind {} {} {} sampler {}", mPass, path, index, samplerId(pSampler.get()));
+                    record("{} sampler {}", where, samplerId(pSampler.get()));
                 else
-                    record("bind {} {} {} null", mPass, path, index);
+                    record("{} null", where);
                 break;
             }
             case ReflectionResourceType::Type::AccelerationStructure:
-                record("bind {} {} {} accel", mPass, path, index);
+                record("{} accel", where);
                 break;
             case ReflectionResourceType::Type::ConstantBuffer:
             {
@@ -232,16 +291,12 @@ private:
                 ref<ParameterBlock> pBlock = var.getParameterBlock();
                 if (!pBlock)
                 {
-                    record("bind {} {} {} null", mPass, path, index);
+                    record("{} null", where);
                     break;
                 }
                 const size_t size = pBlock->getSize();
                 if (size > 0 && pBlock->getRawData())
-                {
-                    std::string file = fmt::format("data/uniform_{}_{}.bin", mPass, path);
-                    writeFile(mDir / file, pBlock->getRawData(), size);
-                    record("bind {} {} {} uniform {} {}", mPass, path, index, size, file);
-                }
+                    record("{} uniform {} {}", where, size, uniformFile(pBlock->getRawData(), size));
                 walk(path, path, pBlock->getRootVar());
                 break;
             }
@@ -249,9 +304,22 @@ private:
         }
         catch (const std::exception& e)
         {
-            record("bind {} {} {} null", mPass, path, index);
+            record("{} null", where);
             logWarning("NCR bake: {} {}: {}", mPass, path, e.what());
         }
+    }
+
+    /// Uniform blocks with the same bytes share one file (the scene's block is the same in every call).
+    std::string uniformFile(const void* data, size_t size)
+    {
+        const std::string bytes(static_cast<const char*>(data), size);
+        auto it = mUniformFiles.find(bytes);
+        if (it != mUniformFiles.end())
+            return it->second;
+        const std::string file = fmt::format("data/uniform{}.bin", mUniformFiles.size());
+        writeFile(mDir / file, data, size);
+        mUniformFiles[bytes] = file;
+        return file;
     }
 
     uint32_t bufferId(const Buffer* pBuffer)
@@ -261,10 +329,7 @@ private:
             return it->second;
         const uint32_t id = (uint32_t)mBuffers.size();
         mBuffers[pBuffer] = id;
-        std::vector<uint8_t> data(pBuffer->getSize());
-        pBuffer->getBlob(data.data(), 0, data.size());
-        writeFile(mDir / fmt::format("data/buffer{}.bin", id), data.data(), data.size());
-        record("buffer {} {} {} {}", id, pBuffer->getSize(), pBuffer->getStructSize(), pBuffer->getElementCount());
+        mKeepAlive.push_back(ref<const Object>(pBuffer));
         return id;
     }
 
@@ -275,23 +340,7 @@ private:
             return it->second;
         const uint32_t id = (uint32_t)mTextures.size();
         mTextures[pTexture] = id;
-        const bool cube = pTexture->getType() == Resource::Type::TextureCube;
-        const uint32_t layers = pTexture->getArraySize() * (cube ? 6 : 1);
-        std::ofstream f(mDir / fmt::format("data/texture{}.bin", id), std::ios::binary);
-        for (uint32_t layer = 0; layer < layers; ++layer)
-        {
-            for (uint32_t mip = 0; mip < pTexture->getMipCount(); ++mip)
-            {
-                const std::vector<uint8_t> data = mpRenderContext->readTextureSubresource(pTexture, pTexture->getSubresourceIndex(layer, mip));
-                f.write(reinterpret_cast<const char*>(data.data()), (std::streamsize)data.size());
-            }
-        }
-        const char* type = cube ? "Cube" : pTexture->getType() == Resource::Type::Texture3D ? "3D" : "2D";
-        record(
-            "texture {} {} {} {} {} {} {} {}",
-            id, type, to_string(pTexture->getFormat()), pTexture->getWidth(), pTexture->getHeight(), pTexture->getDepth(),
-            pTexture->getMipCount(), layers
-        );
+        mKeepAlive.push_back(ref<const Object>(pTexture));
         return id;
     }
 
@@ -302,71 +351,70 @@ private:
             return it->second;
         const uint32_t id = (uint32_t)mSamplers.size();
         mSamplers[pSampler] = id;
-        const Sampler::Desc& d = pSampler->getDesc();
-        record(
-            "sampler {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
-            id, (int)d.minFilter, (int)d.magFilter, (int)d.mipFilter, (int)d.addressModeU, (int)d.addressModeV, (int)d.addressModeW,
-            d.maxAnisotropy, d.lodBias, d.minLod, d.maxLod, (int)d.comparisonFunc, d.borderColor.x, d.borderColor.y, d.borderColor.z,
-            d.borderColor.w
-        );
+        mKeepAlive.push_back(ref<const Object>(pSampler));
         return id;
     }
 
     Device* mpDevice;
-    RenderContext* mpRenderContext;
     std::filesystem::path mDir;
     std::ofstream mIndex;
     std::string mPass;
+    uint32_t mStep = 0;
+    uint32_t mCall = 0;
+    bool mRecordLayout = false;
+    std::set<std::string> mPasses;
     std::map<const Buffer*, uint32_t> mBuffers;
     std::map<const Texture*, uint32_t> mTextures;
     std::map<const Sampler*, uint32_t> mSamplers;
+    std::map<std::string, std::string> mUniformFiles;
+    std::vector<ref<const Object>> mKeepAlive;
 };
+
+std::unique_ptr<Baker> gBaker;
 } // namespace
 
-void NeuralRadiosity::bakeExport(RenderContext* pRenderContext)
+void NeuralRadiosity::bakeBegin()
 {
     if (!gBake.enabled || gBake.done || mFrameCount != gBake.frame)
         return;
-    gBake.done = true;
     if (mpDevice->getType() != Device::Type::Vulkan)
     {
+        gBake.done = true;
         logWarning("NCR_BAKE_DIR is set, but the bake needs the Vulkan backend (SPIR-V); nothing written.");
         return;
     }
+    gBaker = std::make_unique<Baker>(mpDevice.get(), gBake.dir);
+    gBaker->record("frame {} {} {}", mFrameDim.x, mFrameDim.y, mFrameCount);
+}
+
+void NeuralRadiosity::executePass(RenderContext* pRenderContext, const ref<ComputePass>& pPass, const char* name, const uint3& dims)
+{
+    pPass->execute(pRenderContext, dims);
+    if (gBaker)
+        gBaker->call(name, pPass, dims);
+}
+
+const char* NeuralRadiosity::batchRole(const RayBatchBuffer* pBatch) const
+{
+    return pBatch == mpRenderBatch.get() ? "render" : pBatch == mpTrainLHSBatch.get() ? "lhs" : pBatch == mpTrainRHSBatch.get() ? "rhs" : "dummy";
+}
+
+void NeuralRadiosity::bakeHost(const std::string& step)
+{
+    if (gBaker)
+        gBaker->host(step);
+}
+
+void NeuralRadiosity::bakeExport(RenderContext* pRenderContext)
+{
+    if (!gBaker)
+        return;
+    gBake.done = true;
     // Everything the frame recorded has to be on the GPU before the buffers are read back.
     pRenderContext->submit(true);
+    Baker& baker = *gBaker;
 
-    Baker baker(mpDevice.get(), pRenderContext, gBake.dir);
-    baker.record("frame {} {} {}", mFrameDim.x, mFrameDim.y, mFrameCount);
-
-    const std::pair<const char*, ref<ComputePass>> passes[] = {
-        {"FirstSmoothPass", mpFirstSmoothPass},
-        {"CompactPass", mpCompactPass},
-        {"ResolvePass", mpResolvePass},
-        {"PostFilterPass", mpPostFilterPass},
-        {"PostFXAAPass", mpPostFXAAPass},
-        {"RandomSmooth", mpRandomSmooth},
-        {"SampleRHS", mpSampleRHS},
-        {"ResolveRHS", mpResolveRHS},
-        {"CompactBatch", mpCompactBatch},
-        {"ResolveBatch", mpResolveBatch},
-        {"ConeTrace", mpConeTrace},
-        {"SpecPrimary", mpSpecPrimary},
-        {"ClusterReproject", mpClusterReproject},
-        {"ConeTraceScreen", mpConeTraceScreen},
-        {"ClusterSpatialReuse", mpClusterSpatialReuse},
-    };
-    uint32_t written = 0;
-    for (const auto& [name, pPass] : passes)
-    {
-        if (!pPass)
-            continue;
-        baker.addPass(name, pPass);
-        ++written;
-    }
-
-    // The ray batches by role. A pass like ConeTrace or CompactBatch runs on several of them per frame;
-    // the bindings recorded above are those of its last call.
+    // The ray batches by role: a pass like ConeTrace or CompactBatch runs on several of them per frame.
     const std::pair<const char*, std::shared_ptr<RayBatchBuffer>> batches[] = {
         {"render", mpRenderBatch}, {"lhs", mpTrainLHSBatch}, {"rhs", mpTrainRHSBatch}, {"dummy", mpBindDummyBatch}};
     for (const auto& [name, pBatch] : batches)
@@ -395,12 +443,18 @@ void NeuralRadiosity::bakeExport(RenderContext* pRenderContext)
         baker.record("value {}size {}", prefix, pBatch->size);
         baker.record("value {}diffSize {}", prefix, pBatch->diffSize);
         baker.record("value {}specSize {}", prefix, pBatch->specSize);
+        baker.record("value {}needDiff {}", prefix, pBatch->needDiff ? 1 : 0);
+        baker.record("value {}needSpec {}", prefix, pBatch->needSpec ? 1 : 0);
+        baker.record("value {}needAll {}", prefix, pBatch->needAll ? 1 : 0);
         baker.record("value {}sharedIO {}", prefix, pBatch->sharedIO ? 1 : 0);
         baker.record("value {}diffStride {}", prefix, pBatch->sharedIO ? pBatch->diffStride : 0);
     }
     baker.record("value renderMode {}", (int)mRenderMode);
     baker.record("value numSpecRays {}", mNumSpecRays);
+    baker.record("value numRHS {}", mNumRHS);
     baker.record("value clusterReuse {}", useClusterReuse() ? 1 : 0);
+
+    baker.writeResources(pRenderContext);
 
     // What the replayer needs to rebuild the acceleration structures as Falcor lays them out:
     // InstanceID() + GeometryIndex() of a hit is the global geometry instance index.
@@ -420,5 +474,6 @@ void NeuralRadiosity::bakeExport(RenderContext* pRenderContext)
             m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3], m[2][0], m[2][1], m[2][2], m[2][3]
         );
     }
-    logInfo("NCR bake: wrote {} compute passes and their resources to {}", written, gBake.dir.string());
+    logInfo("NCR bake: wrote frame {} to {}", mFrameCount, gBake.dir.string());
+    gBaker.reset();
 }

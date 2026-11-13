@@ -387,6 +387,8 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
 
     mVarsChanged = false;
 
+    bakeBegin();
+
     // Train the model.
     if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
     {
@@ -933,7 +935,7 @@ void NeuralRadiosity::firstSmoothPass(RenderContext* pRenderContext, const Rende
 
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
-    mpFirstSmoothPass->execute(pRenderContext, uint3(mFrameDim, 1));
+    executePass(pRenderContext, mpFirstSmoothPass, "FirstSmoothPass", uint3(mFrameDim, 1));
 }
 
 void NeuralRadiosity::compactPass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -965,7 +967,7 @@ void NeuralRadiosity::compactPass(RenderContext* pRenderContext, const RenderDat
     var[name]["sharedIO"] = mpRenderBatch->sharedIO ? 1u : 0u;
     var["batchCounts"] = mpRenderBatch->counts;
 
-    mpCompactPass->execute(pRenderContext, uint3(mFrameDim, 1));
+    executePass(pRenderContext, mpCompactPass, "CompactPass", uint3(mFrameDim, 1));
 
     stageBatchCounts(pRenderContext, mpRenderBatch);
 }
@@ -996,7 +998,7 @@ void NeuralRadiosity::resolvePass(RenderContext* pRenderContext, const RenderDat
     if (mRenderMode == RenderMode::Train || mRenderMode == RenderMode::OnlineTrain)
         var["debug"] = mpTrainRHSBatch->emission;
 
-    mpResolvePass->execute(pRenderContext, uint3(mFrameDim, 1));
+    executePass(pRenderContext, mpResolvePass, "ResolvePass", uint3(mFrameDim, 1));
 }
 
 void NeuralRadiosity::postFilterPass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -1024,7 +1026,7 @@ void NeuralRadiosity::postFilterPass(RenderContext* pRenderContext, const Render
         var["tempColor"] = mpRenderTempColor;
         var["gFilteredColor"] = mpPostFilterTempColor;
 
-        mpPostFilterPass->execute(pRenderContext, uint3(mFrameDim, 1));
+        executePass(pRenderContext, mpPostFilterPass, "PostFilterPass", uint3(mFrameDim, 1));
     }
 
     pRenderContext->uavBarrier(mpPostFilterTempColor.get());
@@ -1036,7 +1038,7 @@ void NeuralRadiosity::postFilterPass(RenderContext* pRenderContext, const Render
         var[name]["enableFXAA"] = mEnableFXAA ? 1u : 0u;
         var["gFxaaInput"] = mpPostFilterTempColor;
 
-        mpPostFXAAPass->execute(pRenderContext, uint3(mFrameDim, 1));
+        executePass(pRenderContext, mpPostFXAAPass, "PostFXAAPass", uint3(mFrameDim, 1));
     }
 }
 
@@ -1058,7 +1060,7 @@ void NeuralRadiosity::randomSmooth(RenderContext* pRenderContext, std::shared_pt
 
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
-    mpRandomSmooth->execute(pRenderContext, uint3(pRayBatch->size, 1, 1));
+    executePass(pRenderContext, mpRandomSmooth, "RandomSmooth", uint3(pRayBatch->size, 1, 1));
 }
 
 void NeuralRadiosity::sampleRHS(RenderContext* pRenderContext)
@@ -1113,7 +1115,7 @@ void NeuralRadiosity::sampleRHS(RenderContext* pRenderContext)
 
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
-    mpSampleRHS->execute(pRenderContext, uint3(mBatchSize * mNumRHS, 1, 1));
+    executePass(pRenderContext, mpSampleRHS, "SampleRHS", uint3(mBatchSize * mNumRHS, 1, 1));
 }
 
 void NeuralRadiosity::resolveRHS(RenderContext* pRenderContext)
@@ -1126,7 +1128,7 @@ void NeuralRadiosity::resolveRHS(RenderContext* pRenderContext)
     bindRayBatchData(var, mpTrainLHSBatch, name);
     var["rhsColor"] = mpTrainRHSBatch->color;
 
-    mpResolveRHS->execute(pRenderContext, uint3(mBatchSize, 1, 1));
+    executePass(pRenderContext, mpResolveRHS, "ResolveRHS", uint3(mBatchSize, 1, 1));
 }
 
 void NeuralRadiosity::compactBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
@@ -1144,7 +1146,7 @@ void NeuralRadiosity::compactBatch(RenderContext* pRenderContext, std::shared_pt
     var[name]["bboxMin"] = aabb.minPoint;
     var[name]["bboxMax"] = aabb.maxPoint;
 
-    mpCompactBatch->execute(pRenderContext, uint3(pRayBatch->size, 1, 1));
+    executePass(pRenderContext, mpCompactBatch, "CompactBatch", uint3(pRayBatch->size, 1, 1));
 
     stageBatchCounts(pRenderContext, pRayBatch);
 }
@@ -1153,13 +1155,20 @@ void NeuralRadiosity::computeBatchCounts(RenderContext* pRenderContext, std::sha
 {
     // A disabled group keeps its count at zero.
     pRenderContext->clearUAV(pRayBatch->counts->getUAV().get(), uint4(0));
+    bakeHost(fmt::format("clearcounts {}", batchRole(pRayBatch.get())));
 
     // Passing a CPU pointer here would make PrefixSum read the total back, which
     // flushes and waits for the GPU. The total goes to `counts` instead.
     if (pRayBatch->needDiff)
+    {
         mpPrefixSum->execute(pRenderContext, pRayBatch->diffIndex, elementCount, nullptr, pRayBatch->counts, kDiffCountOffset);
+        bakeHost(fmt::format("prefixsum {} diff {}", batchRole(pRayBatch.get()), elementCount));
+    }
     if (pRayBatch->needSpec)
+    {
         mpPrefixSum->execute(pRenderContext, pRayBatch->specIndex, elementCount, nullptr, pRayBatch->counts, kSpecCountOffset);
+        bakeHost(fmt::format("prefixsum {} spec {}", batchRole(pRayBatch.get()), elementCount));
+    }
 }
 
 void NeuralRadiosity::stageBatchCounts(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
@@ -1185,7 +1194,7 @@ void NeuralRadiosity::resolveBatch(RenderContext* pRenderContext, std::shared_pt
     ShaderVar var = mpResolveBatch->getRootVar();
     bindRayBatchData(var, pRayBatch, "gResolveBatch");
 
-    mpResolveBatch->execute(pRenderContext, uint3(pRayBatch->size, 1, 1));
+    executePass(pRenderContext, mpResolveBatch, "ResolveBatch", uint3(pRayBatch->size, 1, 1));
 }
 
 bool NeuralRadiosity::useClusterReuse() const
@@ -1250,7 +1259,7 @@ void NeuralRadiosity::coneTraceBatch(RenderContext* pRenderContext, std::shared_
         mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
         // Groups of NUM_SPEC_RAYS threads, each handling one glossy sample at a time.
-        mpConeTrace->execute(pRenderContext, uint3(numGroups * mNumSpecRays, 1, 1));
+        executePass(pRenderContext, mpConeTrace, "ConeTrace", uint3(numGroups * mNumSpecRays, 1, 1));
     }
 
     // Cluster slots and the envColor slot are different fields of the same element.
@@ -1292,7 +1301,7 @@ void NeuralRadiosity::specPrimaryPass(RenderContext* pRenderContext, std::shared
     bindPrefiltEnv(var);
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
-    mpSpecPrimary->execute(pRenderContext, uint3(numThreads, 1, 1));
+    executePass(pRenderContext, mpSpecPrimary, "SpecPrimary", uint3(numThreads, 1, 1));
 }
 
 void NeuralRadiosity::clusterReuse(RenderContext* pRenderContext, const RenderData& renderData)
@@ -1361,7 +1370,7 @@ void NeuralRadiosity::clusterReprojectPass(RenderContext* pRenderContext, const 
 
     mpScene->bindShaderData(var["gScene"]);
 
-    mpClusterReproject->execute(pRenderContext, uint3(mFrameDim, 1));
+    executePass(pRenderContext, mpClusterReproject, "ClusterReproject", uint3(mFrameDim, 1));
 }
 
 void NeuralRadiosity::coneTraceScreenPass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -1403,7 +1412,7 @@ void NeuralRadiosity::coneTraceScreenPass(RenderContext* pRenderContext, const R
 
     if (mpRenderBatch->specSize == 0) return;
 
-    mpConeTraceScreen->execute(pRenderContext, uint3(mpRenderBatch->specSize, 1, 1));
+    executePass(pRenderContext, mpConeTraceScreen, "ConeTraceScreen", uint3(mpRenderBatch->specSize, 1, 1));
 }
 
 void NeuralRadiosity::clusterSpatialReusePass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -1449,7 +1458,7 @@ void NeuralRadiosity::clusterSpatialReusePass(RenderContext* pRenderContext, con
 
     if (mpRenderBatch->specSize == 0) return;
 
-    mpClusterSpatialReuse->execute(pRenderContext, uint3(mpRenderBatch->specSize, 1, 1));
+    executePass(pRenderContext, mpClusterSpatialReuse, "ClusterSpatialReuse", uint3(mpRenderBatch->specSize, 1, 1));
 }
 
 void NeuralRadiosity::savePrevGBuffer(RenderContext* pRenderContext, const RenderData& renderData)
@@ -1471,6 +1480,7 @@ void NeuralRadiosity::savePrevGBuffer(RenderContext* pRenderContext, const Rende
 void NeuralRadiosity::modelInferenceCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
 {
     FALCOR_PROFILE(pRenderContext, "ModelInferenceCUDA");
+    bakeHost(fmt::format("infer {}", batchRole(pRayBatch.get())));
 
     pRenderContext->waitForFalcor(mpNRModel->stream(false));
     readBatchCountsAfterSync(pRenderContext, pRayBatch);
@@ -1481,6 +1491,7 @@ void NeuralRadiosity::modelInferenceCUDA(RenderContext* pRenderContext, std::sha
 void NeuralRadiosity::modelTrainCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)
 {
     FALCOR_PROFILE(pRenderContext, "ModelTrainCUDA");
+    bakeHost(fmt::format("train {}", batchRole(pRayBatch.get())));
 
     pRenderContext->waitForFalcor(mpNRModel->stream(true));
     readBatchCountsAfterSync(pRenderContext, pRayBatch);

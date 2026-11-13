@@ -32,8 +32,8 @@ DECISIVE = {"gColor", "gPos", "gNormal", "gAlbedo", "gRoughness", "gVBuffer", "g
 def names_of(bake, kind, id_):
     """Shader variables a resource is bound to, shortest first: 'Pass.path'."""
     found = set()
-    for pass_name, binds in bake["binds"].items():
-        for (path, index), record in binds.items():
+    for call in bake["calls"].values():
+        for (path, index), record in call["binds"].items():
             if record[0] == kind and int(record[1]) == id_:
                 found.add(path)
     roles = [role for role, (k, i) in bake["named"].items() if kind == "buffer" and i == id_]

@@ -185,9 +185,12 @@ With `NCR_BAKE_DIR` set, the NeuralRadiosity pass (`BakeExport.cpp`) writes, at 
 - `data/`: the contents of every buffer and texture those passes have bound (geometry, materials, lights,
   textures; and the pass's own buffers and images as they are at the end of the frame, which are the
   reference results), every sampler, and the uniform block of every parameter block.
-- `bake.txt`: the index. Per pass, what is bound at each shader path; the byte offset of every uniform
-  member, so the replayer can set per-frame values by name; the ray batches by role (a pass such as
-  ConeTrace is rebound to another batch at each call site); and per geometry instance what is needed to
+- `bake.txt`: the index. The frame is recorded as it executes: every call of a compute pass in order,
+  with its dispatch size, what was bound at each shader path and its uniform block as it was then (a
+  pass such as ConeTrace or CompactBatch runs several times per frame, on different ray batches), and
+  between the calls the steps Falcor does on the host: clearing the counts, the prefix sums, network
+  inference, the training step. Besides: the byte offset of every uniform member, so the replayer can
+  set per-frame values by name; the ray batches by role; and per geometry instance what is needed to
   rebuild the acceleration structures the way Falcor lays them out (`InstanceID() + GeometryIndex()` is
   the global instance index).
 
@@ -211,11 +214,13 @@ run the same code. The default is unchanged for every other pass.
 
 ### The replayer
 
-`ohos/replay` loads a packed bake and runs the render path the way `NeuralRadiosity::render()` does
-(FirstSmoothPass, prefix sums, CompactPass, ConeTrace, SpecPrimary, the networks, ResolvePass,
-PostFilterPass, PostFXAAPass), without Falcor: it creates the buffers, textures and samplers of the bake,
-rebuilds the acceleration structures, creates a compute pipeline per baked module and binds what Falcor
-had bound. The same source builds for Windows and for OpenHarmony.
+`ohos/replay` loads a packed bake and executes the recorded frame, without Falcor: it creates the
+buffers, textures and samplers of the bake, rebuilds the acceleration structures, creates a compute
+pipeline per baked module and descriptor sets per recorded call, then runs the calls in order and does
+the host steps between them itself. For a frame in render mode that is FirstSmoothPass, the prefix sums,
+CompactPass, ConeTrace, SpecPrimary, the networks, ResolvePass, PostFilterPass, PostFXAAPass. The same
+source builds for Windows and for OpenHarmony. `--per-pass` submits every call on its own and prints
+its time.
 
 The networks run the way they will in the app (`--networks`):
 
@@ -260,9 +265,11 @@ of 130,423 samples, K-Means) + SpecPrimary 68-78 ms; ResolvePass + PostFilterPas
 Acceleration structures (591,288 triangles) build in 22-31 ms, the 15 pipelines in 3.5-3.9 s.
 
 The networks of that frame on the phone with `--networks npu`: grid lookups into tiles on the GPU 15-21 ms;
-the MLPs 17 ms inside `RunSync` for two SpecNet and two DiffNet tiles (the first runs after loading; the
-probe measured 1.6-1.9 ms per tile in steady state) plus 28 ms copying tiles in and out, which zero-copy
-buffers remove; outputs back to rows about 3 ms. The CPU prefix sums take 82 ms and are replaced next.
+the MLPs 17-19 ms inside `RunSync` for two SpecNet and two DiffNet tiles (the first runs after loading;
+the probe measured 1.6-1.9 ms per tile in steady state) plus 10-28 ms copying tiles in and out, which
+zero-copy buffers remove; outputs back to rows about 3 ms. The whole frame, first run, about 120 ms.
+The prefix sums run on the CPU (1.5 ms on a local copy of the buffer; 82 ms when walking the shared
+buffer directly).
 
 ### What the phone's driver does differently
 

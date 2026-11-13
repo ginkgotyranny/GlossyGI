@@ -318,9 +318,16 @@ private:
     void coneTrace(RenderContext* pRenderContext, const RenderData& renderData, std::shared_ptr<RayBatchBuffer> pRayBatch);
     void coneTraceBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, const RenderData& renderData);
     void specPrimaryPass(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, const RenderData& renderData);
-    /// Writes what the OpenHarmony port replays on the phone (BakeExport.cpp). Does nothing unless
-    /// the environment variable NCR_BAKE_DIR is set.
+    /// What the OpenHarmony port replays on the phone (BakeExport.cpp). With the environment variable
+    /// NCR_BAKE_DIR set, one frame is recorded as it executes: bakeBegin() starts the recording,
+    /// executePass() runs a compute pass and records the call with its bindings, bakeHost() records a
+    /// step done on the CPU or in CUDA, bakeExport() writes the resources. Without the variable these
+    /// only run the pass.
+    void bakeBegin();
+    void executePass(RenderContext* pRenderContext, const ref<ComputePass>& pPass, const char* name, const uint3& dims);
+    void bakeHost(const std::string& step);
     void bakeExport(RenderContext* pRenderContext);
+    const char* batchRole(const RayBatchBuffer* pBatch) const;
     void modelInferenceCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     void modelTrainCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     // Spatiotemporal cluster reuse (render path only)

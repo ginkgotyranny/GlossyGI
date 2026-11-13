@@ -1,4 +1,8 @@
 // A packed Falcor bake as live Vulkan objects: see ohos/tools/bake_pack.py for the index format.
+//
+// The bake is a recorded frame: an ordered list of compute-pass calls, each with the resources it
+// had bound, and of the steps Falcor did on the host in between. A pass is a pipeline; every call of
+// it has its own descriptor sets and its own copy of the pass's uniform block.
 #pragma once
 #include "replay_vk.h"
 
@@ -30,20 +34,31 @@ struct Pass
     std::string name;
     uint32_t group[3] = {1, 1, 1};
     std::vector<Binding> bindings;
-    std::vector<Element> elements;
     std::map<std::string, std::map<std::string, std::pair<uint32_t, uint32_t>>> uniforms;   // block -> member -> (offset, size)
-    std::map<std::string, Buffer*> uniformBlocks;                                            // block -> its buffer
     std::vector<VkDescriptorSetLayout> setLayouts;
-    std::vector<VkDescriptorSet> sets;
     VkPipelineLayout layout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
     double createMs = 0.0;
+};
 
-    const Binding* find(const std::string& path) const
-    {
-        for (const Binding& b : bindings) if (b.name == path) return &b;
-        return nullptr;
-    }
+/// One execution of a pass in the recorded frame.
+struct Call
+{
+    uint32_t step = 0;
+    std::string pass;
+    uint32_t dims[3] = {1, 1, 1};                    // as Falcor dispatched it; group counts are dims / group size, rounded up
+    std::string batch;                               // render, lhs, rhs or -: the ray batch whose buffers it has bound
+    std::vector<Element> elements;
+    std::vector<VkDescriptorSet> sets;
+    std::map<std::string, Buffer*> uniformBlocks;    // block path -> its buffer
+};
+
+/// One entry of the recorded frame: a call, or a host step with its arguments.
+struct Step
+{
+    uint32_t step = 0;
+    bool isCall = false;
+    std::vector<std::string> host;   // e.g. {"prefixsum", "render", "diff", "230400"}
 };
 
 class Bake
@@ -60,6 +75,8 @@ public:
     uint32_t vertexBuffer = UINT32_MAX, vertexStride = 0, indexBuffer = UINT32_MAX;
     std::vector<std::string> passOrder;
     std::map<std::string, Pass> passes;
+    std::map<uint32_t, Call> calls;             // by step
+    std::vector<Step> program;                  // the frame, in execution order
     std::map<std::string, uint32_t> named;      // role, e.g. render.specInput -> buffer id
     std::map<std::string, double> values;
     VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
@@ -74,16 +91,7 @@ public:
         createPasses();
     }
 
-    Pass& pass(const std::string& name)
-    {
-        auto it = passes.find(name);
-        if (it == passes.end())
-        {
-            std::printf("FAIL the bake has no pass %s\n", name.c_str());
-            std::exit(2);
-        }
-        return it->second;
-    }
+    bool hasBuffer(const std::string& role) const { return named.count(role) != 0; }
 
     Buffer& buffer(const std::string& role)
     {
@@ -96,46 +104,56 @@ public:
         return buffers.at(it->second);
     }
 
-    /// Location of a uniform member, or null.
-    void* uniform(Pass& p, const std::string& block, const std::string& member, uint32_t size)
+    double value(const std::string& name, double fallback = 0.0) const
     {
+        auto it = values.find(name);
+        return it == values.end() ? fallback : it->second;
+    }
+
+    /// Location of a uniform member of a call, or null.
+    void* uniform(Call& c, const std::string& block, const std::string& member, uint32_t size)
+    {
+        Pass& p = passes.at(c.pass);
         auto b = p.uniforms.find(block);
         if (b == p.uniforms.end()) return nullptr;
         auto m = b->second.find(member);
-        auto buffer = p.uniformBlocks.find(block);
-        if (m == b->second.end() || buffer == p.uniformBlocks.end() || m->second.second < size) return nullptr;
+        auto buffer = c.uniformBlocks.find(block);
+        if (m == b->second.end() || buffer == c.uniformBlocks.end() || m->second.second < size) return nullptr;
         return buffer->second->as<char>() + m->second.first;
     }
 
-    template <typename T> T getUniform(Pass& p, const std::string& block, const std::string& member)
+    bool hasUniform(Call& c, const std::string& block, const std::string& member) { return uniform(c, block, member, 1) != nullptr; }
+
+    template <typename T> T getUniform(Call& c, const std::string& block, const std::string& member)
     {
         T value = {};
-        void* at = uniform(p, block, member, sizeof(T));
+        void* at = uniform(c, block, member, sizeof(T));
         if (!at)
         {
-            std::printf("FAIL %s has no uniform %s.%s\n", p.name.c_str(), block.c_str(), member.c_str());
+            std::printf("FAIL %s has no uniform %s.%s\n", c.pass.c_str(), block.c_str(), member.c_str());
             std::exit(2);
         }
         std::memcpy(&value, at, sizeof(T));
         return value;
     }
 
-    template <typename T> void setUniform(Pass& p, const std::string& block, const std::string& member, const T& value)
+    template <typename T> void setUniform(Call& c, const std::string& block, const std::string& member, const T& value)
     {
-        void* at = uniform(p, block, member, sizeof(T));
+        void* at = uniform(c, block, member, sizeof(T));
         if (!at)
         {
-            std::printf("FAIL %s has no uniform %s.%s\n", p.name.c_str(), block.c_str(), member.c_str());
+            std::printf("FAIL %s has no uniform %s.%s\n", c.pass.c_str(), block.c_str(), member.c_str());
             std::exit(2);
         }
         std::memcpy(at, &value, sizeof(T));
     }
 
-    /// Records one dispatch of a pass over `dims` items (Falcor's ComputePass::execute convention:
+    /// Records one dispatch of a call over `dims` items (Falcor's ComputePass::execute convention:
     /// the group counts are the dimensions divided by the thread group size, rounded up), followed
     /// by a barrier so that the next pass sees what this one wrote.
-    void dispatch(VkCommandBuffer cb, Pass& p, uint32_t dimX, uint32_t dimY = 1, uint32_t dimZ = 1)
+    void dispatch(VkCommandBuffer cb, Call& c, uint32_t dimX, uint32_t dimY = 1, uint32_t dimZ = 1)
     {
+        Pass& p = passes.at(c.pass);
         const uint32_t groups[3] = {(dimX + p.group[0] - 1) / p.group[0], (dimY + p.group[1] - 1) / p.group[1], (dimZ + p.group[2] - 1) / p.group[2]};
         for (int a = 0; a < 3; a++)
         {
@@ -147,7 +165,7 @@ public:
             }
         }
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, (uint32_t)p.sets.size(), p.sets.data(), 0, nullptr);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, (uint32_t)c.sets.size(), c.sets.data(), 0, nullptr);
         vkCmdDispatch(cb, groups[0], groups[1], groups[2]);
         VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -257,21 +275,39 @@ private:
                 b.type = (VkDescriptorType)type;
                 passes[passName].bindings.push_back(b);
             }
-            else if (kind == "element")
-            {
-                std::string passName;
-                Element e;
-                in >> passName >> e.set >> e.binding >> e.index >> e.kind;
-                if (e.kind == "uniform") in >> e.id >> e.file;
-                else if (e.kind != "accel" && e.kind != "null") in >> e.id;
-                passes[passName].elements.push_back(e);
-            }
             else if (kind == "uniform")
             {
                 std::string passName, block, member;
                 uint32_t offset, size;
                 in >> passName >> block >> member >> offset >> size;
                 passes[passName].uniforms[block][member] = {offset, size};
+            }
+            else if (kind == "call")
+            {
+                Call c;
+                in >> c.step >> c.pass >> c.dims[0] >> c.dims[1] >> c.dims[2] >> c.batch;
+                calls[c.step] = c;
+                Step s;
+                s.step = c.step;
+                s.isCall = true;
+                program.push_back(s);
+            }
+            else if (kind == "element")
+            {
+                uint32_t step;
+                Element e;
+                in >> step >> e.set >> e.binding >> e.index >> e.kind;
+                if (e.kind == "uniform") in >> e.id >> e.file;
+                else if (e.kind != "accel" && e.kind != "null") in >> e.id;
+                calls[step].elements.push_back(e);
+            }
+            else if (kind == "host")
+            {
+                Step s;
+                in >> s.step;
+                std::string word;
+                while (in >> word) s.host.push_back(word);
+                program.push_back(s);
             }
             else if (kind == "named")
             {
@@ -444,22 +480,23 @@ private:
                     (unsigned long long)triangles, tlasInstances.size(), msSince(start));
     }
 
-    /// The scene's blocks are the same data in every pass: one buffer for all of them, so that the
-    /// camera is updated in one place. A pass's own block belongs to that pass.
-    static std::string uniformKey(const std::string& pass, const std::string& block)
+    /// The scene's blocks are the same data in every call: one buffer for all of them, so that the
+    /// camera is updated in one place. A pass's own block belongs to the call: the same pass runs
+    /// with different values at different points of the frame.
+    static std::string uniformKey(const Call& c, const std::string& block)
     {
-        return block.rfind("gScene", 0) == 0 ? block : pass + ":" + block;
+        return block.rfind("gScene", 0) == 0 ? block : "call" + std::to_string(c.step) + ":" + block;
     }
 
     void createPasses()
     {
-        // One pool for everything.
+        // One pool for the descriptor sets of every call.
         std::map<VkDescriptorType, uint32_t> totals;
         uint32_t setCount = 0;
-        for (auto& [name, p] : passes)
+        for (auto& [step, c] : calls)
         {
             uint32_t maxSet = 0;
-            for (const Binding& b : p.bindings)
+            for (const Binding& b : passes.at(c.pass).bindings)
             {
                 totals[b.type] += b.count;
                 maxSet = std::max(maxSet, b.set);
@@ -481,7 +518,6 @@ private:
             uint32_t maxSet = 0;
             for (const Binding& b : p.bindings) maxSet = std::max(maxSet, b.set);
             p.setLayouts.resize(maxSet + 1);
-            p.sets.resize(maxSet + 1);
             for (uint32_t set = 0; set <= maxSet; set++)
             {
                 std::vector<VkDescriptorSetLayoutBinding> layoutBindings;
@@ -491,11 +527,6 @@ private:
                 sl.bindingCount = (uint32_t)layoutBindings.size();
                 sl.pBindings = layoutBindings.data();
                 VK_CHECK(vkCreateDescriptorSetLayout(dev.device, &sl, nullptr, &p.setLayouts[set]));
-                VkDescriptorSetAllocateInfo da = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-                da.descriptorPool = mPool;
-                da.descriptorSetCount = 1;
-                da.pSetLayouts = &p.setLayouts[set];
-                VK_CHECK(vkAllocateDescriptorSets(dev.device, &da, &p.sets[set]));
             }
             VkPipelineLayoutCreateInfo pl = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
             pl.setLayoutCount = (uint32_t)p.setLayouts.size();
@@ -516,15 +547,27 @@ private:
             p.createMs = msSince(start);
             totalMs += p.createMs;
             vkDestroyShaderModule(dev.device, module, nullptr);
-
-            writeDescriptors(p);
         }
-        std::printf("pipelines: %zu passes created in %.0f ms\n", passOrder.size(), totalMs);
+        for (auto& [step, c] : calls)
+        {
+            Pass& p = passes.at(c.pass);
+            c.sets.resize(p.setLayouts.size());
+            for (size_t set = 0; set < p.setLayouts.size(); set++)
+            {
+                VkDescriptorSetAllocateInfo da = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+                da.descriptorPool = mPool;
+                da.descriptorSetCount = 1;
+                da.pSetLayouts = &p.setLayouts[set];
+                VK_CHECK(vkAllocateDescriptorSets(dev.device, &da, &c.sets[set]));
+            }
+            writeDescriptors(p, c);
+        }
+        std::printf("pipelines: %zu passes created in %.0f ms; %zu calls in the recorded frame\n", passOrder.size(), totalMs, calls.size());
     }
 
-    void writeDescriptors(Pass& p)
+    void writeDescriptors(Pass& p, Call& c)
     {
-        for (const Element& e : p.elements)
+        for (const Element& e : c.elements)
         {
             const Binding* binding = nullptr;
             for (const Binding& b : p.bindings)
@@ -537,7 +580,7 @@ private:
             accelInfo.accelerationStructureCount = 1;
             accelInfo.pAccelerationStructures = &tlas;
             VkWriteDescriptorSet w = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            w.dstSet = p.sets[e.set];
+            w.dstSet = c.sets[e.set];
             w.dstBinding = e.binding;
             w.dstArrayElement = e.index;
             w.descriptorCount = 1;
@@ -552,7 +595,7 @@ private:
             case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
                 if (e.kind == "uniform")
                 {
-                    const std::string key = uniformKey(p.name, binding->name);
+                    const std::string key = uniformKey(c, binding->name);
                     auto it = mUniformBuffers.find(key);
                     if (it == mUniformBuffers.end())
                     {
@@ -561,7 +604,7 @@ private:
                         std::memcpy(b.data, data.data(), std::min<size_t>(data.size(), (size_t)b.size));
                         it = mUniformBuffers.emplace(key, b).first;
                     }
-                    p.uniformBlocks[binding->name] = &it->second;
+                    c.uniformBlocks[binding->name] = &it->second;
                     bufferInfo.buffer = it->second.buffer;
                 }
                 w.pBufferInfo = &bufferInfo;
