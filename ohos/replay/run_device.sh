@@ -35,7 +35,7 @@ SLANG_ARGS=(-I "$HERE/shaders" -target spirv -entry main -stage compute)
 "$SDK/llvm/bin/clang++.exe" --target=aarch64-linux-ohos --sysroot="$SDK/sysroot" -std=c++17 -O2 \
   "$HERE/ncr_replay.cpp" -o "$OUT/device/ncr_replay" -lvulkan -lneural_network_core -lnative_buffer -lnative_window -lqos -static-libstdc++
 for net in diff spec; do
-  for graph in inf_256x256 train_4096 train_8192 train_16384; do
+  for graph in inf_256x256 train_2048 train_4096 train_8192 train_16384; do
     if [ -f "$MODELS/ncr_${net}_${graph}_fp16.om" ]; then cp "$MODELS/ncr_${net}_${graph}_fp16.om" "$OUT/device/models/"; fi
   done
 done

@@ -575,6 +575,7 @@ private:
     // Train mode parameters
     RenderMode mRenderMode = RenderMode::OnlineTrain;
     /// LHS and RHS
+    // Training samples per frame and RHS paths per sample (pass properties `trainBatchSize`, `numRHS`).
     uint32_t mBatchSizeInit = NCR_BATCH_SIZE_INIT;
     uint32_t mNumRHSInit = NCR_NUM_RHS_INIT;
     uint32_t mBatchSize = mBatchSizeInit;

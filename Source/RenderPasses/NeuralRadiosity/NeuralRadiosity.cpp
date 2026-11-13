@@ -110,6 +110,8 @@ namespace
     const char kUseNEE[] = "useNEE";
     const char kDiffTrainOnGlossy[] = "diffTrainOnGlossy";
     const char kRandomTrainDir[] = "randomTrainDir";
+    const char kTrainBatchSize[] = "trainBatchSize";
+    const char kNumRHS[] = "numRHS";
     const char kRhsGlossyBounces[] = "rhsGlossyBounces";
     const char kEnableTrainSchedule[] = "enableTrainSchedule";
     const char kTrainLrHot[] = "trainLrHot";
@@ -220,6 +222,10 @@ NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) :
             mDiffTrainOnGlossy = value;
         else if (key == kRandomTrainDir)
             mRandomTrainDir = value;
+        else if (key == kTrainBatchSize)
+            mBatchSize = mBatchSizeInit = std::max(256u, (uint32_t)value);
+        else if (key == kNumRHS)
+            mNumRHS = mNumRHSInit = std::max(1u, (uint32_t)value);
         else if (key == kRhsGlossyBounces)
             mRhsGlossyBounces = value;
         else if (key == kEnableTrainSchedule)
@@ -330,6 +336,8 @@ Properties NeuralRadiosity::getProperties() const
     props[kUseNEE] = mUseNEE;
     props[kDiffTrainOnGlossy] = mDiffTrainOnGlossy;
     props[kRandomTrainDir] = mRandomTrainDir;
+    props[kTrainBatchSize] = mBatchSizeInit;
+    props[kNumRHS] = mNumRHSInit;
     props[kRhsGlossyBounces] = mRhsGlossyBounces;
     props[kEnableTrainSchedule] = mEnableTrainSchedule;
     props[kTrainLrHot] = mTrainLrHot;

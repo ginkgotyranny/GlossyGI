@@ -354,7 +354,32 @@ A frame of online training on the phone at these sizes, steady state over 60 fra
 | Render: 2 + 2 tiles on the NPU | 14 ms |
 
 That is about 200 ms on the GPU, 107 ms on the NPU and up to 10 ms on the CPU, with the sample counts
-of the desktop defaults: the configuration for the phone is still to be chosen.
+of the desktop defaults.
+
+#### Sample counts
+
+The pass properties `trainBatchSize` (training samples per frame) and `numRHS` (RHS paths per sample)
+set what `NCRConfig.h` fixes on the desktop (32,768 and 8). Baked and replayed on the phone, bathroom,
+30 frames of online training each, the K-Means cone trace with 32 rays per specular pixel, 2026-11-13:
+
+| Render size | Training samples x RHS paths | Frame | Training part | Render part |
+|---|---|---|---|---|
+| 640x360 | 32,768 x 8 | 316 ms | 210 ms | 106 ms |
+| 640x360 | 8,192 x 8 | 179 ms | 75 ms | 106 ms |
+| 640x360 | 4,096 x 8 | 156 ms | 52 ms | 106 ms |
+| 640x360 | 4,096 x 4 | 151 ms | 49 ms | 106 ms |
+| 640x360 | 2,048 x 4, training tiles of 2,048 | 145 ms | 40 ms | 106 ms |
+| 480x270 | 4,096 x 4 | 117 ms | 47 ms | 69 ms |
+
+The training part at 4,096 x 4: 19 ms on the GPU (sampling 8, grid lookups and compaction 5, tiles 1,
+grid gradients and optimizers 5), 21 ms on the NPU (RHS queries 4, gradients 17: one 4,096 tile per
+network, 8 ms each), 7-9 ms for the MLP optimizers on the CPU, which is more than their arithmetic
+needs and not yet looked into. The render part at 640x360: G-buffer, compaction and cone trace 69 ms
+(4.2 M rays), grid lookups 16 ms, four tiles on the NPU 14 ms, outputs, resolve and filters 7 ms.
+
+So with a training batch of a few thousand samples the frame is decided by the render path, and there
+by the cone trace. Everything runs one after the other here; in the app the training step can overlap
+the GPU work of the next frame, as only the NPU is exclusive.
 
 #### What the comparison showed about the desktop pipeline
 

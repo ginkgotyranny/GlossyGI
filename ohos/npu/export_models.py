@@ -85,6 +85,7 @@ def configurations():
         "ncr_spec_inf_256x256_out4": lambda: graphs.Inference(S, 256, 256, graphs.OUTPUT_DIM),
         "ncr_diff_inf_512x512": lambda: graphs.Inference(D, 512, 512),
         "ncr_spec_inf_512x512": lambda: graphs.Inference(S, 512, 512),
+        "ncr_diff_train_2048": lambda: graphs.Training(D, 2048),
         "ncr_diff_train_4096": lambda: graphs.Training(D, 4096),
         "ncr_diff_train_8192": lambda: graphs.Training(D, 8192),
         "ncr_diff_train_16384": lambda: graphs.Training(D, 16384),
