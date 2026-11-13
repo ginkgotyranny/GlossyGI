@@ -18,7 +18,7 @@ SHADERS="PrimEncode ClsEncode PrimScatter GridAdam RayThroughput Features ReadAf
 
 mkdir -p "$OUT"
 for s in $SHADERS; do
-  "$SLANGC" "$HERE/$s.cs.slang" -I "$HERE" -target spirv -entry main -stage compute -o "$OUT/$s.spv"
+  "$SLANGC" "$HERE/$s.cs.slang" -I "$HERE" -I "$ROOT/replay/shaders" -target spirv -entry main -stage compute -o "$OUT/$s.spv"
 done
 "$SLANGC" "$HERE/Features.cs.slang" -DUSE_INT64=1 -target spirv -entry main -stage compute -o "$OUT/Features64.spv"
 "$SDK/llvm/bin/clang++.exe" --target=aarch64-linux-ohos --sysroot="$SDK/sysroot" -std=c++17 -O2 \

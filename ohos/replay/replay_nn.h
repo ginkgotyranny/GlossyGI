@@ -64,6 +64,9 @@ constexpr uint32_t kDiffPos = 12;
 constexpr uint32_t kSpecClsEnc = 12, kSpecPos = 28, kSpecClsPos = 44, kSpecClsScale = 56, kSpecClsWeight = 60;
 constexpr uint32_t kBatchAlign = 256;
 constexpr float kSquarePlusK = 10.0f;
+// NPU tiles: a batch goes to the NPU as tiles of kTile samples, channel-planar, shape (1, C, 256, 256).
+constexpr uint32_t kTile = 65536;
+constexpr uint32_t kOutputChannels = 16;   // the MLPs' padded output width; the first kOutputDim are used
 }  // namespace cfg
 
 inline uint32_t padUp(uint32_t x, uint32_t align) { return (x + align - 1) & ~(align - 1); }
@@ -143,6 +146,7 @@ struct Checkpoint
 {
     std::vector<uint16_t> primGrid, clsGrid;      // fp16, as the GPU reads them
     std::vector<float> diffWeights, specWeights;  // MLP weights, row-major (out, in) per layer
+    std::vector<uint16_t> diffWeightsHalf, specWeightsHalf;   // the same as stored: what the NPU's weight tensors take
 
     void load(const std::string& path)
     {
@@ -171,6 +175,8 @@ struct Checkpoint
             std::printf("FAIL %s is truncated\n", path.c_str());
             std::exit(2);
         }
+        diffWeightsHalf = diff;
+        specWeightsHalf = spec;
         diffWeights.resize(diff.size());
         specWeights.resize(spec.size());
         for (size_t i = 0; i < diff.size(); i++) diffWeights[i] = halfToFloat(diff[i]);
@@ -178,10 +184,46 @@ struct Checkpoint
     }
 };
 
+/// Runs the two MLPs on NPU tiles: x holds `tiles` tiles of C channels (32 for DiffNet, 64 for
+/// SpecNet), y receives `tiles` tiles of kOutputChannels channels, both channel-planar fp16.
+/// The hash-grid encodings are already in x (the GPU wrote them).
+class NetworkBackend
+{
+public:
+    virtual ~NetworkBackend() = default;
+    virtual const char* name() const = 0;
+    virtual void infer(bool specular, const uint16_t* x, uint16_t* y, uint32_t tiles) = 0;
+};
+
 class CpuNetworks
 {
 public:
     explicit CpuNetworks(const Checkpoint& checkpoint) : mCheckpoint(checkpoint) {}
+
+    /// The MLP of one network on tiles, as the NPU graph computes it (float32 here).
+    void inferTiles(bool specular, const uint16_t* x, uint16_t* y, uint32_t tiles) const
+    {
+        const uint32_t channels = specular ? cfg::kSpecInputDim : cfg::kDiffInputDim;
+        const float* weights = specular ? mCheckpoint.specWeights.data() : mCheckpoint.diffWeights.data();
+        const uint32_t hidden = specular ? 4 : 3;
+        for (uint32_t t = 0; t < tiles; t++)
+        {
+            // Local copies: the tiles live in memory shared with the GPU, slow to walk element by element.
+            std::vector<uint16_t> in(x + (size_t)t * channels * cfg::kTile, x + (size_t)(t + 1) * channels * cfg::kTile);
+            std::vector<uint16_t> out((size_t)cfg::kOutputChannels * cfg::kTile, 0);
+            parallel(cfg::kTile, [&](uint32_t begin, uint32_t end) {
+                uint16_t row[64];
+                float result[cfg::kOutputDim];
+                for (uint32_t n = begin; n < end; n++)
+                {
+                    for (uint32_t c = 0; c < channels; c++) row[c] = in[(size_t)c * cfg::kTile + n];
+                    forward(weights, channels, hidden, row, result);
+                    for (uint32_t c = 0; c < cfg::kOutputDim; c++) out[(size_t)c * cfg::kTile + n] = floatToHalf(result[c]);
+                }
+            });
+            std::memcpy(y + (size_t)t * cfg::kOutputChannels * cfg::kTile, out.data(), out.size() * sizeof(uint16_t));
+        }
+    }
 
     /// Rows of DiffNetInput (32 fp16 each): writes the primary encoding into the row, as the CUDA
     /// kernel does, and the four outputs to `out`.
@@ -297,5 +339,16 @@ private:
             out[j] = 0.5f * (q + std::sqrt(q * q + 4.0f)) / cfg::kSquarePlusK;
         }
     }
+};
+/// The NPU's stand-in where there is none: the same tiles in, the same tiles out, computed on the CPU.
+class CpuTileBackend : public NetworkBackend
+{
+public:
+    explicit CpuTileBackend(const Checkpoint& checkpoint) : mNetworks(checkpoint) {}
+    const char* name() const override { return "CPU (float32), tiles"; }
+    void infer(bool specular, const uint16_t* x, uint16_t* y, uint32_t tiles) override { mNetworks.inferTiles(specular, x, y, tiles); }
+
+private:
+    CpuNetworks mNetworks;
 };
 }  // namespace replay

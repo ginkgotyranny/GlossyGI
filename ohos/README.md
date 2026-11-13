@@ -215,15 +215,27 @@ run the same code. The default is unchanged for every other pass.
 (FirstSmoothPass, prefix sums, CompactPass, ConeTrace, SpecPrimary, the networks, ResolvePass,
 PostFilterPass, PostFXAAPass), without Falcor: it creates the buffers, textures and samplers of the bake,
 rebuilds the acceleration structures, creates a compute pipeline per baked module and binds what Falcor
-had bound. The same source builds for Windows and for OpenHarmony. In this first version the prefix sums
-and the networks run on the CPU (`replay_nn.h`, the float32 reference of `ncr_reference.py`).
+had bound. The same source builds for Windows and for OpenHarmony.
+
+The networks run the way they will in the app (`--networks`):
+
+- `tiles` (default): a GPU pass of the replayer looks up the hash grids and lays the samples out as the
+  NPU reads them, channel-planar tiles of 65,536 samples (`shaders/EncodeInputs`); the MLPs run on the
+  tiles; a second pass writes the outputs back as the rows ResolvePass reads (`shaders/DecodeOutputs`).
+  Here the MLPs run on the CPU, standing in for the NPU.
+- `npu` (OpenHarmony): the same with the MLPs on the NPU through NNRt (`replay_nnrt.h`), in copy mode:
+  the tiles are copied between Vulkan buffers and NNRt tensors.
+- `rows`: the float32 reference on the CPU, lookups included (`replay_nn.h`).
+
+The prefix sums still run on the CPU.
 
 ```bat
 python ohos/tools/bake_pack.py <bake dir>
 ohos\replay\build_pc.bat
 ohos\_build\replay\ncr_replay.exe <bake dir> <checkpoint.ckpt> <out dir>
 python ohos/tools/replay_compare.py <bake dir> <out dir>
-bash ohos/replay/run_device.sh <bake dir> <checkpoint.ckpt>          # the same on the phone
+python ohos/npu/export_models.py --only inf_256x256 --om            # the NPU models, for --networks npu
+bash ohos/replay/run_device.sh <bake dir> <checkpoint.ckpt> --networks npu     # the same on the phone
 python ohos/tools/replay_compare.py <bake dir> ohos/_build/replay/device_out
 ```
 
@@ -240,12 +252,17 @@ specular samples), 2026-11-13:
 | Position, direction, normal, albedo, roughness (mean difference / mean value) | identical | 1e-6 to 1e-4 |
 | Network inputs after cone trace and encodings (same measure) | 1e-4 | 2e-4 |
 | Network outputs, CPU float32 against tiny-cuda-nn fp16 (same measure) | 5e-4 | 5e-4 |
-| Final image against Falcor | 74.7 dB PSNR | 61.6 dB PSNR |
+| Final image against Falcor, networks on the CPU (rows / tiles) | 74.7 / 74.6 dB PSNR | 61.6 / 61.6 dB PSNR |
+| Final image against Falcor, MLPs on the NPU | | 61.3 dB PSNR |
 
 GPU time of that frame on the phone: FirstSmoothPass 2.2-2.9 ms; CompactPass + ConeTrace (32 rays for each
 of 130,423 samples, K-Means) + SpecPrimary 68-78 ms; ResolvePass + PostFilterPass + PostFXAAPass 6.5-6.9 ms.
-Acceleration structures (591,288 triangles) build in 22-31 ms, the 15 pipelines in 3.5-3.9 s. The CPU
-stand-ins take 82 ms (prefix sums) and about 390 ms (networks); they are replaced next.
+Acceleration structures (591,288 triangles) build in 22-31 ms, the 15 pipelines in 3.5-3.9 s.
+
+The networks of that frame on the phone with `--networks npu`: grid lookups into tiles on the GPU 15-21 ms;
+the MLPs 17 ms inside `RunSync` for two SpecNet and two DiffNet tiles (the first runs after loading; the
+probe measured 1.6-1.9 ms per tile in steady state) plus 28 ms copying tiles in and out, which zero-copy
+buffers remove; outputs back to rows about 3 ms. The CPU prefix sums take 82 ms and are replaced next.
 
 ### What the phone's driver does differently
 
@@ -276,8 +293,9 @@ triangle, was suspected first and is fine (test `load16`).
 1. Device probes (done).
 2. The network split on the PC against the CUDA implementation (done, above).
 3. Bake and replay. Done: the bake, and the replayer rendering the baked frame on the PC and on the
-   phone in agreement with Falcor (above), with the prefix sums and the networks on the CPU. Next: the
-   grid lookups in compute and the MLPs on the NPU in place of the CPU networks, the prefix sums on the
-   GPU, the cluster-reuse cone trace, running frame after frame with a moving camera, then training.
+   phone in agreement with Falcor (above), with the grid lookups on the GPU and the MLPs on the NPU.
+   Next: training in the replayer (RHS inference, the NPU training graphs, gradient scatter and the
+   optimizers), frame after frame; zero-copy tiles; the prefix sums on the GPU; the cluster-reuse cone
+   trace; a moving camera.
 4. The HarmonyOS app: platform layer, NNRt backend, zero-copy buffers, frame synchronisation, cross-frame
    training; then performance.
