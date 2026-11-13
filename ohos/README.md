@@ -31,6 +31,7 @@ ohos/npu/export_models.py      gradient check vs autograd, ONNX, test vectors, .
 ohos/probes/npu_mlp/           on-device probe: load a model through NNRt, check the outputs, time RunSync
 ohos/probes/gpu/               on-device probe: hash grids in compute, ray query throughput, shader features, baked pipelines
 ohos/tools/spirv_info.py       capabilities and bindings of a SPIR-V module (and .layout files for the probe)
+ohos/tools/bake_check.py       resolves every SPIR-V binding of a bake to the resource the bake recorded for it
 ohos/tools/png_stats.py        mean / saturation / difference of PNG frames, standard library only
 ohos/_build/                   generated files (git-ignored)
 ```
@@ -172,10 +173,23 @@ python ohos/tools/spirv_info.py --summary <dir>/spirv/*.spv
 NCR_BAKE_SPIRV=<dir>/spirv bash ohos/probes/gpu/run.sh pipelines
 ```
 
-With `NCR_BAKE_DIR` set, the NeuralRadiosity pass (`BakeExport.cpp`) writes the SPIR-V of each of its
-compute passes exactly as Falcor compiled it for the loaded scene and the current settings. The modules
-carry their bindings by name (`gScene.geometryInstances`, `gScene.materials.materialTextures`, ...), so
-the replayer can bind the scene's buffers and textures, dumped by the same bake, to the same slots.
+With `NCR_BAKE_DIR` set, the NeuralRadiosity pass (`BakeExport.cpp`) writes, at frame `NCR_BAKE_FRAME`:
+
+- `spirv/<Pass>.spv`: each of its compute passes exactly as Falcor compiled it for the loaded scene and
+  the current settings. The modules carry their bindings by shader path (`gScene.geometryInstances`,
+  `gScene.materials.materialTextures`, ...).
+- `data/`: the contents of every buffer and texture those passes have bound (geometry, materials, lights,
+  textures; and the pass's own buffers and images as they are at the end of the frame, which are the
+  reference results), every sampler, and the uniform block of every parameter block.
+- `bake.txt`: the index. Per pass, what is bound at each shader path; the byte offset of every uniform
+  member, so the replayer can set per-frame values by name; the ray batches by role (a pass such as
+  ConeTrace is rebound to another batch at each call site); and per geometry instance what is needed to
+  rebuild the acceleration structures the way Falcor lays them out (`InstanceID() + GeometryIndex()` is
+  the global instance index).
+
+`python ohos/tools/bake_check.py <dir>` joins the two: every binding of every module must resolve to a
+baked resource. It does for cornell-box and for bathroom (852 geometry instances, 9 material textures,
+70 buffers; 232 MB with the reference data), 2026-11-13.
 
 Result on the phone, bathroom scene, 2026-11-13: **all 15 passes create compute pipelines on the
 Maleoon 955** (FirstSmoothPass, CompactPass, ConeTrace, SpecPrimary, ClusterReproject, ConeTraceScreen,
@@ -195,8 +209,8 @@ run the same code. The default is unchanged for every other pass.
 
 1. Device probes (done).
 2. The network split on the PC against the CUDA implementation (done, above).
-3. Bake and replay. Done: SPIR-V bake, accepted by the phone's driver. Next: the bake of the scene's
-   resources and uniform data, a replayer on the PC compared with Falcor image by image, with a CPU
-   implementation of the networks in place of the NPU.
+3. Bake and replay. Done: the bake (SPIR-V accepted by the phone's driver; resources, uniform layouts and
+   acceleration-structure description complete). Next: a replayer on the PC compared with Falcor image by
+   image, with a CPU implementation of the networks in place of the NPU.
 4. The HarmonyOS app: platform layer, NNRt backend, zero-copy buffers, frame synchronisation, cross-frame
    training; then performance.
