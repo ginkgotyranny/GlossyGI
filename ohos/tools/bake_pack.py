@@ -123,7 +123,7 @@ def main():
     for role, (kind, id_) in bake["named"].items():
         out.append(f"named {role} {id_}")
     for name, value in bake["values"].items():
-        out.append(f"value {name} {value:g}")
+        out.append(f"value {name} {value!r}")   # full precision: the training schedule continues from these
 
     if problems:
         for p in problems:

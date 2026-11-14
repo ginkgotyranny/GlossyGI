@@ -13,6 +13,8 @@
 //   before.ckpt, after.ckpt   the model before and after the frame (NRCK checkpoints). A frame that
 //                      trains is replayed from before.ckpt; a bake of frame 0 starts, like the replay,
 //                      with fresh optimizer moments, so after.ckpt is what the replay should arrive at.
+//   before_working.bin the fp16 copies the training step computes with, before the frame (NRWK):
+//                      a checkpoint does not hold them, and a fresh model's differ from its masters.
 //   bake.txt           the index, one record per line, fields separated by spaces:
 //       frame <width> <height> <frameCount>
 //       pass <Pass> <groupSizeX> <groupSizeY> <groupSizeZ>
@@ -389,7 +391,10 @@ void NeuralRadiosity::bakeBegin()
     gBaker = std::make_unique<Baker>(mpDevice.get(), gBake.dir);
     gBaker->record("frame {} {} {}", mFrameDim.x, mFrameDim.y, mFrameCount);
     if (mpNRModel)
+    {
         mpNRModel->saveState((gBake.dir / "before.ckpt").string());
+        mpNRModel->saveWorkingCopies((gBake.dir / "before_working.bin").string());
+    }
 }
 
 void NeuralRadiosity::executePass(RenderContext* pRenderContext, const ref<ComputePass>& pPass, const char* name, const uint3& dims)
@@ -462,6 +467,21 @@ void NeuralRadiosity::bakeExport(RenderContext* pRenderContext)
     {
         // The optimizer settings the frame's training step ran with (the training schedule sets them).
         baker.record("value train.learningRate {}", mpNRModel->learningRate());
+        // The training schedule (updateTrainSchedule): its settings and its state after this frame,
+        // from which the replay continues frame after frame.
+        baker.record("value train.schedule {}", mEnableTrainSchedule ? 1 : 0);
+        baker.record("value train.heat {}", mTrainHeat);
+        baker.record("value train.holdLeft {}", mTrainHoldLeft);
+        baker.record("value train.lrHot {}", mTrainLrHot);
+        baker.record("value train.lrCold {}", mTrainLrCold);
+        baker.record("value train.emaHot {}", mTrainEmaHot);
+        baker.record("value train.emaCold {}", mTrainEmaCold);
+        baker.record("value train.holdFrames {}", mTrainHoldFrames);
+        baker.record("value train.coolFrames {}", mTrainCoolFrames);
+        baker.record("value train.cameraHeat {}", mTrainCameraHeat);
+        baker.record("value train.sceneHeat {}", mTrainSceneHeat);
+        baker.record("value train.lightMotionHeat {}", mTrainLightMotionHeat);
+        baker.record("value train.objectMotionHeat {}", mTrainObjectMotionHeat);
         baker.record("value train.emaDecay {}", mpNRModel->emaDecay());
         mpNRModel->saveState((gBake.dir / "after.ckpt").string());
     }

@@ -707,6 +707,28 @@ void NRModel::saveState(const std::string& path) {
     fmt::print("NRModel::saveState: wrote {} bytes to {}\n", (size_t)f.tellp(), path);
 }
 
+void NRModel::saveWorkingCopies(const std::string& path) {
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mTrainStream));
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mInferenceStream));
+
+    CheckpointHeader h = {};
+    h.magic[0] = 'N'; h.magic[1] = 'R'; h.magic[2] = 'W'; h.magic[3] = 'K';
+    h.version = 1;
+    h.primGridElems = (uint32_t)mpPrimGrids->size();
+    h.clsGridElems = (uint32_t)mpClsGrids->size();
+    h.diffParamElems = (uint32_t)mpDiffParams->size();
+    h.specParamElems = (uint32_t)mpSpecParams->size();
+
+    std::ofstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("NRModel::saveWorkingCopies: cannot open '" + path + "' for writing");
+    f.write(reinterpret_cast<const char*>(&h), sizeof(h));
+    writeDeviceBlock(f, mpPrimGrids->data(), mpPrimGrids->bytes());
+    writeDeviceBlock(f, mpClsGrids->data(), mpClsGrids->bytes());
+    writeDeviceBlock(f, mpDiffParams->data(), mpDiffParams->bytes());
+    writeDeviceBlock(f, mpSpecParams->data(), mpSpecParams->bytes());
+    CHECK_THROW(f.good());
+}
+
 void NRModel::loadState(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error("NRModel::loadState: cannot open '" + path + "' for reading");

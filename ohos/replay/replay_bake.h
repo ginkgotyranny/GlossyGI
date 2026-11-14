@@ -96,12 +96,24 @@ public:
     Buffer& buffer(const std::string& role)
     {
         auto it = named.find(role);
-        if (it == named.end())
-        {
-            std::printf("FAIL the bake has no buffer named %s\n", role.c_str());
-            std::exit(2);
-        }
+        if (it == named.end()) fail("the bake has no buffer named " + role);
         return buffers.at(it->second);
+    }
+
+    /// The texture the recorded frame has bound at a shader path, e.g. gColor, the pass's output.
+    uint32_t textureBoundAs(const std::string& path) const
+    {
+        for (const auto& [step, c] : calls)
+        {
+            const Pass& p = passes.at(c.pass);
+            for (const Element& e : c.elements)
+            {
+                if (e.kind != "texture") continue;
+                for (const Binding& b : p.bindings)
+                    if (b.set == e.set && b.binding == e.binding && b.name == path) return e.id;
+            }
+        }
+        fail("the bake has no texture bound as " + path);
     }
 
     double value(const std::string& name, double fallback = 0.0) const
@@ -128,11 +140,7 @@ public:
     {
         T value = {};
         void* at = uniform(c, block, member, sizeof(T));
-        if (!at)
-        {
-            std::printf("FAIL %s has no uniform %s.%s\n", c.pass.c_str(), block.c_str(), member.c_str());
-            std::exit(2);
-        }
+        if (!at) fail(c.pass + " has no uniform " + block + "." + member);
         std::memcpy(&value, at, sizeof(T));
         return value;
     }
@@ -140,11 +148,7 @@ public:
     template <typename T> void setUniform(Call& c, const std::string& block, const std::string& member, const T& value)
     {
         void* at = uniform(c, block, member, sizeof(T));
-        if (!at)
-        {
-            std::printf("FAIL %s has no uniform %s.%s\n", c.pass.c_str(), block.c_str(), member.c_str());
-            std::exit(2);
-        }
+        if (!at) fail(c.pass + " has no uniform " + block + "." + member);
         std::memcpy(at, &value, sizeof(T));
     }
 
@@ -159,10 +163,7 @@ public:
         {
             // A driver runs only as many groups as it supports and drops the rest without a word.
             if (groups[a] > dev.maxGroupCount[a])
-            {
-                std::printf("FAIL %s: %u thread groups in dimension %d, the device runs at most %u\n", p.name.c_str(), groups[a], a, dev.maxGroupCount[a]);
-                std::exit(2);
-            }
+                fail(format("%s: %u thread groups in dimension %d, the device runs at most %u", p.name.c_str(), groups[a], a, dev.maxGroupCount[a]));
         }
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, (uint32_t)c.sets.size(), c.sets.data(), 0, nullptr);
@@ -185,11 +186,7 @@ private:
     void parseIndex()
     {
         std::ifstream index(dir + "/replay.txt");
-        if (!index)
-        {
-            std::printf("FAIL cannot read %s/replay.txt (run ohos/tools/bake_pack.py on the bake)\n", dir.c_str());
-            std::exit(2);
-        }
+        if (!index) fail("cannot read " + dir + "/replay.txt (run ohos/tools/bake_pack.py on the bake)");
         std::string line;
         while (std::getline(index, line))
         {
@@ -413,11 +410,7 @@ private:
     /// so that InstanceID() + GeometryIndex() of a hit is the global geometry instance id.
     void buildAccelerationStructures()
     {
-        if (geometry.empty() || vertexBuffer == UINT32_MAX)
-        {
-            std::printf("FAIL the bake has no geometry\n");
-            std::exit(2);
-        }
+        if (geometry.empty() || vertexBuffer == UINT32_MAX) fail("the bake has no geometry");
         const auto start = std::chrono::steady_clock::now();
         const VkDeviceAddress vertices = dev.address(buffers.at(vertexBuffer));
         const VkDeviceAddress indices = indexBuffer != UINT32_MAX ? dev.address(buffers.at(indexBuffer)) : 0;
@@ -627,8 +620,7 @@ private:
                 w.pNext = &accelInfo;
                 break;
             default:
-                std::printf("FAIL %s: descriptor type %d of %s is not handled\n", p.name.c_str(), (int)binding->type, binding->name.c_str());
-                std::exit(2);
+                fail(format("%s: descriptor type %d of %s is not handled", p.name.c_str(), (int)binding->type, binding->name.c_str()));
             }
             vkUpdateDescriptorSets(dev.device, 1, &w, 0, nullptr);   // the infos above are alive until here
         }

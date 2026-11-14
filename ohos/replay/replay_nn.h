@@ -3,6 +3,8 @@
 // for the two things the phone runs elsewhere: the hash-grid lookups (GPU compute) and the MLPs (NPU).
 // Slow, but it needs nothing besides the checkpoint, and it is what the faster paths are compared with.
 #pragma once
+#include "replay_vk.h"   // replay::fail, replay::format
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -172,6 +174,10 @@ struct Checkpoint
     std::vector<float> primGridMaster, clsGridMaster, diffMaster, specMaster;
     std::vector<uint16_t> primGrid, clsGrid;   // fp16 EMA copies, as the GPU reads them
     std::vector<uint16_t> diffEma, specEma;    // MLP weights, row-major (out, in) per layer
+    // The fp16 copies training computes with. Loading a checkpoint rebuilds them from the masters, as
+    // NRModel::loadState does; loadWorking() takes them from an NRWK file instead (the bake's
+    // before_working.bin), which is what a fresh model has.
+    std::vector<uint16_t> primGridWorking, clsGridWorking, diffWorking, specWorking;
 
     static Header expectedHeader()
     {
@@ -186,11 +192,7 @@ struct Checkpoint
         Header header = {};
         f.read(reinterpret_cast<char*>(&header), sizeof(header));
         const Header expected = expectedHeader();
-        if (!f || std::memcmp(&header, &expected, sizeof(header)) != 0)
-        {
-            std::printf("FAIL %s is not an NRCK v2 checkpoint of this network configuration\n", path.c_str());
-            std::exit(2);
-        }
+        if (!f || std::memcmp(&header, &expected, sizeof(header)) != 0) fail(path + " is not an NRCK v2 checkpoint of this network configuration");
         std::vector<float>* masters[4] = {&primGridMaster, &clsGridMaster, &diffMaster, &specMaster};
         std::vector<uint16_t>* emas[4] = {&primGrid, &clsGrid, &diffEma, &specEma};
         for (int i = 0; i < 4; i++)
@@ -203,11 +205,33 @@ struct Checkpoint
             emas[i]->resize(header.counts[i]);
             f.read(reinterpret_cast<char*>(emas[i]->data()), (std::streamsize)header.counts[i] * 2);
         }
-        if (!f)
+        if (!f) fail(path + " is truncated");
+        std::vector<float>* sources[4] = {&primGridMaster, &clsGridMaster, &diffMaster, &specMaster};
+        std::vector<uint16_t>* working[4] = {&primGridWorking, &clsGridWorking, &diffWorking, &specWorking};
+        for (int i = 0; i < 4; i++)
         {
-            std::printf("FAIL %s is truncated\n", path.c_str());
-            std::exit(2);
+            working[i]->resize(sources[i]->size());
+            for (size_t j = 0; j < sources[i]->size(); j++) (*working[i])[j] = floatToHalf((*sources[i])[j]);
         }
+    }
+
+    /// The training copies from an NRWK file (NRModel::saveWorkingCopies).
+    void loadWorking(const std::string& path)
+    {
+        std::ifstream f(path, std::ios::binary);
+        Header header = {};
+        f.read(reinterpret_cast<char*>(&header), sizeof(header));
+        Header expected = expectedHeader();
+        std::memcpy(expected.magic, "NRWK", 4);
+        expected.version = 1;
+        if (!f || std::memcmp(&header, &expected, sizeof(header)) != 0) fail(path + " is not an NRWK file of this network configuration");
+        std::vector<uint16_t>* working[4] = {&primGridWorking, &clsGridWorking, &diffWorking, &specWorking};
+        for (int i = 0; i < 4; i++)
+        {
+            working[i]->resize(header.counts[i]);
+            f.read(reinterpret_cast<char*>(working[i]->data()), (std::streamsize)header.counts[i] * 2);
+        }
+        if (!f) fail(path + " is truncated");
     }
 
     /// Writes a checkpoint Falcor loads (loadModelPath). Blocks in the order of the file.
@@ -218,11 +242,7 @@ struct Checkpoint
         f.write(reinterpret_cast<const char*>(&header), sizeof(header));
         for (int i = 0; i < 4; i++) f.write(reinterpret_cast<const char*>(masters[i]), (std::streamsize)header.counts[i] * 4);
         for (int i = 0; i < 4; i++) f.write(reinterpret_cast<const char*>(emas[i]), (std::streamsize)header.counts[i] * 2);
-        if (!f.good())
-        {
-            std::printf("FAIL cannot write %s\n", path.c_str());
-            std::exit(2);
-        }
+        if (!f.good()) fail("cannot write " + path);
     }
 };
 
@@ -251,17 +271,17 @@ struct Mlp
     std::vector<float> trainingFloat, inferenceFloat;   // the fp16 copies as floats, for the CPU backends
     uint32_t steps = 0;
 
-    void init(bool spec, const std::vector<float>& masters, const std::vector<uint16_t>& ema)
+    void init(bool spec, const std::vector<float>& masters, const std::vector<uint16_t>& ema, const std::vector<uint16_t>& working)
     {
         specular = spec;
         inputDim = spec ? cfg::kSpecInputDim : cfg::kDiffInputDim;
         hiddenLayers = spec ? 4 : 3;
         master = masters;
         inference = ema;
+        training = working;
         firstMoment.assign(master.size(), 0.0f);
         secondMoment.assign(master.size(), 0.0f);
-        training.resize(master.size());
-        for (size_t i = 0; i < master.size(); i++) training[i] = floatToHalf(master[i]);
+        steps = 0;
         refresh();
     }
 

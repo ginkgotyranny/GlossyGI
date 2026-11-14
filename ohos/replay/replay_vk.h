@@ -3,7 +3,10 @@
 // per baked pass with its descriptor sets bound as Falcor had them.
 //
 // Header-only and platform-neutral: the same code is built for Windows (parity checks against
-// Falcor) and for OpenHarmony (the phone). No window: everything is compute.
+// Falcor) and for OpenHarmony (the phone). Everything is compute; a surface to present to is optional
+// (DeviceOptions::createSurface), for the app.
+//
+// Errors are exceptions (replay::fail): the command-line tools print them, the app shows them.
 #pragma once
 #ifdef __OHOS__
 #define VK_USE_PLATFORM_OHOS   // vulkan_ohos.h: VK_OHOS_external_memory
@@ -16,18 +19,47 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
-#define VK_CHECK(x) \
-    do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { std::printf("FAIL %s -> %d (%s:%d)\n", #x, (int)r_, __FILE__, __LINE__); std::exit(2); } } while (0)
+namespace replay
+{
+/// printf into a std::string.
+inline std::string format(const char* fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    char small[512];
+    const int n = std::vsnprintf(small, sizeof(small), fmt, args);
+    va_end(args);
+    if (n < (int)sizeof(small)) return std::string(small, n > 0 ? (size_t)n : 0);
+    std::string text((size_t)n + 1, '\0');
+    va_start(args, fmt);
+    std::vsnprintf(&text[0], text.size(), fmt, args);
+    va_end(args);
+    text.resize((size_t)n);
+    return text;
+}
+
+[[noreturn]] inline void fail(const std::string& what) { throw std::runtime_error(what); }
+
+inline void vkCheck(VkResult result, const char* expression, const char* file, int line)
+{
+    if (result != VK_SUCCESS) fail(format("%s -> %d (%s:%d)", expression, (int)result, file, line));
+}
+}  // namespace replay
+
+#define VK_CHECK(x) ::replay::vkCheck((x), #x, __FILE__, __LINE__)
 
 namespace replay
 {
@@ -39,11 +71,7 @@ inline double msSince(std::chrono::steady_clock::time_point start)
 inline std::vector<char> readFile(const std::string& path)
 {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f)
-    {
-        std::printf("FAIL cannot read %s\n", path.c_str());
-        std::exit(2);
-    }
+    if (!f) fail("cannot read " + path);
     std::vector<char> data((size_t)f.tellg());
     f.seekg(0);
     f.read(data.data(), (std::streamsize)data.size());
@@ -73,12 +101,23 @@ struct Texture
     bool cube = false, storage = false;
 };
 
+/// What a device needs beyond compute and ray queries. The app presents: it asks for the surface and
+/// swapchain extensions and creates its surface once the instance exists.
+struct DeviceOptions
+{
+    std::vector<const char*> instanceExtensions;
+    std::vector<const char*> deviceExtensions;
+    std::function<VkSurfaceKHR(VkInstance)> createSurface;   // if set, the queue must also present to it
+};
+
 struct Device
 {
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physical = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
     VkQueue queue = VK_NULL_HANDLE;
+    uint32_t queueFamily = 0;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;   // the one DeviceOptions::createSurface made, if any
     VkCommandPool pool = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memory = {};
     char name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE] = {};
@@ -91,13 +130,16 @@ struct Device
     PFN_vkCmdBuildAccelerationStructuresKHR cmdBuildAS = nullptr;
     PFN_vkGetAccelerationStructureDeviceAddressKHR getASAddress = nullptr;
 
-    void create()
+    void create(const DeviceOptions& options = DeviceOptions())
     {
         VkApplicationInfo app = {VK_STRUCTURE_TYPE_APPLICATION_INFO};
         app.apiVersion = VK_API_VERSION_1_2;
         VkInstanceCreateInfo ici = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
         ici.pApplicationInfo = &app;
+        ici.enabledExtensionCount = (uint32_t)options.instanceExtensions.size();
+        ici.ppEnabledExtensionNames = options.instanceExtensions.data();
         VK_CHECK(vkCreateInstance(&ici, nullptr, &instance));
+        if (options.createSurface) surface = options.createSurface(instance);
 
         // The first device that has ray queries (a desktop may list an integrated GPU as well).
         uint32_t count = 0;
@@ -115,12 +157,15 @@ struct Device
                 for (const auto& x : extensions) if (!std::strcmp(x.extensionName, e)) return true;
                 return false;
             };
+            bool hasRequested = true;
+            for (const char* e : options.deviceExtensions) hasRequested = hasRequested && has(e);
             if (has(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) && has(VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
-                has(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME))
+                has(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME) && hasRequested)
             {
                 physical = candidate;
                 enabled = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_RAY_QUERY_EXTENSION_NAME,
                            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME};
+                enabled.insert(enabled.end(), options.deviceExtensions.begin(), options.deviceExtensions.end());
                 // The baked modules declare the RayTracingKHR capability next to RayQueryKHR.
                 rayPipeline = has(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
                 if (rayPipeline) enabled.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
@@ -132,11 +177,7 @@ struct Device
                 break;
             }
         }
-        if (!physical)
-        {
-            std::printf("FAIL no Vulkan device with ray queries\n");
-            std::exit(2);
-        }
+        if (!physical) fail("no Vulkan device with ray queries and the requested extensions");
         VkPhysicalDeviceProperties properties;
         vkGetPhysicalDeviceProperties(physical, &properties);
         std::memcpy(name, properties.deviceName, sizeof(name));
@@ -157,9 +198,15 @@ struct Device
         vkGetPhysicalDeviceQueueFamilyProperties(physical, &families, nullptr);
         std::vector<VkQueueFamilyProperties> queues(families);
         vkGetPhysicalDeviceQueueFamilyProperties(physical, &families, queues.data());
-        uint32_t family = 0;
-        for (uint32_t i = 0; i < families; i++)
-            if (queues[i].queueFlags & VK_QUEUE_COMPUTE_BIT) { family = i; break; }
+        uint32_t family = UINT32_MAX;
+        for (uint32_t i = 0; i < families && family == UINT32_MAX; i++)
+        {
+            VkBool32 present = VK_TRUE;
+            if (surface) vkGetPhysicalDeviceSurfaceSupportKHR(physical, i, surface, &present);
+            if ((queues[i].queueFlags & VK_QUEUE_COMPUTE_BIT) && present) family = i;
+        }
+        if (family == UINT32_MAX) fail(surface ? "no queue that computes and presents to the surface" : "no compute queue");
+        queueFamily = family;
 
         float priority = 1.0f;
         VkDeviceQueueCreateInfo qci = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -220,11 +267,7 @@ struct Device
         {
             ai.memoryTypeIndex = memoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         }
-        if (ai.memoryTypeIndex == UINT32_MAX)
-        {
-            std::printf("FAIL no memory type for a %s buffer\n", hostVisible ? "host-visible" : "device-local");
-            std::exit(2);
-        }
+        if (ai.memoryTypeIndex == UINT32_MAX) fail(format("no memory type for a %s buffer", hostVisible ? "host-visible" : "device-local"));
         VK_CHECK(vkAllocateMemory(device, &ai, nullptr, &b.memory));
         VK_CHECK(vkBindBufferMemory(device, b.buffer, b.memory, 0));
         if (hostVisible) VK_CHECK(vkMapMemory(device, b.memory, 0, VK_WHOLE_SIZE, 0, &b.data));
@@ -251,19 +294,11 @@ struct Device
             config.usage = NATIVEBUFFER_USAGE_CPU_READ | NATIVEBUFFER_USAGE_CPU_WRITE | NATIVEBUFFER_USAGE_MEM_DMA | NATIVEBUFFER_USAGE_HW_RENDER |
                            NATIVEBUFFER_USAGE_HW_TEXTURE;
             OH_NativeBuffer* native = OH_NativeBuffer_Alloc(&config);
-            if (!native)
-            {
-                std::printf("FAIL cannot allocate a native buffer of %zu bytes\n", b.sharedSize);
-                std::exit(2);
-            }
+            if (!native) fail(format("cannot allocate a native buffer of %zu bytes", b.sharedSize));
             // The file descriptor is only reachable through the window-buffer view of the buffer.
             OHNativeWindowBuffer* window = OH_NativeWindow_CreateNativeWindowBufferFromNativeBuffer(native);
             BufferHandle* handle = window ? OH_NativeWindow_GetBufferHandleFromNative(window) : nullptr;
-            if (!handle || handle->fd < 0)
-            {
-                std::printf("FAIL a native buffer without a file descriptor\n");
-                std::exit(2);
-            }
+            if (!handle || handle->fd < 0) fail("a native buffer without a file descriptor");
             b.fd = handle->fd;
 
             VkExternalMemoryBufferCreateInfo external = {VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
@@ -284,11 +319,7 @@ struct Device
             while (ai.memoryTypeIndex < 32 && !(properties.memoryTypeBits & (1u << ai.memoryTypeIndex))) ai.memoryTypeIndex++;
             VK_CHECK(vkAllocateMemory(device, &ai, nullptr, &b.memory));
             VK_CHECK(vkBindBufferMemory(device, b.buffer, b.memory, 0));
-            if (OH_NativeBuffer_Map(native, &b.data) != 0 || !b.data)
-            {
-                std::printf("FAIL cannot map a native buffer\n");
-                std::exit(2);
-            }
+            if (OH_NativeBuffer_Map(native, &b.data) != 0 || !b.data) fail("cannot map a native buffer");
             return b;
         }
 #endif
@@ -404,11 +435,7 @@ struct Device
                     offset += (VkDeviceSize)w * h * d * t.bytesPerPixel;
                 }
             }
-            if (offset != data->size())
-            {
-                std::printf("FAIL texture data is %zu bytes, the image needs %llu\n", data->size(), (unsigned long long)offset);
-                std::exit(2);
-            }
+            if (offset != data->size()) fail(format("texture data is %zu bytes, the image needs %llu", data->size(), (unsigned long long)offset));
         }
         VkCommandBuffer cb = begin();
         VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};

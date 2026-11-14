@@ -1,6 +1,6 @@
 // Compute passes written for the phone runtime itself (ohos/replay/shaders, compiled to SPIR-V by
-// slangc on the PC), as opposed to the passes Falcor bakes: storage buffers at bindings 0..n-1 of
-// set 0 and one block of push constants.
+// slangc on the PC), as opposed to the passes Falcor bakes: storage buffers (or storage images) at
+// bindings 0..n-1 of set 0 and one block of push constants.
 #pragma once
 #include "replay_vk.h"
 
@@ -15,14 +15,22 @@ struct OwnPass
     uint32_t groupSize = 64;
     std::string name;
 
+    /// A pass whose bindings are all storage buffers.
     void create(const Device& dev, VkDescriptorPool pool, const std::string& spvPath, uint32_t bufferCount, uint32_t pushSize, uint32_t group)
+    {
+        create(dev, pool, spvPath, std::vector<VkDescriptorType>(bufferCount, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), pushSize, group);
+    }
+
+    /// A pass with the given descriptor type at each binding (storage buffers and storage images).
+    void create(const Device& dev, VkDescriptorPool pool, const std::string& spvPath, const std::vector<VkDescriptorType>& types, uint32_t pushSize,
+                uint32_t group)
     {
         name = spvPath.substr(spvPath.find_last_of("/\\") + 1);
         groupSize = group;
         std::vector<VkDescriptorSetLayoutBinding> bindings;
-        for (uint32_t i = 0; i < bufferCount; i++) bindings.push_back({i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr});
+        for (uint32_t i = 0; i < (uint32_t)types.size(); i++) bindings.push_back({i, types[i], 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr});
         VkDescriptorSetLayoutCreateInfo sl = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        sl.bindingCount = bufferCount;
+        sl.bindingCount = (uint32_t)bindings.size();
         sl.pBindings = bindings.data();
         VK_CHECK(vkCreateDescriptorSetLayout(dev.device, &sl, nullptr, &setLayout));
         VkPushConstantRange range = {VK_SHADER_STAGE_COMPUTE_BIT, 0, pushSize};
@@ -62,8 +70,21 @@ struct OwnPass
         vkUpdateDescriptorSets(dev.device, 1, &w, 0, nullptr);
     }
 
+    /// A storage image, in the GENERAL layout.
+    void bindImage(const Device& dev, uint32_t binding, VkImageView view)
+    {
+        VkDescriptorImageInfo info = {VK_NULL_HANDLE, view, VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet w = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w.dstSet = set;
+        w.dstBinding = binding;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w.pImageInfo = &info;
+        vkUpdateDescriptorSets(dev.device, 1, &w, 0, nullptr);   // `info` is alive until here
+    }
+
     /// One dispatch over `items` items with the push constants, then a barrier for the next pass.
-    template <typename Push> void dispatch(VkCommandBuffer cb, const Push& push, uint32_t items)
+    template <typename Push> void dispatch(VkCommandBuffer cb, const Push& push, uint32_t items) const
     {
         if (items == 0) return;
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
@@ -76,15 +97,26 @@ struct OwnPass
         vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                              0, 1, &barrier, 0, nullptr, 0, nullptr);
     }
+
+    void destroy(const Device& dev)
+    {
+        if (pipeline) vkDestroyPipeline(dev.device, pipeline, nullptr);
+        if (layout) vkDestroyPipelineLayout(dev.device, layout, nullptr);
+        if (setLayout) vkDestroyDescriptorSetLayout(dev.device, setLayout, nullptr);
+        pipeline = VK_NULL_HANDLE;
+        layout = VK_NULL_HANDLE;
+        setLayout = VK_NULL_HANDLE;
+        set = VK_NULL_HANDLE;   // freed with its pool
+    }
 };
 
-inline VkDescriptorPool makeOwnPool(const Device& dev, uint32_t passes, uint32_t buffers)
+inline VkDescriptorPool makeOwnPool(const Device& dev, uint32_t passes, uint32_t buffers, uint32_t images = 0)
 {
-    VkDescriptorPoolSize size = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, buffers};
+    VkDescriptorPoolSize sizes[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, std::max(buffers, 1u)}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, std::max(images, 1u)}};
     VkDescriptorPoolCreateInfo pci = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pci.maxSets = passes;
-    pci.poolSizeCount = 1;
-    pci.pPoolSizes = &size;
+    pci.poolSizeCount = 2;
+    pci.pPoolSizes = sizes;
     VkDescriptorPool pool;
     VK_CHECK(vkCreateDescriptorPool(dev.device, &pci, nullptr, &pool));
     return pool;

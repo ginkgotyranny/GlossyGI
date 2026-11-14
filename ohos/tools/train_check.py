@@ -4,8 +4,8 @@
     python ohos/tools/train_check.py <bake dir> <replay output dir> [--npu]
 
 The bake must be of a frame that trains, baked at frame 0 (NCR_BAKE_FRAME=0): Falcor then starts,
-like the replayer, from <bake>/before.ckpt with fresh optimizer moments. The replay must have run
-from before.ckpt for one frame with --dump-train.
+like the replayer, from <bake>/before.ckpt with fresh optimizer moments. The replay must have run one
+frame with --dump-train, from the bake's model (`ncr_replay <bake> bake <out> --dump-train`).
 
 Step by step, each from the replayer's own inputs to that step, against ohos/npu (the model that was
 checked against the CUDA implementation by verify_tcnn.py):
@@ -48,6 +48,18 @@ def relative_l2(a, b):
     return float(np.linalg.norm(a - b) / max(np.linalg.norm(b), 1e-30))
 
 
+def load_working(path):
+    """The four fp16 blocks of an NRWK file (NRModel::saveWorkingCopies), in checkpoint order."""
+    data = open(path, "rb").read()
+    magic, version, *counts = __import__("struct").unpack_from("<4sI4I", data, 0)
+    assert magic == b"NRWK" and version == 1, path
+    blocks, offset = [], 24
+    for count in counts:
+        blocks.append(np.frombuffer(data, dtype=np.float16, count=count, offset=offset).copy())
+        offset += count * 2
+    return blocks
+
+
 def tiles_to_rows(path, channels, tile, count):
     """Tiles as the replayer lays them out, (tiles, C, tile) fp16 -> rows (count, C) float32."""
     data = np.fromfile(path, dtype=np.float16).reshape(-1, channels, tile)
@@ -70,7 +82,15 @@ def main():
     before = ref.load_checkpoint(os.path.join(args.bake, "before.ckpt"))
     falcor = ref.load_checkpoint(os.path.join(args.bake, "after.ckpt"))
     trained = ref.load_checkpoint(os.path.join(args.out, "trained.ckpt"))
-    half = {name: before[name + "_master"].astype(np.float16) for name in ref.BLOCKS}   # the training copies
+    # The fp16 copies the step computed with, as the replay dumped them (train_working.bin). With the
+    # bake's model they are Falcor's (before_working.bin): the masters in fp16 after loading a
+    # checkpoint, zero in a fresh model, whose first step therefore changes nothing but the weight decay.
+    working = load_working(os.path.join(args.out, "train_working.bin"))
+    half = dict(zip(ref.BLOCKS, working))
+    baked = os.path.join(args.bake, "before_working.bin")
+    if os.path.exists(baked):
+        same = all(np.array_equal(a.view(np.uint16), b.view(np.uint16)) for a, b in zip(working, load_working(baked)))
+        check("training copies equal the bake's before_working.bin (mismatching blocks)", 0 if same else 1, 0)
     print(f"training step: tiles of {tile}, learning rate {learning_rate:g}, EMA decay {ema_decay:g}")
 
     nets = {"diff": (graphs.DIFF, ref.DIFF_LAYERS, ref.DIFF_POS), "spec": (graphs.SPEC, ref.SPEC_LAYERS, ref.SPEC_POS)}
@@ -162,6 +182,9 @@ def main():
         ours = trained[name + "_master"].astype(np.float64) - before[name + "_master"]
         theirs = falcor[name + "_master"].astype(np.float64) - before[name + "_master"]
         moved_ours, moved_theirs = ours != 0, theirs != 0
+        if not moved_ours.any() and not moved_theirs.any():
+            print(f"  {name}: no weight moved, here or in Falcor (a fresh model's first step)")
+            continue
         both = moved_ours & moved_theirs
         same_set = both.sum() / max((moved_ours | moved_theirs).sum(), 1)
         same_direction = (np.sign(ours[both]) == np.sign(theirs[both])).mean() if both.any() else 1.0

@@ -30,14 +30,18 @@ ohos/npu/train_loop_check.py   convergence of the NPU-style training loop agains
 ohos/npu/export_models.py      gradient check vs autograd, ONNX, test vectors, .om / .omc conversion (WSL)
 ohos/probes/npu_mlp/           on-device probe: load a model through NNRt, check the outputs, time RunSync
 ohos/probes/gpu/               on-device probe: hash grids in compute, ray query throughput, shader features, baked pipelines
-ohos/replay/                   the replayer: runs baked frames on any Vulkan device (PC and phone), rendering and training,
-                               with the MLPs on the NPU (phone) or on the CPU
+ohos/replay/ncr_runtime.*      the runtime: runs the frames of a bake on any Vulkan device (PC and phone), rendering and
+                               training, the MLPs on the NPU (phone) or on the CPU; shared by the replayer and the app
+ohos/replay/ncr_replay.cpp     the replayer, the runtime's command-line front end (Windows: build_pc.bat; phone: run_device.sh)
+ohos/replay/shaders/           the runtime's own compute shaders; compile_shaders.py is their one list
 ohos/tools/spirv_info.py       capabilities and bindings of a SPIR-V module (and .layout files for the probe)
 ohos/tools/bake_check.py       resolves every SPIR-V binding of a bake to the resource the bake recorded for it
 ohos/tools/bake_pack.py        joins bake and SPIR-V into the index the replayer reads; repairs the SPIR-V (spirv_fix.py)
 ohos/tools/replay_compare.py   a replay's images and buffers against Falcor's from the baked frame
 ohos/tools/train_check.py      one training step of the replayer against the reference model, stage by stage, and against Falcor
 ohos/tools/train_compare.py    N frames of training in the replayer against N frames of training in Falcor
+ohos/tools/display_check.py    the image the runtime shows (tone mapped, 8-bit) against Falcor's ToneMapper output
+ohos/tools/bake_files.py       the files of a bake the runtime reads (what goes to the phone)
 ohos/tools/raw_to_png.py       a dumped RGBA32F image as PNG
 ohos/tools/png_stats.py        mean / saturation / difference of PNG frames, standard library only
 ohos/_build/                   generated files (git-ignored)
@@ -215,9 +219,11 @@ that computes the same sequence with 32-bit arithmetic (`FALCOR_SPLITMIX64_32BIT
 64-bit arithmetic on 400,000 draws); the NeuralRadiosity pass defines it, so the desktop and the phone
 run the same code. The default is unchanged for every other pass.
 
-### The replayer
+### The runtime and the replayer
 
-`ohos/replay` loads a packed bake and executes the recorded frame, without Falcor: it creates the
+The runtime (`ohos/replay/ncr_runtime.h`, class `Runtime`) loads a packed bake and executes the recorded
+frame again and again, without Falcor; the replayer (`ncr_replay.cpp`) is its command-line front end, the
+app (`ohos/app`) its other user. It creates the
 buffers, textures and samplers of the bake, rebuilds the acceleration structures, creates a compute
 pipeline per baked module and descriptor sets per recorded call, then runs the calls in order and does
 the host steps between them itself. For a frame in render mode that is FirstSmoothPass, the prefix sums,
@@ -243,13 +249,22 @@ The prefix sums between the passes (mask to compacted index, and the count) are 
 replayer as well (`shaders/PrefixSum`), so a frame only waits for the host where the networks run.
 `--cpu-prefix-sum` does them on the CPU instead. Training is described below.
 
+The model a replay starts from (second argument) is `bake`, the model as it was at the start of the
+baked frame (the bake's `before.ckpt` and `before_working.bin`), or a checkpoint path, loaded the way
+Falcor's `loadModelPath` loads one. The replayer also writes `display.bin`, the final image as it is
+shown: the runtime's `Display` pass (`shaders/Display`) does what the project's graphs do after the
+pass, Falcor's ToneMapper with their settings (ACES, no auto exposure, clamp) and sRGB encoding into
+8 bits. `ohos/tools/display_check.py` compares it with the PNG Falcor captured of the same frame:
+59.9-61.5 dB, 0.003% (PC) and 0.03% (phone) of the pixels differ by more than one step.
+
 ```bat
 python ohos/tools/bake_pack.py <bake dir>
 ohos\replay\build_pc.bat
-ohos\_build\replay\ncr_replay.exe <bake dir> <checkpoint.ckpt> <out dir>
+ohos\_build\replay\ncr_replay.exe <bake dir> bake <out dir>
 python ohos/tools/replay_compare.py <bake dir> <out dir>
-python ohos/npu/export_models.py --only inf_256x256 --om            # the NPU models, for --networks npu
-bash ohos/replay/run_device.sh <bake dir> <checkpoint.ckpt> --networks npu     # the same on the phone
+python ohos/tools/display_check.py <out dir>/display.bin <bake dir>/frames/smoke.ToneMapper.dst.1.png
+python ohos/npu/export_models.py --only inf_256x256 --only _train_ --om   # the NPU models, for --networks npu
+bash ohos/replay/run_device.sh <bake dir> bake --networks npu             # the same on the phone
 python ohos/tools/replay_compare.py <bake dir> ohos/_build/replay/device_out
 ```
 
@@ -283,8 +298,10 @@ buffer directly).
 ### Training
 
 A frame baked in a training mode contains the training step (`host <k> train lhs`), and the bake holds
-the model before and after the frame (`before.ckpt`, `after.ckpt`) and the learning rate and EMA decay
-the step ran with. With `--networks tiles` or `npu` the replayer executes it:
+the model before and after the frame (`before.ckpt`, `after.ckpt`), the fp16 copies the step computes
+with (`before_working.bin`: a checkpoint does not hold them, and a fresh model's are zero, not its
+masters rounded), and the training schedule: its settings and its state after the frame. With
+`--networks tiles` or `npu` the runtime executes the step:
 
 | Step | Where | What |
 |---|---|---|
@@ -296,23 +313,26 @@ the step ran with. With `--networks tiles` or `npu` the replayer executes it:
 
 `--frames N` replays the frame N times as consecutive frames: the frame counter that seeds the samplers
 advances and the uniforms that depend on the sample counts are set as `NeuralRadiosity.cpp` sets them;
-camera and scene stay as baked. The weights after the last frame are written as `trained.ckpt`, a
-checkpoint Falcor loads.
+camera and scene stay as baked. The learning rate and EMA decay follow Falcor's online training schedule
+(`NeuralRadiosity::updateTrainSchedule`, ported as `TrainSchedule`): continued from its state after the
+baked frame, with no events, so it holds through the warmup and then cools (`--lr`, `--ema` fix them
+instead). The weights after the last frame are written as `trained.ckpt`, a checkpoint Falcor loads,
+and the schedule's state as `schedule.txt`.
 
 ```bat
 set NCR_BAKE_DIR=<bake0> & set NCR_BAKE_FRAME=0 & set NCR_SMOKE_FRAMES=1 & set NCR_SMOKE_MODE=onlineTrain
-set NCR_SMOKE_PROPS={'loadModelPath': '<start.ckpt>'}
+set NCR_SMOKE_OUT=<bake0>/frames & set NCR_SMOKE_PROPS={'randomTrainDir': False}
 build\windows-vs2022\bin\Release\Mogwai.exe --headless --device-type vulkan --script scripts/ncr_smoke.py
 python ohos/tools/bake_pack.py <bake0>
 python ohos/npu/export_models.py --only inf_256x256 --only _train_ --om
-bash ohos/replay/run_device.sh <bake0> <bake0>/before.ckpt --networks npu --dump-train
+bash ohos/replay/run_device.sh <bake0> bake --networks npu --dump-train
 python ohos/tools/train_check.py <bake0> ohos/_build/replay/device_out --npu      # one step
-bash ohos/replay/run_device.sh <bake0> <bake0>/before.ckpt --networks npu --frames 60 --loss 10
+bash ohos/replay/run_device.sh <bake0> bake --networks npu --frames 60 --loss 10
 python ohos/tools/train_compare.py <bake0> ohos/_build/replay/device_out <bake59>  # <bake59>: the same run baked at frame 59
 ```
 
-Falcor has to start from a loaded checkpoint and the bake has to be of frame 0: then Falcor and the
-replayer both begin with the fp16 training copies rebuilt from the masters and with empty Adam moments.
+The bake has to be of frame 0, so that Falcor and the replay both start with empty Adam moments; with
+`before_working.bin` it may be of a fresh model or of one loaded with `loadModelPath`.
 
 Results, bathroom at 640x360, online training from a 300-step checkpoint, 32,768 training samples per
 frame (18,429 diffuse and 14,339 specular rows, 229,738 RHS queries), learning rate 5e-3, EMA 0.95,
@@ -330,6 +350,16 @@ frame (18,429 diffuse and 14,339 specular rows, 229,738 RHS queries), learning r
 | 60 frames against Falcor: cosine between the two updates, grids | 0.991 / 0.992 | 0.985 / 0.987 |
 | the same, DiffNet / SpecNet | 0.992 / 0.984 | 0.958 / 0.940 |
 | Image after frame 60, against Falcor's after its 60 frames | 51.3 dB | 50.9 dB |
+
+From a fresh model (no checkpoint; bakes of 2026-11-13, `randomTrainDir` off), 60 frames:
+
+| | PC, MLPs on the CPU | Phone, MLPs on the NPU |
+|---|---|---|
+| First step against Falcor | empty in both (the training copies are zero): grids unchanged, MLP updates equal (cosine 1 - 7e-9) | the same |
+| 60 frames: cosine between the two updates, grids / MLPs | 0.996-0.997 / 0.989-0.999 | 0.996-0.997 / 0.999 (EMA copies) |
+| Image after frame 60 against Falcor's (Falcor's own first and last frame: 12.7 dB apart) | 48.8 dB | 46.8 dB |
+| The same with the warmup shortened to 10 frames and a cooling time of 20, so that the schedule cools within the 60 frames: schedule state after frame 60 | equal to Falcor's (heat 0.2345705, learning rate 0.0029413912, EMA decay 0.9854133) | equal |
+| image | 50.4 dB | 47.4 dB |
 
 For scale: Falcor's own image moves by 17-19 dB between its first and its 60th frame of that run. The
 checkpoint the phone wrote after its 60 frames, loaded into Falcor (D3D12, render mode), gives the image
@@ -389,7 +419,8 @@ Two properties of the pipeline as it runs on the desktop, found because the repl
    weights that training reads are first written by the optimizers; before that they are zero, the
    network output is constant and every gradient is zero. From a loaded checkpoint this does not
    happen: loading rebuilds the copies. (Baked frame 0 of a fresh run: Falcor's grids unchanged, MLP
-   weights changed by rounding and weight decay only.)
+   weights changed by rounding and weight decay only.) The bake records the copies
+   (`before_working.bin`) and the runtime starts from them, so the phone does the same.
 2. **29% of the training samples are shaded from behind their surface**, and their direct light is
    decided by how a GPU treats an intersection 1e-4 from a ray's origin. RandomSmooth gives each
    sample a random direction and flips it to the side the path came from, but the test multiplies

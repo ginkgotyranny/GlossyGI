@@ -10,7 +10,10 @@ own networks and optimizers. What it arrives at is compared with what Falcor arr
 
   - the weights: trained.ckpt against the second bake's after.ckpt, as the update each made to the
     checkpoint both started from;
-  - the image: the final color of the last frame against Falcor's of frame N-1.
+  - the image: the final color of the last frame against Falcor's of frame N-1;
+  - the training schedule: the heat, hold count, learning rate and EMA decay after the last frame
+    (schedule.txt) against what Falcor recorded after frame N-1. These must be equal: the schedule is
+    the same float arithmetic on both sides.
 
 The two runs are not expected to be equal: every step differs a little (fp16 rounding, the order
 of the sums), and training amplifies that. They should have learned the same thing.
@@ -71,6 +74,16 @@ def main():
             failures += 0 if ok else 1
             print(f"  {'ok  ' if ok else 'FAIL'} {key:16s} update norm {np.linalg.norm(a):9.4f} here, {np.linalg.norm(b):9.4f} in Falcor; "
                   f"cosine {cosine:.4f}; difference / update {np.linalg.norm(a - b) / max(np.linalg.norm(b), 1e-30):.3f}")
+
+    schedule_file = os.path.join(out_dir, "schedule.txt")
+    if os.path.exists(schedule_file) and "train.heat" in last["values"]:
+        ours = {line.split()[0]: float(line.split()[1]) for line in open(schedule_file)}
+        theirs = {"heat": last["values"]["train.heat"], "holdLeft": last["values"]["train.holdLeft"],
+                  "learningRate": last["values"]["train.learningRate"], "emaDecay": last["values"]["train.emaDecay"]}
+        same = all(np.float32(ours[k]) == np.float32(v) for k, v in theirs.items())
+        failures += 0 if same else 1
+        print(f"schedule after the last frame: {'ok  ' if same else 'FAIL'} here "
+              + ", ".join(f"{k} {ours[k]:.9g}" for k in theirs) + "; Falcor " + ", ".join(f"{k} {v:.9g}" for k, v in theirs.items()))
 
     reference = image(os.path.join(last_dir, "data", f"texture{color_texture(last)}.bin"))
     replayed = image(os.path.join(out_dir, f"texture{color_texture(first)}.bin"))

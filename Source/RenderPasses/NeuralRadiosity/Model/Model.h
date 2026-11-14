@@ -66,6 +66,11 @@ public:
 
     void loadState(const std::string& path);
     void saveState(const std::string& path);
+    /// The fp16 copies the training step computes with ("NRWK" v1: header with the four element
+    /// counts, then the primary grid, cluster grid, DiffNet and SpecNet blocks). Not part of a
+    /// checkpoint: loading one rebuilds them from the masters, while a fresh model starts with
+    /// whatever the optimizers have not yet written. The OpenHarmony bake records them.
+    void saveWorkingCopies(const std::string& path);
 
     void setOnline(bool online);
     /// Learning rate and EMA decay for all four online optimizers (grids and MLPs).

@@ -186,11 +186,7 @@ private:
         return tensor;
     }
 
-    [[noreturn]] static void fail(const std::string& what)
-    {
-        std::printf("FAIL NNRt: %s\n", what.c_str());
-        std::exit(2);
-    }
+    [[noreturn]] static void fail(const std::string& what) { replay::fail("NNRt: " + what); }
 
     static void run(Model& m, std::vector<NN_Tensor*>& inputs, std::vector<NN_Tensor*>& outputs)
     {
