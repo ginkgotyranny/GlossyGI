@@ -1,0 +1,12 @@
+{
+  "app": {
+    // Generated into app.json5 by tools/gen_build_profile.py: the bundle name must be the one the
+    // debug signing profile was made for, see ohos/app/README.md.
+    "bundleName": "@BUNDLE_NAME@",
+    "vendor": "glossygi",
+    "versionCode": 1000000,
+    "versionName": "1.0.0",
+    "icon": "$media:app_icon",
+    "label": "$string:app_name"
+  }
+}

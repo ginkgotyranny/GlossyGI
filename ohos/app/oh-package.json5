@@ -1,0 +1,8 @@
+{
+  "modelVersion": "6.0.0",
+  "description": "NCR: neural glossy global illumination, rendered and trained on the phone (GPU and NPU)",
+  "dependencies": {
+  },
+  "devDependencies": {
+  }
+}

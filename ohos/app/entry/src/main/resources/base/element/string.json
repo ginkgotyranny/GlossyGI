@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "NCR renderer"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Neural glossy global illumination, rendered and trained on the phone"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "NCR"
+    }
+  ]
+}

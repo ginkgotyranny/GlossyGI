@@ -42,6 +42,8 @@ ohos/tools/train_check.py      one training step of the replayer against the ref
 ohos/tools/train_compare.py    N frames of training in the replayer against N frames of training in Falcor
 ohos/tools/display_check.py    the image the runtime shows (tone mapped, 8-bit) against Falcor's ToneMapper output
 ohos/tools/bake_files.py       the files of a bake the runtime reads (what goes to the phone)
+ohos/tools/bake_scene.py       one command from a scene to a packed bake: runs Falcor, then bake_pack.py
+ohos/app/                      the HarmonyOS app (HAP): the runtime behind an XComponent; its own README.md
 ohos/tools/raw_to_png.py       a dumped RGBA32F image as PNG
 ohos/tools/png_stats.py        mean / saturation / difference of PNG frames, standard library only
 ohos/_build/                   generated files (git-ignored)
@@ -440,6 +442,33 @@ off: a sample then keeps the direction its path arrived with. The comparisons ab
 frame both GPUs must agree on. Whether the test in RandomSmooth should be corrected is a question for
 the training algorithm, not for the port; it changes what the desktop learns from.
 
+### The app
+
+`ohos/app` is the HarmonyOS application: an ArkTS page with one XComponent, and a native library
+(`entry/src/main/cpp/app.cpp` plus the runtime) that extracts the assets, creates the Vulkan device and
+the `Runtime`, and on its own thread runs frame after frame, shows each through the `Display` pass and
+a swapchain, and writes its log to the app's files folder. `ohos/app/README.md` has the build, the
+signing, the launch arguments and where things are on the phone.
+
+```bash
+python ohos/tools/bake_scene.py bathroom     # Falcor bakes frame 0 in Online Train mode: ohos/_build/scenes/bathroom
+bash ohos/app/tools/deploy.sh --args "--save-at=60" --pull-out 75   # build, install, start; log, screenshot, frame 60's results
+```
+
+Checked on the phone, 2026-11-13, bathroom baked with the project's defaults (fresh model, 32,768
+training samples per frame, 640x360):
+
+| | |
+|---|---|
+| First start | assets (67 files, 159 MB) extracted in 0.3 s; scene, acceleration structures and 12 pipelines in 3.1 s; four NPU graphs in 1.6 s |
+| Frames | training and rendering every frame, 315 ms on average, 3.5 ms of it presenting; 640x360 scaled by the compositor to the 2347x1320 component |
+| Frame 60 against the command-line replayer on the phone (same bake, 60 frames) | `trained.ckpt`, `display.bin` and `schedule.txt` identical to the byte (the replayer itself repeats to the byte) |
+| Home, then back | no frames while in the background (same process, no GPU or NPU work), continues where it stopped |
+| Second start, no launch arguments | assets found up to date, runs with the defaults |
+
+The swapchain is released before the window when the XComponent's surface is destroyed; the system did
+not destroy the surface in these runs (Home keeps it), so that path has run only by reading the code.
+
 ### What the phone's driver does differently
 
 Each of these made the first replays on the phone wrong while the PC was right. The first two are
@@ -473,7 +502,8 @@ triangle, was suspected first and is fine (test `load16`).
    in the replayer, frame after frame, with the MLP gradients on the NPU, the grids trained on the GPU
    and the result in agreement with Falcor's training (above); the tiles shared by Vulkan and NNRt.
    The prefix sums run on the GPU.
-   Next: sample counts for the phone; the cluster-reuse cone trace; a moving camera; the training
-   schedule.
-4. The HarmonyOS app: platform layer, NNRt backend, zero-copy buffers, frame synchronisation, cross-frame
-   training; then performance.
+4. The HarmonyOS app. Done: the runtime as a library with Falcor's training schedule and the display
+   pass; the app (`ohos/app`) that runs it on the phone, trains on the NPU and shows the image, with
+   its build, signing and deployment scripts (above).
+   Next: a moving camera (touch); then, when frame rate matters again: sample counts for the phone, the
+   cluster-reuse cone trace, training across frames.
