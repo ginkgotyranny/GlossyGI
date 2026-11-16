@@ -399,6 +399,10 @@ private:
     /// mean PSNR equal to the fixed hot setting. A cold LR of 1e-3 or a 300-frame
     /// warmup stops the network while it is still improving (-0.3 to -0.5 dB static).
     /// Camera heat 0 loses ~1 dB on camera-only paths (bathroom2).
+    /// That tuning used camera heat 0.5. Local change (2026-11-15, not in the Linux
+    /// snapshots): camera heat 0.3, and the fixed-camera levels below 0.5 and 0.1
+    /// (were 0.7 and 0.2), because lighting still flickered visibly. The eval scenes
+    /// have not been re-run with these levels.
     bool mEnableTrainSchedule = true;
     float mTrainLrHot = NCR_ADAM_LR;
     float mTrainLrCold = NCR_ADAM_LR_COLD;
@@ -407,18 +411,19 @@ private:
     uint32_t mTrainWarmupFrames = 600;
     uint32_t mTrainHoldFrames = 30;
     float mTrainCoolFrames = 300.f;
-    float mTrainCameraHeat = 0.5f;
+    float mTrainCameraHeat = 0.3f;
     float mTrainSceneHeat = 1.f;
     float mTrainHeat = 1.f;
     uint32_t mTrainHoldLeft = 600;
     IScene::UpdateFlags mPendingSceneUpdates = IScene::UpdateFlags::None;
     /// Fixed-camera targets (local addition, not in the Linux snapshots). Moving lights
     /// (analytic, or emissive geometry) change radiance everywhere they reach, so they
-    /// stay warm enough to keep up. With only non-emissive geometry moving, most of the
-    /// image is unaffected and should settle; the moving objects' own shading, shadows
-    /// and reflections lag more (EMA half-life ~50 frames at 0.2).
-    float mTrainLightMotionHeat = 0.7f;
-    float mTrainObjectMotionHeat = 0.2f;
+    /// stay warm enough to keep up (EMA half-life ~31 frames at 0.5). With only
+    /// non-emissive geometry moving, most of the image is unaffected and should settle;
+    /// the moving objects' own shading, shadows and reflections lag more (EMA half-life
+    /// ~59 frames at 0.1).
+    float mTrainLightMotionHeat = 0.5f;
+    float mTrainObjectMotionHeat = 0.1f;
     /// Schedule log (local addition, not in the Linux snapshots): every this many
     /// training frames, and on the frame an event raises the heat, print frame, heat,
     /// hold/cooling, LR, EMA decay and the events seen since the previous line. 0 = off.

@@ -50,7 +50,7 @@ struct TrainSchedule
     float lrHot = 5e-3f, lrCold = 2.5e-3f, emaHot = 0.95f, emaCold = 0.99f;
     uint32_t holdFrames = 30;
     float coolFrames = 300.0f;
-    float cameraHeat = 0.5f, sceneHeat = 1.0f, lightMotionHeat = 0.7f, objectMotionHeat = 0.2f;
+    float cameraHeat = 0.3f, sceneHeat = 1.0f, lightMotionHeat = 0.5f, objectMotionHeat = 0.1f;
     float learningRate = 5e-3f, emaDecay = 0.95f;   // the values of the current frame
 
     /// One frame's update, before its training step. `events`: kEvent* bits seen since the last frame.
