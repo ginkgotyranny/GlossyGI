@@ -11,6 +11,9 @@ rem   run.bat <script> [scene] [anim]  direct mode (same as run.sh)
 rem   run.bat ncr living-room anim
 rem   run.bat ptnrd kitchen
 rem   Options: --width/-w N   --height/-h N   --device/-d d3d12|vulkan   --gpu N
+rem            --camera-anim on|off     the cameras follow their animation path (default on)
+rem            --mirror-albedo on|off   NeuralRadiosity's Mirror Albedo (ncr only, default on)
+rem   Interactive mode asks for both after the scene variant.
 rem   Set NCR_RUN_DRYRUN=1 to print the command without launching.
 rem   Set NCR_BUILD_DIR=build\windows-vs2022-vk to launch a different build tree.
 rem ============================================================================
@@ -33,6 +36,14 @@ set "SCRIPT_KEY="
 set "SCENE_NAME="
 set "SCENE_SUFFIX="
 set "SCENE_SUFFIX_SET=0"
+set "SCENE_INTERACTIVE="
+set "CAMERA_ANIM="
+set "MIRROR_ALBEDO="
+rem Options for Mogwai's scripts (scripts\run_launch.py, scripts\NeuralRadiosity.py) come from this
+rem launcher only: values left in the calling shell must not leak in.
+set "NCR_GRAPH_SCRIPT="
+set "NCR_CAMERA_ANIMATED="
+set "NCR_MIRROR_ALBEDO="
 
 rem ---------------------------------------------------------------------------
 rem Script registry (alphabetical, same set as run.sh).
@@ -66,6 +77,8 @@ if /i "%A%"=="-h"         ( set "HEIGHT=%~2" & shift & shift & goto argloop )
 if /i "%A%"=="--device"   ( set "DEVICE_ARGS=!DEVICE_ARGS! --device-type=%~2" & shift & shift & goto argloop )
 if /i "%A%"=="-d"         ( set "DEVICE_ARGS=!DEVICE_ARGS! --device-type=%~2" & shift & shift & goto argloop )
 if /i "%A%"=="--gpu"      ( set "DEVICE_ARGS=!DEVICE_ARGS! --gpu=%~2" & shift & shift & goto argloop )
+if /i "%A%"=="--camera-anim"   ( set "CAMERA_ANIM=%~2" & shift & shift & goto argloop )
+if /i "%A%"=="--mirror-albedo" ( set "MIRROR_ALBEDO=%~2" & shift & shift & goto argloop )
 if not defined SCRIPT_KEY ( set "SCRIPT_KEY=%A%" & shift & goto argloop )
 if not defined SCENE_NAME ( set "SCENE_NAME=%A%" & shift & goto argloop )
 echo Unknown argument: %A%
@@ -140,6 +153,7 @@ rem ---------------------------------------------------------------------------
 rem Scene selection (interactive menu when not given on the command line).
 rem ---------------------------------------------------------------------------
 if not defined SCENE_NAME (
+    set "SCENE_INTERACTIVE=1"
     echo Available scenes:
     for /l %%i in (1,1,%SCENE_COUNT%) do (
         set "HAS_ANIM="
@@ -192,6 +206,31 @@ if "!SCENE_SUFFIX_SET!"=="0" (
     )
 )
 
+rem ---------------------------------------------------------------------------
+rem Camera animation and Mirror Albedo: asked after the variant when the scene was picked from the
+rem menu, unless given on the command line. Mirror Albedo belongs to NeuralRadiosity (ncr) only.
+rem ---------------------------------------------------------------------------
+if defined SCENE_INTERACTIVE (
+    if not defined CAMERA_ANIM (
+        set "CAM_CHOICE="
+        set /p CAM_CHOICE="Camera animation: [1] on  [2] off [1]: "
+        if defined CAM_CHOICE set "CAM_CHOICE=!CAM_CHOICE: =!"
+        if "!CAM_CHOICE!"=="2" ( set "CAMERA_ANIM=off" ) else ( set "CAMERA_ANIM=on" )
+    )
+    if /i "!SCRIPT_KEY!"=="ncr" if not defined MIRROR_ALBEDO (
+        set "MIRROR_CHOICE="
+        set /p MIRROR_CHOICE="Mirror Albedo: [1] on  [2] off [1]: "
+        if defined MIRROR_CHOICE set "MIRROR_CHOICE=!MIRROR_CHOICE: =!"
+        if "!MIRROR_CHOICE!"=="2" ( set "MIRROR_ALBEDO=off" ) else ( set "MIRROR_ALBEDO=on" )
+    )
+)
+call :onoff CAMERA_ANIM --camera-anim || exit /b 1
+call :onoff MIRROR_ALBEDO --mirror-albedo || exit /b 1
+if defined MIRROR_ALBEDO if /i not "!SCRIPT_KEY!"=="ncr" (
+    echo Note: --mirror-albedo belongs to the ncr script; ignored for !SCRIPT_KEY!
+    set "MIRROR_ALBEDO="
+)
+
 set "SCENE_BASE=%SCENE_ROOT%\%SCENE_NAME%"
 set "SCENE_FILE="
 if not "%SCENE_SUFFIX%"=="anim" (
@@ -212,14 +251,51 @@ echo ============================================
 echo  Script : %SCRIPT_KEY% (!SCRIPT_PATH!)
 echo  Scene  : %SCENE_NAME% (%SCENE_SUFFIX%)
 echo  File   : %SCENE_FILE%
+if defined CAMERA_ANIM echo  Camera : animation !CAMERA_ANIM!
+if defined MIRROR_ALBEDO echo  Mirror : albedo !MIRROR_ALBEDO!
 echo  Window : %WIDTH%x%HEIGHT%
 echo  Binary : %BIN%
 if defined DEVICE_ARGS echo  Device :%DEVICE_ARGS%
 echo ============================================
 
+set "LAUNCH_SCRIPT=%ROOT%!SCRIPT_PATH!"
+set "LAUNCH_ARGS="
+if /i "!CAMERA_ANIM!"=="off" (
+    rem The camera's flag lives in the scene, which Mogwai loads after --script. scripts\run_launch.py,
+    rem run after the scene (--deferred), sets it and then runs the chosen script.
+    set "NCR_GRAPH_SCRIPT=%ROOT%!SCRIPT_PATH!"
+    set "NCR_CAMERA_ANIMATED=0"
+    set "LAUNCH_SCRIPT=%ROOT%scripts\run_launch.py"
+    set "LAUNCH_ARGS= --deferred"
+)
+if /i "!MIRROR_ALBEDO!"=="on" set "NCR_MIRROR_ALBEDO=1"
+if /i "!MIRROR_ALBEDO!"=="off" set "NCR_MIRROR_ALBEDO=0"
+
 if defined NCR_RUN_DRYRUN (
-    echo [dryrun] "%BIN%"%DEVICE_ARGS% --width %WIDTH% --height %HEIGHT% --script "%ROOT%!SCRIPT_PATH!" --scene "%SCENE_FILE%"
+    if defined NCR_GRAPH_SCRIPT echo [dryrun] set NCR_GRAPH_SCRIPT=!NCR_GRAPH_SCRIPT!
+    if defined NCR_CAMERA_ANIMATED echo [dryrun] set NCR_CAMERA_ANIMATED=!NCR_CAMERA_ANIMATED!
+    if defined NCR_MIRROR_ALBEDO echo [dryrun] set NCR_MIRROR_ALBEDO=!NCR_MIRROR_ALBEDO!
+    echo [dryrun] "%BIN%"%DEVICE_ARGS%!LAUNCH_ARGS! --width %WIDTH% --height %HEIGHT% --script "!LAUNCH_SCRIPT!" --scene "%SCENE_FILE%"
     exit /b 0
 )
 
-"%BIN%"%DEVICE_ARGS% --width %WIDTH% --height %HEIGHT% --script "%ROOT%!SCRIPT_PATH!" --scene "%SCENE_FILE%"
+"%BIN%"%DEVICE_ARGS%!LAUNCH_ARGS! --width %WIDTH% --height %HEIGHT% --script "!LAUNCH_SCRIPT!" --scene "%SCENE_FILE%"
+exit /b !ERRORLEVEL!
+
+rem ---------------------------------------------------------------------------
+rem :onoff VAR OPTION  normalises an on/off option in place (1/true/yes, 0/false/no); unset stays unset.
+rem ---------------------------------------------------------------------------
+:onoff
+if not defined %1 exit /b 0
+set "V=!%1!"
+if /i "!V!"=="1" set "%1=on"
+if /i "!V!"=="true" set "%1=on"
+if /i "!V!"=="yes" set "%1=on"
+if /i "!V!"=="0" set "%1=off"
+if /i "!V!"=="false" set "%1=off"
+if /i "!V!"=="no" set "%1=off"
+set "V=!%1!"
+if /i "!V!"=="on" exit /b 0
+if /i "!V!"=="off" exit /b 0
+echo Error: %2 takes on or off, not '!V!'
+exit /b 1

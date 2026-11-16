@@ -40,6 +40,7 @@ Windows (`run.bat` mirrors `run.sh`'s script registry and scene resolution; `NCR
 ```bat
 run.bat                            :: interactive
 run.bat ncr bathroom anim          :: NeuralRadiosity, animated scene
+run.bat ncr bathroom anim --camera-anim off --mirror-albedo off
 run.bat ptdn cornell-box --width 1920 --height 1080
 ```
 
@@ -53,7 +54,9 @@ Linux:
 ./run.sh ptdn cornell-box      # PathTracer + OptiX denoiser
 ```
 
-`run.sh` is the unified launcher (script registry + scene resolution live there). It execs Mogwai with `LD_PRELOAD=/lib/x86_64-linux-gnu/libpng16.so.16`, which is required (system libpng conflict) — keep that in any manual launch.
+`run.sh` is the unified launcher (script registry + scene resolution live there). It execs Mogwai with `LD_PRELOAD=/lib/x86_64-linux-gnu/libpng16.so.16`, which is required (system libpng conflict) — keep that in any manual launch. The same export makes `run.sh` fail in Git Bash (every forked subshell tries to load that library), so test it there on a copy without that line.
+
+- Launcher options, both launchers, default on: `--camera-anim on|off` (any script: the camera "Animated" box, `Animatable::mIsAnimated`, also "Animate Camera" under Scene Settings) and `--mirror-albedo on|off` (ncr only: the pass's `enableMirrorAlbedo`). Interactive mode asks for them after the scene variant; `NCR_RUN_DRYRUN=1` (both launchers) prints the environment and the command. Mirror Albedo reaches the pass as `NCR_MIRROR_ALBEDO`, read by `scripts/NeuralRadiosity.py`. The camera flag lives in the scene, which Mogwai loads after `--script`, so for `off` the launchers start Mogwai with `--deferred --script scripts/run_launch.py`: that runs at the first frame, after the scene has loaded and before its first update, runs the chosen graph script (`NCR_GRAPH_SCRIPT`), then sets `animated` on every camera. With the camera animation off, the interactive camera controller moves the camera; the scene's other animations keep playing.
 
 - Scenes: `media/scenes/<name>/scene-v4.pyscene` (static) or `scene-animation.pyscene` (animated). `scripts/python/pbrt2pyscene.py` converts pbrt-v4 scenes to pyscene.
 - NeuralRadiosity render modes (pass UI or `renderMode` property: `train|onlineTrain|render|idle`): `Train` (offline; saves `<steps>.ckpt` into the working directory every `saveCkptInterval` steps, stops at `totalTrainSteps`), `Online Train` (**default**; per-frame train + render), `Render`/`Idle`. `loadModelPath` loads a checkpoint right after the model is created.

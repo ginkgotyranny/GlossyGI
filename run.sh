@@ -14,6 +14,13 @@
 # Scene suffix:
 #   (default)  -> scene-v4.pyscene        (static)
 #   anim       -> scene-animation.pyscene  (animated)
+#
+# Options:
+#   --width/-w N  --height/-h N
+#   --camera-anim on|off     the cameras follow their animation path (default on)
+#   --mirror-albedo on|off   NeuralRadiosity's Mirror Albedo (ncr only, default on)
+# Interactive mode asks for both after the scene variant.
+# NCR_RUN_DRYRUN=1 prints the command instead of launching.
 
 set -e
 
@@ -75,11 +82,15 @@ HEIGHT=720
 SCRIPT_KEY=""
 SCENE_NAME=""
 SCENE_SUFFIX="static"
+CAMERA_ANIM=""
+MIRROR_ALBEDO=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --width|-w)  WIDTH="$2";  shift 2 ;;
         --height|-h) HEIGHT="$2"; shift 2 ;;
+        --camera-anim)   CAMERA_ANIM="$2";   shift 2 ;;
+        --mirror-albedo) MIRROR_ALBEDO="$2"; shift 2 ;;
         anim|animation) SCENE_SUFFIX="anim"; shift ;;
         *)
             if [[ -z "$SCRIPT_KEY" ]]; then
@@ -162,6 +173,32 @@ if [[ -z "$SCENE_NAME" ]]; then
             SCENE_SUFFIX="anim"
         fi
     fi
+
+    # camera animation and Mirror Albedo (NeuralRadiosity only), unless given on the command line
+    if [[ -z "$CAMERA_ANIM" ]]; then
+        read -rp "Camera animation: [1] on  [2] off [1]: " CAM_CHOICE
+        case "${CAM_CHOICE:-1}" in 2|off) CAMERA_ANIM="off" ;; *) CAMERA_ANIM="on" ;; esac
+    fi
+    if [[ "$SCRIPT_KEY" == "ncr" && -z "$MIRROR_ALBEDO" ]]; then
+        read -rp "Mirror Albedo: [1] on  [2] off [1]: " MIRROR_CHOICE
+        case "${MIRROR_CHOICE:-1}" in 2|off) MIRROR_ALBEDO="off" ;; *) MIRROR_ALBEDO="on" ;; esac
+    fi
+fi
+
+# on/off options: 1/true/yes and 0/false/no accepted; unset stays unset
+normalize_onoff() {
+    case "${1,,}" in
+        "") echo "" ;;
+        on|1|true|yes) echo on ;;
+        off|0|false|no) echo off ;;
+        *) echo "Error: $2 takes on or off, not '$1'" >&2; return 1 ;;
+    esac
+}
+CAMERA_ANIM="$(normalize_onoff "$CAMERA_ANIM" --camera-anim)" || exit 1
+MIRROR_ALBEDO="$(normalize_onoff "$MIRROR_ALBEDO" --mirror-albedo)" || exit 1
+if [[ -n "$MIRROR_ALBEDO" && "$SCRIPT_KEY" != "ncr" ]]; then
+    echo "Note: --mirror-albedo belongs to the ncr script; ignored for $SCRIPT_KEY"
+    MIRROR_ALBEDO=""
 fi
 
 # resolve suffix if user passed it as part of scene name (e.g. "living-room anim")
@@ -181,11 +218,33 @@ echo "============================================"
 echo " Script : $SCRIPT_KEY ($SCRIPT_PATH)"
 echo " Scene  : $SCENE_NAME ($SCENE_SUFFIX)"
 echo " File   : $SCENE_FILE"
+[[ -n "$CAMERA_ANIM" ]] && echo " Camera : animation $CAMERA_ANIM"
+[[ -n "$MIRROR_ALBEDO" ]] && echo " Mirror : albedo $MIRROR_ALBEDO"
 echo " Window : ${WIDTH}x${HEIGHT}"
 echo "============================================"
 
 # --- launch ---
-exec "$BIN" \
-    --width "$WIDTH" --height "$HEIGHT" \
-    --script "$SCRIPT_FULL" \
-    --scene "$SCENE_FILE"
+# Options for Mogwai's scripts (scripts/run_launch.py, scripts/NeuralRadiosity.py) come from here only.
+unset NCR_GRAPH_SCRIPT NCR_CAMERA_ANIMATED NCR_MIRROR_ALBEDO
+LAUNCH_SCRIPT="$SCRIPT_FULL"
+LAUNCH_ARGS=()
+if [[ "$CAMERA_ANIM" == "off" ]]; then
+    # The camera's flag lives in the scene, which Mogwai loads after --script. scripts/run_launch.py,
+    # run after the scene (--deferred), sets it and then runs the chosen script.
+    export NCR_GRAPH_SCRIPT="$SCRIPT_FULL" NCR_CAMERA_ANIMATED=0
+    LAUNCH_SCRIPT="$ROOT/scripts/run_launch.py"
+    LAUNCH_ARGS=(--deferred)
+fi
+case "$MIRROR_ALBEDO" in
+    on)  export NCR_MIRROR_ALBEDO=1 ;;
+    off) export NCR_MIRROR_ALBEDO=0 ;;
+esac
+CMD=("$BIN" "${LAUNCH_ARGS[@]}" --width "$WIDTH" --height "$HEIGHT" --script "$LAUNCH_SCRIPT" --scene "$SCENE_FILE")
+if [[ -n "$NCR_RUN_DRYRUN" ]]; then
+    for v in NCR_GRAPH_SCRIPT NCR_CAMERA_ANIMATED NCR_MIRROR_ALBEDO; do
+        [[ -n "${!v}" ]] && echo "[dryrun] $v=${!v}"
+    done
+    echo "[dryrun] ${CMD[*]}"
+    exit 0
+fi
+exec "${CMD[@]}"
