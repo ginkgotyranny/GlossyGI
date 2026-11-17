@@ -20,9 +20,20 @@
 //          Inference only: a recorded training step is skipped.
 //
 // Options:
-//   --frames N        replay the frame N times, as consecutive frames (default 1). The camera and the
-//                     scene stay as baked; the frame counter advances, so every frame draws new samples,
-//                     and Falcor's training schedule continues from the baked frame.
+//   --frames N        replay the frame N times, as consecutive frames (default 1). The frame counter
+//                     advances, so every frame draws new samples, and Falcor's training schedule
+//                     continues from the baked frame. The camera and the scene stay as baked unless
+//                     the options below move them.
+//   --dt S            an animated scene (a bake with a track): seconds of animation between frames
+//                     (default 0: the scene stands still)
+//   --sample N        an animated scene: start at track sample N, which is the scene of Falcor's frame
+//                     N after the baked one in the run the bake was made from
+//   --camera px,py,pz,tx,ty,tz,ux,uy,uz   a camera position, target and up vector instead of the
+//                     baked one (and --set cameraAnimated=0 for an animated scene)
+//   --frame-count N   Falcor's frame count for the first replayed frame instead of the baked frame's:
+//                     the samplers are seeded with it (to replay a later frame of an animated run)
+//   --set name=value  a setting of the pass's panel or of the training schedule, as a number
+//                     (--list-settings prints the names and the baked values)
 //   --train-tile N    samples per tile of the training graph (default 4096; the NPU needs
 //                     ncr_<net>_train_<N>_fp16.om)
 //   --lr X, --ema X   fixed learning rate and EMA decay instead of the training schedule
@@ -51,7 +62,8 @@ int run(int argc, char** argv)
     {
         std::printf("usage: ncr_replay <bake dir> <bake|checkpoint.ckpt> <output dir> [--networks rows|tiles|npu] [--frames N] [--train-tile N]\n"
                     "                  [--lr X] [--ema X] [--no-train] [--loss N] [--dump-train] [--copy-tiles] [--cpu-prefix-sum]\n"
-                    "                  [--shaders <dir>] [--models <dir>] [--per-pass]\n");
+                    "                  [--shaders <dir>] [--models <dir>] [--per-pass] [--dt S] [--sample N]\n"
+                    "                  [--camera px,py,pz,tx,ty,tz,ux,uy,uz] [--set name=value] [--list-settings] [--frame-count N]\n");
         return 2;
     }
     const std::string bakeDir = argv[1], model = argv[2], outDir = argv[3];
@@ -61,11 +73,34 @@ int run(int argc, char** argv)
     options.shaderDir = (slash == std::string::npos ? std::string(".") : executable.substr(0, slash)) + "/shaders";
     options.modelDir = ".";
     uint32_t frames = 1;
+    double dt = 0.0;
+    int startSample = -1;
+    bool listSettings = false;
+    std::vector<std::pair<std::string, double>> settings;
+    std::vector<float> cameraValues;
     for (int i = 4; i < argc; i++)
     {
         const std::string arg = argv[i];
         const bool hasValue = i + 1 < argc;
         if (arg == "--per-pass") options.perPass = true;
+        else if (arg == "--list-settings") listSettings = true;
+        else if (arg == "--dt" && hasValue) dt = std::stod(argv[++i]);
+        else if (arg == "--frame-count" && hasValue) options.frameCount = std::stoll(argv[++i]);
+        else if (arg == "--sample" && hasValue) startSample = std::stoi(argv[++i]);
+        else if (arg == "--set" && hasValue)
+        {
+            const std::string pair = argv[++i];
+            const size_t equals = pair.find('=');
+            if (equals == std::string::npos) fail("--set takes name=value");
+            settings.push_back({pair.substr(0, equals), std::stod(pair.substr(equals + 1))});
+        }
+        else if (arg == "--camera" && hasValue)
+        {
+            std::istringstream values(argv[++i]);
+            std::string value;
+            while (std::getline(values, value, ',')) cameraValues.push_back(std::stof(value));
+            if (cameraValues.size() != 9) fail("--camera takes nine numbers: position, target, up");
+        }
         else if (arg == "--no-train") options.noTrain = true;
         else if (arg == "--dump-train") options.dumpTrainDir = outDir;
         else if (arg == "--copy-tiles") options.copyTiles = true;
@@ -86,13 +121,35 @@ int run(int argc, char** argv)
     std::printf("device: %s\n", dev.name);
     Runtime runtime(dev, bakeDir, model, options);
     Display display(dev, options.shaderDir, runtime.outputImage(), false);
+    for (const auto& [name, value] : settings)
+        if (!runtime.set(name, value)) fail("no setting named " + name + " (--list-settings)");
+    if (listSettings)
+        for (const std::string& name : Runtime::settingNames()) std::printf("setting %s = %g\n", name.c_str(), runtime.get(name));
+    if (startSample >= 0)
+    {
+        if (!runtime.animated()) fail("--sample: the bake has no track");
+        runtime.setAnimationTime(((double)startSample + 0.5) / runtime.trackRate());
+    }
+    if (!cameraValues.empty())
+    {
+        CameraPose pose;
+        std::memcpy(pose.position, cameraValues.data(), 12);
+        std::memcpy(pose.target, cameraValues.data() + 3, 12);
+        std::memcpy(pose.up, cameraValues.data() + 6, 12);
+        runtime.setCamera(pose);
+    }
 
     std::vector<double> frameMs;
+    uint32_t events = 0;
     for (uint32_t frame = 0; frame < frames; frame++)
     {
-        runtime.frame();
+        runtime.frame(frame == 0 ? 0.0 : dt);
         frameMs.push_back(runtime.lastFrameMs());
+        events |= runtime.lastEvents();
     }
+    if (runtime.animated())
+        std::printf("animation: %u samples at %g per second, now at sample %u (%.3f s); events seen: 0x%x\n", runtime.trackSamples(), runtime.trackRate(),
+                    runtime.trackSample(), runtime.animationTime(), events);
     for (const auto& [name, ms] : runtime.lastTimings()) std::printf("  %8.1f ms  %s\n", ms, name.c_str());
     std::printf("frame: %.1f ms in %zu segments\n", frameMs.back(), runtime.lastTimings().size());
     if (frames > 1)

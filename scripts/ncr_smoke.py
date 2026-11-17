@@ -9,6 +9,11 @@ Environment variables (all optional):
     NCR_SMOKE_MODE     render mode property passed to the pass, if supported
     NCR_SMOKE_PROPS    extra pass properties as Python dict literal, e.g. "{'enableTemporalSpecReuse': True}"
     NCR_SMOKE_RES      WxH (default: 640x360)
+    NCR_SMOKE_FPS      frames per second of the stepped clock (default: 60), which sets how far an
+                       animated scene moves from one frame to the next
+    NCR_BAKE_TRACK_RATE  with NCR_BAKE_DIR (ohos/tools/bake_scene.py): samples per second of the animation
+                       track the pass records after the baked frame. The clock then steps at that rate
+                       and the run lasts until the track is complete (one loop of the scene's animation).
 
 The clock is paused and stepped manually so results are deterministic per frame index.
 """
@@ -52,7 +57,13 @@ try:
         m.addGraph(render_graph_NeuralRadiosity())
     m.resizeFrameBuffer(int(res[0]), int(res[1]))
     m.ui = False
-    m.clock.framerate = 60
+    # A track bake: one frame per track sample, for one loop of the scene's animation.
+    track_rate = float(os.environ.get("NCR_BAKE_TRACK_RATE", "0"))
+    loop_seconds = max([a.duration for a in m.scene.animations] + [0.0]) if (track_rate > 0 and m.scene) else 0.0
+    if loop_seconds > 0:
+        track_end = int(os.environ.get("NCR_BAKE_FRAME", "5")) + int(round(loop_seconds * track_rate))
+        frames = [f for f in frames if f < track_end] + [track_end]
+    m.clock.framerate = int(track_rate) if track_rate > 0 else int(os.environ.get("NCR_SMOKE_FPS", "60"))   # whole frames per second
     m.clock.time = 0
     m.clock.pause()
     os.makedirs(out_dir, exist_ok=True)

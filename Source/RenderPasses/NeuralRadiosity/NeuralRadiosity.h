@@ -328,6 +328,9 @@ private:
     void bakeHost(const std::string& step);
     void bakeExport(RenderContext* pRenderContext);
     const char* batchRole(const RayBatchBuffer* pBatch) const;
+    /// Animated scenes (NCR_BAKE_TRACK_RATE): every frame after the baked one adds a sample to the
+    /// bake's track, the scene's data over one loop of its animation.
+    void bakeTrack(RenderContext* pRenderContext);
     void modelInferenceCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     void modelTrainCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     // Spatiotemporal cluster reuse (render path only)
@@ -416,6 +419,9 @@ private:
     float mTrainHeat = 1.f;
     uint32_t mTrainHoldLeft = 600;
     IScene::UpdateFlags mPendingSceneUpdates = IScene::UpdateFlags::None;
+    /// The event classes updateTrainSchedule() saw in its last call (kTrainEvent* bits); the bake's
+    /// track records them per sample.
+    uint32_t mLastTrainEvents = 0;
     /// Fixed-camera targets (local addition, not in the Linux snapshots). Moving lights
     /// (analytic, or emissive geometry) change radiance everywhere they reach, so they
     /// stay warm enough to keep up (EMA half-life ~31 frames at 0.5). With only

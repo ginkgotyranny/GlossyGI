@@ -3,6 +3,11 @@
 // The bake is a recorded frame: an ordered list of compute-pass calls, each with the resources it
 // had bound, and of the steps Falcor did on the host in between. A pass is a pipeline; every call of
 // it has its own descriptor sets and its own copy of the pass's uniform block.
+//
+// The scene can change between frames in two ways. An animated scene comes with a track: what its
+// data is at evenly spaced times over one loop of the animation, which applyTrackSample() writes
+// into the scene's buffers, its uniform block and the top-level acceleration structure. And the
+// camera can be set (setCamera), computed the way Falcor's Camera computes its shader data.
 #pragma once
 #include "replay_vk.h"
 
@@ -61,6 +66,34 @@ struct Step
     std::vector<std::string> host;   // e.g. {"prefixsum", "render", "diff", "230400"}
 };
 
+/// A part of the scene's data that an animated scene changes.
+struct TrackRange
+{
+    std::string kind;   // uniform (the scene's block), buffer, geometry (3x4 transforms, 48 bytes per global instance)
+    uint32_t id = 0, offset = 0, bytes = 0, recordOffset = 0;
+};
+
+/// The track of an animated scene (BakeExport.cpp): one record per sample.
+struct Track
+{
+    static constexpr uint32_t kHeaderBytes = 28;   // of a record: events (uint32), scene bounds (6 floats)
+    uint32_t samples = 0, recordBytes = 0;
+    double rate = 0.0, loopSeconds = 0.0;
+    std::vector<TrackRange> ranges;
+    std::vector<char> data;
+    bool movesGeometry = false;
+
+    const char* record(uint32_t sample) const { return data.data() + (size_t)sample * recordBytes; }
+    /// The training schedule's event classes Falcor saw in the frame of that sample.
+    uint32_t events(uint32_t sample) const
+    {
+        uint32_t e = 0;
+        std::memcpy(&e, record(sample), sizeof(e));
+        return e;
+    }
+    void bounds(uint32_t sample, float minMax[6]) const { std::memcpy(minMax, record(sample) + 4, 6 * sizeof(float)); }
+};
+
 class Bake
 {
 public:
@@ -80,8 +113,37 @@ public:
     std::map<std::string, uint32_t> named;      // role, e.g. render.specInput -> buffer id
     std::map<std::string, double> values;
     VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
+    Track track;
+    std::vector<float> geometryTransforms;      // 12 floats per global geometry instance id
 
     Bake(Device& device, const std::string& folder) : dev(device), dir(folder) {}
+    Bake(const Bake&) = delete;
+    Bake& operator=(const Bake&) = delete;
+
+    ~Bake()
+    {
+        if (!dev.device) return;
+        vkDeviceWaitIdle(dev.device);
+        for (auto& [name, p] : passes)
+        {
+            if (p.pipeline) vkDestroyPipeline(dev.device, p.pipeline, nullptr);
+            if (p.layout) vkDestroyPipelineLayout(dev.device, p.layout, nullptr);
+            for (VkDescriptorSetLayout l : p.setLayouts) vkDestroyDescriptorSetLayout(dev.device, l, nullptr);
+        }
+        if (mPool) vkDestroyDescriptorPool(dev.device, mPool, nullptr);
+        if (tlas) dev.destroyAS(dev.device, tlas, nullptr);
+        for (VkAccelerationStructureKHR blas : mBlas) dev.destroyAS(dev.device, blas, nullptr);
+        for (Buffer& b : mAccelerationStorage) dev.destroy(b);
+        dev.destroy(mTlasInstanceBuffer);
+        dev.destroy(mTlasScratch);
+        for (auto& [id, b] : buffers) dev.destroy(b);
+        for (auto& [id, t] : textures) dev.destroy(t);
+        for (auto& [id, sampler] : samplers) vkDestroySampler(dev.device, sampler, nullptr);
+        for (auto& [key, b] : mUniformBuffers) dev.destroy(b);
+        dev.destroy(mDummyBuffer);
+        dev.destroy(mDummyTexture);
+        if (mDummySampler) vkDestroySampler(dev.device, mDummySampler, nullptr);
+    }
 
     void load()
     {
@@ -89,6 +151,137 @@ public:
         createResources();
         buildAccelerationStructures();
         createPasses();
+        loadTrack();
+    }
+
+    /// The scene as it is at one sample of the track: its buffers, its uniform block, the instance
+    /// transforms. The GPU must be idle.
+    void applyTrackSample(uint32_t sample)
+    {
+        const char* record = track.record(sample);
+        for (const TrackRange& r : track.ranges)
+        {
+            char* target = r.kind == "uniform" ? sceneBlock().as<char>()
+                         : r.kind == "buffer" ? buffers.at(r.id).as<char>()
+                                              : reinterpret_cast<char*>(geometryTransforms.data());
+            std::memcpy(target + r.offset, record + r.recordOffset, r.bytes);
+        }
+        if (track.movesGeometry) buildTlas();
+    }
+
+    /// The uniform block of the scene (gScene), one buffer for every call.
+    Buffer& sceneBlock()
+    {
+        auto it = mUniformBuffers.find("gScene");
+        if (it == mUniformBuffers.end()) fail("the bake has no scene uniform block (gScene)");
+        return it->second;
+    }
+
+    /// A member of the scene's uniform block, e.g. camera.data.posW; null when the block has none of that name and size.
+    void* sceneMember(const std::string& member, uint32_t size)
+    {
+        if (!mSceneMembers)
+        {
+            for (auto& [name, p] : passes)
+            {
+                auto block = p.uniforms.find("gScene");
+                if (block != p.uniforms.end()) mSceneMembers = &block->second;
+            }
+            if (!mSceneMembers) fail("the bake does not describe the scene's uniform block");
+        }
+        auto m = mSceneMembers->find(member);
+        if (m == mSceneMembers->end() || m->second.second < size) return nullptr;
+        return sceneBlock().as<char>() + m->second.first;
+    }
+
+    CameraPose camera()
+    {
+        CameraPose pose;
+        std::memcpy(pose.position, cameraMember("posW", 12), 12);
+        std::memcpy(pose.target, cameraMember("target", 12), 12);
+        std::memcpy(pose.up, cameraMember("up", 12), 12);
+        return pose;
+    }
+
+    /// Falcor's Camera::calculateCameraParameters for a new pose: the lens stays as baked. What was
+    /// current becomes the previous frame's (prevViewMat, prevViewProjMatNoJitter, prevPosW).
+    void setCamera(const CameraPose& pose)
+    {
+        auto get = [&](const char* name) {
+            float value = 0.0f;
+            std::memcpy(&value, cameraMember(name, 4), 4);
+            return (double)value;
+        };
+        std::memcpy(cameraMember("prevViewMat", 64), cameraMember("viewMat", 64), 64);
+        std::memcpy(cameraMember("prevViewProjMatNoJitter", 64), cameraMember("viewProjMatNoJitter", 64), 64);
+        std::memcpy(cameraMember("prevPosW", 12), cameraMember("posW", 12), 12);
+
+        const double focalLength = get("focalLength"), aspect = get("aspectRatio"), nearZ = get("nearZ"), farZ = get("farZ");
+        const double frameHeight = get("frameHeight"), focalDistance = get("focalDistance"), jitterX = get("jitterX"), jitterY = get("jitterY");
+        double eye[3], center[3], up[3];
+        for (int i = 0; i < 3; i++)
+        {
+            eye[i] = pose.position[i];
+            center[i] = pose.target[i];
+            up[i] = pose.up[i];
+        }
+        auto dot = [](const double* a, const double* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+        auto cross = [](const double* a, const double* b, double* out) {
+            out[0] = a[1] * b[2] - a[2] * b[1];
+            out[1] = a[2] * b[0] - a[0] * b[2];
+            out[2] = a[0] * b[1] - a[1] * b[0];
+        };
+        auto normalize = [&](double* v) {
+            const double length = std::sqrt(dot(v, v));
+            for (int i = 0; i < 3; i++) v[i] /= length;
+        };
+        // math::matrixFromLookAt, right-handed; matrices are stored row by row.
+        double f[3] = {eye[0] - center[0], eye[1] - center[1], eye[2] - center[2]}, r[3], u[3];
+        normalize(f);
+        cross(up, f, r);
+        normalize(r);
+        cross(f, r, u);
+        double view[16] = {r[0], r[1], r[2], -dot(r, eye), u[0], u[1], u[2], -dot(u, eye), f[0], f[1], f[2], -dot(f, eye), 0, 0, 0, 1};
+        // math::perspective; a focal length of 0 would be an orthographic camera, which no scene here has.
+        const double fovY = 2.0 * std::atan(0.5 * frameHeight / focalLength);
+        const double tanHalf = std::tan(fovY * 0.5);
+        double proj[16] = {};
+        proj[0] = 1.0 / (aspect * tanHalf);
+        proj[5] = 1.0 / tanHalf;
+        proj[10] = farZ / (nearZ - farZ);
+        proj[14] = -1.0;
+        proj[11] = -(farZ * nearZ) / (farZ - nearZ);
+        double jitter[16] = {1, 0, 0, 2.0 * jitterX, 0, 1, 0, 2.0 * jitterY, 0, 0, 1, 0, 0, 0, 0, 1};
+        double viewProjNoJitter[16], projJittered[16], viewProj[16], inverse[16];
+        multiply(proj, view, viewProjNoJitter);
+        multiply(jitter, proj, projJittered);
+        multiply(projJittered, view, viewProj);
+        invert(viewProj, inverse);
+        writeMatrix("viewMat", view);
+        writeMatrix("projMat", projJittered);
+        writeMatrix("viewProjMat", viewProj);
+        writeMatrix("invViewProj", inverse);
+        writeMatrix("viewProjMatNoJitter", viewProjNoJitter);
+        writeMatrix("projMatNoJitter", proj);
+        std::memcpy(cameraMember("posW", 12), pose.position, 12);
+        std::memcpy(cameraMember("target", 12), pose.target, 12);
+        std::memcpy(cameraMember("up", 12), pose.up, 12);
+        // The vectors the primary rays are built from.
+        double w[3] = {center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]}, cu[3], cv[3];
+        normalize(w);
+        for (double& x : w) x *= focalDistance;
+        cross(w, up, cu);
+        normalize(cu);
+        cross(cu, w, cv);
+        normalize(cv);
+        for (int i = 0; i < 3; i++)
+        {
+            cu[i] *= focalDistance * tanHalf * aspect;
+            cv[i] *= focalDistance * tanHalf;
+        }
+        writeVector("cameraU", cu);
+        writeVector("cameraV", cv);
+        writeVector("cameraW", w);
     }
 
     bool hasBuffer(const std::string& role) const { return named.count(role) != 0; }
@@ -181,7 +374,97 @@ private:
     VkSampler mDummySampler = VK_NULL_HANDLE;
     std::map<std::string, Buffer> mUniformBuffers;   // key: see uniformKey()
     std::vector<Buffer> mAccelerationStorage;
+    std::vector<VkAccelerationStructureKHR> mBlas;
+    // The top-level structure is built again when instances move: its instances, the global id of
+    // each one's first geometry (whose transform is the instance's), and the build's buffers.
+    std::vector<VkAccelerationStructureInstanceKHR> mTlasInstances;
+    std::vector<uint32_t> mTlasGeometry;
+    Buffer mTlasInstanceBuffer, mTlasScratch;
     VkDescriptorPool mPool = VK_NULL_HANDLE;
+    std::map<std::string, std::pair<uint32_t, uint32_t>>* mSceneMembers = nullptr;
+
+    void* cameraMember(const char* name, uint32_t size)
+    {
+        void* at = sceneMember(std::string("camera.data.") + name, size);
+        if (!at) fail(std::string("the scene's uniform block has no camera.data.") + name);
+        return at;
+    }
+
+    void writeMatrix(const char* name, const double* m)
+    {
+        float values[16];
+        for (int i = 0; i < 16; i++) values[i] = (float)m[i];
+        std::memcpy(cameraMember(name, 64), values, 64);
+    }
+
+    void writeVector(const char* name, const double* v)
+    {
+        const float values[3] = {(float)v[0], (float)v[1], (float)v[2]};
+        std::memcpy(cameraMember(name, 12), values, 12);
+    }
+
+    static void multiply(const double* a, const double* b, double* out)
+    {
+        for (int row = 0; row < 4; row++)
+            for (int col = 0; col < 4; col++)
+            {
+                double sum = 0.0;
+                for (int k = 0; k < 4; k++) sum += a[row * 4 + k] * b[k * 4 + col];
+                out[row * 4 + col] = sum;
+            }
+    }
+
+    /// Inverse of a 4x4 matrix by Gauss-Jordan elimination with partial pivoting.
+    static void invert(const double* m, double* out)
+    {
+        double a[4][8];
+        for (int row = 0; row < 4; row++)
+            for (int col = 0; col < 4; col++)
+            {
+                a[row][col] = m[row * 4 + col];
+                a[row][col + 4] = row == col ? 1.0 : 0.0;
+            }
+        for (int col = 0; col < 4; col++)
+        {
+            int pivot = col;
+            for (int row = col + 1; row < 4; row++)
+                if (std::fabs(a[row][col]) > std::fabs(a[pivot][col])) pivot = row;
+            if (a[pivot][col] == 0.0) fail("the camera's view-projection matrix is singular");
+            for (int k = 0; k < 8; k++) std::swap(a[col][k], a[pivot][k]);
+            const double scale = 1.0 / a[col][col];
+            for (int k = 0; k < 8; k++) a[col][k] *= scale;
+            for (int row = 0; row < 4; row++)
+            {
+                if (row == col) continue;
+                const double factor = a[row][col];
+                for (int k = 0; k < 8; k++) a[row][k] -= factor * a[col][k];
+            }
+        }
+        for (int row = 0; row < 4; row++)
+            for (int col = 0; col < 4; col++) out[row * 4 + col] = a[row][col + 4];
+    }
+
+    void loadTrack()
+    {
+        if (track.samples == 0) return;
+        uint32_t at = Track::kHeaderBytes;
+        for (TrackRange& r : track.ranges)
+        {
+            r.recordOffset = at;
+            at += r.bytes;
+            const size_t size = r.kind == "uniform" ? (size_t)sceneBlock().size
+                              : r.kind == "buffer" ? (buffers.count(r.id) ? (size_t)buffers.at(r.id).size : 0)
+                              : r.kind == "geometry" ? geometryTransforms.size() * sizeof(float) : 0;
+            if ((size_t)r.offset + r.bytes > size) fail(format("the track writes beyond its target (%s %u, offset %u, %u bytes)", r.kind.c_str(), r.id, r.offset, r.bytes));
+            track.movesGeometry = track.movesGeometry || r.kind == "geometry";
+        }
+        const std::vector<char> file = readFile(dir + "/track.bin");
+        if (at != track.recordBytes || file.size() != 20 + (size_t)track.samples * track.recordBytes || std::memcmp(file.data(), "NRTK", 4) != 0)
+            fail("track.bin is not what replay.txt describes");
+        track.data.assign(file.begin() + 20, file.end());
+        std::printf("track: %u samples at %g per second (%g s), %zu ranges, %u bytes per sample%s\n", track.samples, track.rate, track.loopSeconds,
+                    track.ranges.size(), track.recordBytes, track.movesGeometry ? ", instances move" : "");
+    }
 
     void parseIndex()
     {
@@ -320,6 +603,16 @@ private:
                 in >> name >> value;
                 values[name] = value;
             }
+            else if (kind == "track")
+            {
+                in >> track.samples >> track.rate >> track.recordBytes >> track.loopSeconds;
+            }
+            else if (kind == "trackrange")
+            {
+                TrackRange r;
+                in >> r.kind >> r.id >> r.offset >> r.bytes;
+                track.ranges.push_back(r);
+            }
         }
     }
 
@@ -415,9 +708,15 @@ private:
         const VkDeviceAddress vertices = dev.address(buffers.at(vertexBuffer));
         const VkDeviceAddress indices = indexBuffer != UINT32_MAX ? dev.address(buffers.at(indexBuffer)) : 0;
         std::map<uint32_t, std::vector<Geometry>> instances;
-        for (const Geometry& g : geometry) instances[g.tlasInstance].push_back(g);
+        uint32_t maxId = 0;
+        for (const Geometry& g : geometry)
+        {
+            instances[g.tlasInstance].push_back(g);
+            maxId = std::max(maxId, g.id);
+        }
+        geometryTransforms.assign((size_t)(maxId + 1) * 12, 0.0f);
+        for (const Geometry& g : geometry) std::memcpy(&geometryTransforms[(size_t)g.id * 12], g.transform, sizeof(float) * 12);
 
-        std::vector<VkAccelerationStructureInstanceKHR> tlasInstances;
         uint64_t triangles = 0;
         for (auto& [index, list] : instances)
         {
@@ -449,28 +748,64 @@ private:
                 triangles += counts.back();
             }
             VkAccelerationStructureKHR blas = buildAS(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, geometries, counts);
+            mBlas.push_back(blas);
             VkAccelerationStructureDeviceAddressInfoKHR addressInfo = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
             addressInfo.accelerationStructure = blas;
             VkAccelerationStructureInstanceKHR instance = {};
-            std::memcpy(instance.transform.matrix, list[0].transform, sizeof(float) * 12);
             instance.instanceCustomIndex = list[0].id;
             instance.mask = 0xff;
             instance.flags = list[0].frontFaceCW ? VK_GEOMETRY_INSTANCE_TRIANGLE_FRONT_COUNTERCLOCKWISE_BIT_KHR : 0;
             instance.accelerationStructureReference = dev.getASAddress(dev.device, &addressInfo);
-            tlasInstances.push_back(instance);
+            mTlasInstances.push_back(instance);
+            mTlasGeometry.push_back(list[0].id);
         }
-        Buffer instanceBuffer = dev.makeBuffer(
-            tlasInstances.size() * sizeof(VkAccelerationStructureInstanceKHR),
+        mTlasInstanceBuffer = dev.makeBuffer(
+            mTlasInstances.size() * sizeof(VkAccelerationStructureInstanceKHR),
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
-        std::memcpy(instanceBuffer.data, tlasInstances.data(), (size_t)instanceBuffer.size);
+        buildTlas();
+        std::printf("acceleration structures: %zu geometries, %llu triangles, %zu instances, built in %.1f ms\n", geometry.size(),
+                    (unsigned long long)triangles, mTlasInstances.size(), msSince(start));
+    }
+
+    /// Builds the top-level structure from the current geometry transforms: the first time, and
+    /// again, into the same structure, whenever instances have moved. The GPU must be idle.
+    void buildTlas()
+    {
+        for (size_t i = 0; i < mTlasInstances.size(); i++)
+            std::memcpy(mTlasInstances[i].transform.matrix, &geometryTransforms[(size_t)mTlasGeometry[i] * 12], sizeof(float) * 12);
+        std::memcpy(mTlasInstanceBuffer.data, mTlasInstances.data(), (size_t)mTlasInstanceBuffer.size);
+
         VkAccelerationStructureGeometryKHR geo = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
         geo.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
         geo.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
-        geo.geometry.instances.data.deviceAddress = dev.address(instanceBuffer);
-        tlas = buildAS(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, {geo}, {(uint32_t)tlasInstances.size()});
-        dev.destroy(instanceBuffer);
-        std::printf("acceleration structures: %zu geometries, %llu triangles, %zu instances, built in %.1f ms\n", geometry.size(),
-                    (unsigned long long)triangles, tlasInstances.size(), msSince(start));
+        geo.geometry.instances.data.deviceAddress = dev.address(mTlasInstanceBuffer);
+        VkAccelerationStructureBuildGeometryInfoKHR info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+        info.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+        info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+        info.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        info.geometryCount = 1;
+        info.pGeometries = &geo;
+        const uint32_t count = (uint32_t)mTlasInstances.size();
+        if (tlas == VK_NULL_HANDLE)
+        {
+            VkAccelerationStructureBuildSizesInfoKHR sizes = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+            dev.getBuildSizes(dev.device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &info, &count, &sizes);
+            mAccelerationStorage.push_back(dev.makeBuffer(
+                sizes.accelerationStructureSize, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false));
+            VkAccelerationStructureCreateInfoKHR ci = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+            ci.buffer = mAccelerationStorage.back().buffer;
+            ci.size = sizes.accelerationStructureSize;
+            ci.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+            VK_CHECK(dev.createAS(dev.device, &ci, nullptr, &tlas));
+            mTlasScratch = dev.makeBuffer(sizes.buildScratchSize + 256, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+        }
+        info.dstAccelerationStructure = tlas;
+        info.scratchData.deviceAddress = (dev.address(mTlasScratch) + 255) & ~VkDeviceAddress(255);
+        const VkAccelerationStructureBuildRangeInfoKHR range = {count, 0, 0, 0};
+        const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+        VkCommandBuffer cb = dev.begin();
+        dev.cmdBuildAS(cb, 1, &info, &pRange);
+        dev.submit(cb);
     }
 
     /// The scene's blocks are the same data in every call: one buffer for all of them, so that the

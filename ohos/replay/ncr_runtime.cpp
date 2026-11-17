@@ -70,6 +70,12 @@ void TrainSchedule::advance(uint32_t events)
     emaDecay = 1.0f - oneMinusDecay;
 }
 
+void TrainSchedule::reset()
+{
+    heat = 1.0f;
+    holdLeft = warmupFrames;
+}
+
 namespace
 {
 /// Exclusive scan in place (Falcor's PrefixSum); returns the total.
@@ -196,6 +202,21 @@ struct Runtime::State
     uint32_t frame = 0, trainSteps = 0;
     uint32_t outputTexture = 0;
 
+    // What can change between frames (ncr_runtime.h).
+    Settings settings;
+    bool hasPostFilter = false, hasLights = false, hasRenderPath = false;
+    size_t trainSectionEnd = 0;       // the program's steps before this index are the training part of the frame
+    double animationTime = 0.0;       // within one loop of the track
+    uint32_t sample = 0;              // the track sample the scene is at
+    bool reapplySample = false;       // the track must write the scene again (the camera returns to its path)
+    float bounds[6] = {};             // the scene bounds of that sample
+    CameraPose setPose;               // the caller's camera, used while the camera does not follow the track
+    bool poseSet = false;
+    CameraPose appliedPose;           // the pose the scene's block holds while the caller's camera is in use
+    bool poseApplied = false;
+    uint32_t pendingEvents = 0;       // seen since the training schedule last advanced
+    uint32_t lastEvents = 0;
+
     // Calls are recorded into one command buffer until a host step needs their results.
     VkCommandBuffer cb = VK_NULL_HANDLE;
     std::string pendingNames;
@@ -258,6 +279,7 @@ struct Runtime::State
         trainShift = log2Exact(options.trainTile);
         inferShift = log2Exact(cfg::kTile);
         setUpSchedule();
+        setUpSettings();
 
         ownPool = makeOwnPool(dev, 64, 320);
         sharedTiles = networks == "npu" && !options.copyTiles && dev.sharedMemory;
@@ -291,6 +313,165 @@ struct Runtime::State
         }
     }
 
+    ~State()
+    {
+        vkDeviceWaitIdle(dev.device);
+        backend.reset();   // its tensors lie over the tile buffers
+        for (auto& [role, t] : tilePaths)
+        {
+            for (Buffer* b : {&t.specX, &t.diffX, &t.specY, &t.diffY}) dev.destroy(*b);
+            for (OwnPass* p : {&t.encodeSpec, &t.encodeDiff, &t.decodeSpec, &t.decodeDiff}) p->destroy(dev);
+        }
+        for (auto& [role, t] : trainPaths)
+        {
+            for (TrainNet* n : {&t.diff, &t.spec})
+            {
+                for (Buffer* b : {&n->x, &n->target, &n->gradient}) dev.destroy(*b);
+                for (OwnPass* p : {&n->encode, &n->targets, &n->scatter}) p->destroy(dev);
+            }
+        }
+        for (auto& [key, p] : prefixPaths)
+        {
+            dev.destroy(p.blockSums);
+            p.pass.destroy(dev);
+        }
+        for (Grid* g : {&primGrid, &clsGrid})
+        {
+            for (Buffer* b : {&g->inference, &g->training, &g->master, &g->firstMoment, &g->secondMoment, &g->entrySteps, &g->gradient}) dev.destroy(*b);
+            g->optimizer.destroy(dev);
+        }
+        if (ownPool) vkDestroyDescriptorPool(dev.device, ownPool, nullptr);
+    }
+
+    /// A member of a call's own uniform blocks (not the scene's), or null.
+    void* passMember(Call& call, const std::string& member, uint32_t size)
+    {
+        for (auto& [block, members] : bake.passes.at(call.pass).uniforms)
+        {
+            if (block.rfind("gScene", 0) == 0) continue;
+            if (void* at = bake.uniform(call, block, member, size)) return at;
+        }
+        return nullptr;
+    }
+
+    template <typename T> void setMember(Call& call, const char* member, const T& value)
+    {
+        if (void* at = passMember(call, member, sizeof(T))) std::memcpy(at, &value, sizeof(T));
+    }
+
+    uint32_t memberOr(Call& call, const char* member, uint32_t fallback)
+    {
+        void* at = passMember(call, member, sizeof(uint32_t));
+        if (at) std::memcpy(&fallback, at, sizeof(uint32_t));
+        return fallback;
+    }
+
+    /// The settings as they were in the baked frame, read from what Falcor set there.
+    void setUpSettings()
+    {
+        for (size_t i = 0; i < bake.program.size(); i++)
+        {
+            const Step& step = bake.program[i];
+            if (!step.isCall)
+            {
+                if (step.host[0] == "train") trainSectionEnd = i + 1;
+                continue;
+            }
+            Call& call = bake.calls.at(step.step);
+            if (call.pass == "SampleRHS")
+            {
+                settings.useNEE = memberOr(call, "useNEE", 1) != 0;
+                settings.rhsGlossyBounces = memberOr(call, "maxGlossyBounces", settings.rhsGlossyBounces);
+                hasLights = memberOr(call, "useEmissiveLights", 0) != 0 || memberOr(call, "useAnalyticLights", 0) != 0;
+            }
+            else if (call.pass == "RandomSmooth")
+            {
+                settings.diffTrainOnGlossy = memberOr(call, "diffTrainOnGlossy", 0) != 0;
+            }
+            else if (call.pass == "SpecPrimary")
+            {
+                settings.mirrorAlbedo = memberOr(call, "enableMirrorAlbedo", 1) != 0;
+                settings.envColorEncoding = memberOr(call, "envColorEncoding", settings.envColorEncoding);
+            }
+            else if (call.pass == "PostFXAAPass")
+            {
+                hasPostFilter = true;
+                settings.fxaa = memberOr(call, "enableFXAA", 1) != 0;
+            }
+        }
+        hasRenderPath = trainSectionEnd < bake.program.size();
+        settings.postFilter = hasPostFilter;
+        settings.mode = !hasRenderPath ? RenderMode::Train : trainSectionEnd > 0 ? RenderMode::OnlineTrain : RenderMode::Render;
+        settings.animate = settings.cameraAnimated = bake.track.samples > 0;
+        if (bake.track.samples > 0) bake.track.bounds(0, bounds);
+    }
+
+    /// The scene for the frame that is about to run: the animation's sample for the time, the
+    /// camera, and from both the events the training schedule grades. The GPU is idle here.
+    void updateScene(double seconds)
+    {
+        const auto start = std::chrono::steady_clock::now();
+        uint32_t events = 0;
+        bool moved = false;
+        const Track& track = bake.track;
+        if (track.samples > 0)
+        {
+            uint32_t passed = 0;   // samples the animation went through since the last frame
+            if (settings.animate && seconds > 0.0)
+            {
+                animationTime = std::fmod(animationTime + seconds * (double)settings.timeScale, track.loopSeconds);
+                if (animationTime < 0.0) animationTime += track.loopSeconds;
+            }
+            const uint32_t target = std::min((uint32_t)(animationTime * track.rate), track.samples - 1);
+            if (target != sample || reapplySample)
+            {
+                passed = target >= sample ? target - sample : target + track.samples - sample;
+                // Falcor raises the events of an animation in every frame it plays: those of the
+                // samples this frame skipped are part of what changed since the last frame.
+                for (uint32_t i = 0; i < std::min(passed, track.samples); i++) events |= track.events((sample + 1 + i) % track.samples);
+                bake.applyTrackSample(target);
+                track.bounds(target, bounds);
+                sample = target;
+                reapplySample = false;
+                moved = true;
+            }
+        }
+        const bool followsTrack = track.samples > 0 && settings.cameraAnimated;
+        if (!followsTrack)
+        {
+            events &= ~TrainSchedule::kEventCamera;
+            if (!poseApplied)
+            {
+                // Where the camera is now is where it stays until the caller sets another pose.
+                appliedPose = bake.camera();
+                poseApplied = true;
+                if (!poseSet) setPose = appliedPose;
+                poseSet = true;
+            }
+            if (setPose != appliedPose)
+            {
+                if (moved) bake.setCamera(appliedPose);   // the track wrote its own camera: first the pose of the last frame, as the previous one
+                bake.setCamera(setPose);
+                appliedPose = setPose;
+                events |= TrainSchedule::kEventCamera;
+            }
+            else if (moved)
+            {
+                bake.setCamera(appliedPose);
+            }
+        }
+        else if (poseApplied)
+        {
+            // Back on the path: the track's camera returns with this frame's sample.
+            poseApplied = poseSet = false;
+            if (!moved) bake.applyTrackSample(sample);
+            events |= TrainSchedule::kEventCamera;
+        }
+        lastEvents = events;
+        pendingEvents |= events;
+        if (moved || events != 0) timings.push_back({format("scene update (track sample %u)", sample), msSince(start)});
+    }
+
     /// The learning rate and EMA decay: fixed when asked for, otherwise Falcor's schedule continued
     /// from its state after the baked frame. The baked frame runs with the values Falcor used in it.
     void setUpSchedule()
@@ -316,6 +497,7 @@ struct Runtime::State
         schedule.lrCold = (float)bake.value("train.lrCold");
         schedule.emaHot = (float)bake.value("train.emaHot");
         schedule.emaCold = (float)bake.value("train.emaCold");
+        schedule.warmupFrames = (uint32_t)bake.value("train.warmupFrames", 600);
         schedule.holdFrames = (uint32_t)bake.value("train.holdFrames");
         schedule.coolFrames = (float)bake.value("train.coolFrames");
         schedule.cameraHeat = (float)bake.value("train.cameraHeat");
@@ -614,13 +796,45 @@ struct Runtime::State
     // what depends on the sample counts the host knows at that point (NeuralRadiosity.cpp).
     void prepare(Call& call, uint32_t dims[3])
     {
-        if (frame == 0) return;
+        // The panel's switches, where Falcor puts them (NeuralRadiosity.cpp). Untouched, they are the baked values.
+        if (call.pass == "SampleRHS")
+        {
+            if (hasLights) setMember(call, "useNEE", (uint32_t)(settings.useNEE ? 1 : 0));
+            setMember(call, "maxGlossyBounces", settings.rhsGlossyBounces);
+            setMember(call, "queryGlossyFallback", (uint32_t)((settings.diffTrainOnGlossy || settings.rhsGlossyBounces == 0) ? 1 : 0));
+        }
+        else if (call.pass == "RandomSmooth")
+        {
+            setMember(call, "diffTrainOnGlossy", (uint32_t)(settings.diffTrainOnGlossy ? 1 : 0));
+        }
+        else if (call.pass == "SpecPrimary")
+        {
+            setMember(call, "enableMirrorAlbedo", (uint32_t)(settings.mirrorAlbedo ? 1 : 0));
+            setMember(call, "envColorEncoding", settings.envColorEncoding);
+        }
+        else if (call.pass == "PostFXAAPass")
+        {
+            setMember(call, "enableFXAA", (uint32_t)(settings.fxaa ? 1 : 0));
+        }
+        // The scene bounds, which positions are normalised by, follow the animation.
+        if (bake.track.samples > 0)
+        {
+            if (void* at = passMember(call, "bboxMin", 12)) std::memcpy(at, bounds, 12);
+            if (void* at = passMember(call, "bboxMax", 12)) std::memcpy(at, bounds + 3, 12);
+        }
         const std::string block = "g" + call.pass;
         auto set = [&](const char* member, uint32_t value) {
             if (bake.hasUniform(call, block, member)) bake.setUniform(call, block, member, value);
         };
-        set("batchCount", bake.frameCount + frame);
-        set("frameCount", bake.frameCount + frame);
+        // The frame counter seeds the samplers. The baked frame keeps Falcor's own uniforms unless it
+        // is replayed as another frame.
+        const uint32_t firstCount = options.frameCount >= 0 ? (uint32_t)options.frameCount : bake.frameCount;
+        if (frame > 0 || firstCount != bake.frameCount)
+        {
+            set("batchCount", firstCount + frame);
+            set("frameCount", firstCount + frame);
+        }
+        if (frame == 0) return;
         auto it = batches.find(call.batch);
         if (it == batches.end()) return;
         const Batch& b = it->second;
@@ -640,16 +854,28 @@ struct Runtime::State
         }
     }
 
-    void runFrame()
+    void runFrame(double seconds)
     {
         timings.clear();
-        // Falcor updates the schedule before the frame's training step; the baked frame keeps its values.
-        if (useSchedule && frame > 0) schedule.advance(0);   // the camera and the scene stay as baked: no events
-        for (const Step& step : bake.program)
+        updateScene(seconds);
+        const RenderMode mode = settings.mode;
+        const bool trainPart = mode == RenderMode::Train || mode == RenderMode::OnlineTrain;
+        const bool renderPart = mode == RenderMode::Render || mode == RenderMode::OnlineTrain;
+        // Falcor updates the schedule before the frame's training step, with the events since the
+        // last training frame; the baked frame keeps its values.
+        if (trainPart && trainSectionEnd > 0)
         {
+            if (useSchedule && frame > 0) schedule.advance(pendingEvents);
+            pendingEvents = 0;
+        }
+        for (size_t index = 0; index < bake.program.size(); index++)
+        {
+            const Step& step = bake.program[index];
+            if (!(index < trainSectionEnd ? trainPart : renderPart)) continue;
             if (step.isCall)
             {
                 Call& call = bake.calls.at(step.step);
+                if (!settings.postFilter && (call.pass == "PostFilterPass" || call.pass == "PostFXAAPass")) continue;
                 uint32_t dims[3] = {call.dims[0], call.dims[1], call.dims[2]};
                 prepare(call, dims);
                 if (call.pass == "ConeTrace")
@@ -725,7 +951,7 @@ Runtime::Runtime(Device& dev, const std::string& bakeDir, const std::string& mod
 
 Runtime::~Runtime() = default;
 
-void Runtime::frame() { s->runFrame(); }
+void Runtime::frame(double seconds) { s->runFrame(seconds); }
 uint32_t Runtime::framesDone() const { return s->frame; }
 uint32_t Runtime::width() const { return s->bake.width; }
 uint32_t Runtime::height() const { return s->bake.height; }
@@ -735,7 +961,135 @@ const std::vector<std::pair<std::string, double>>& Runtime::lastTimings() const 
 const Texture& Runtime::outputImage() const { return s->bake.textures.at(s->outputTexture); }
 bool Runtime::trains() const { return s->training; }
 uint32_t Runtime::trainSteps() const { return s->trainSteps; }
+TrainSchedule& Runtime::schedule() { return s->schedule; }
 const TrainSchedule& Runtime::schedule() const { return s->schedule; }
+uint32_t Runtime::lastEvents() const { return s->lastEvents; }
+Settings& Runtime::settings() { return s->settings; }
+const Settings& Runtime::settings() const { return s->settings; }
+bool Runtime::hasPostFilter() const { return s->hasPostFilter; }
+bool Runtime::hasLights() const { return s->hasLights; }
+bool Runtime::hasRenderPath() const { return s->hasRenderPath; }
+bool Runtime::animated() const { return s->bake.track.samples > 0; }
+double Runtime::animationLength() const { return s->bake.track.loopSeconds; }
+double Runtime::animationTime() const { return s->animationTime; }
+uint32_t Runtime::trackSamples() const { return s->bake.track.samples; }
+double Runtime::trackRate() const { return s->bake.track.rate; }
+uint32_t Runtime::trackSample() const { return s->sample; }
+
+void Runtime::setAnimationTime(double seconds)
+{
+    if (s->bake.track.samples == 0) return;
+    s->animationTime = std::fmod(std::max(seconds, 0.0), s->bake.track.loopSeconds);
+}
+
+CameraPose Runtime::camera() const { return s->poseApplied ? s->appliedPose : s->bake.camera(); }
+
+double Runtime::bakeValue(const std::string& name, double fallback) const { return s->bake.value(name, fallback); }
+
+bool Runtime::sceneBounds(float minMax[6]) const
+{
+    if (s->bake.track.samples > 0)
+    {
+        std::memcpy(minMax, s->bounds, sizeof(s->bounds));
+        return true;
+    }
+    for (auto& [step, call] : s->bake.calls)
+    {
+        void* low = s->passMember(call, "bboxMin", 12);
+        void* high = s->passMember(call, "bboxMax", 12);
+        if (!low || !high) continue;
+        std::memcpy(minMax, low, 12);
+        std::memcpy(minMax + 3, high, 12);
+        return true;
+    }
+    return false;
+}
+
+void Runtime::setCamera(const CameraPose& pose)
+{
+    s->setPose = pose;
+    s->poseSet = true;
+}
+
+namespace
+{
+/// The settings by name: where each lives, and how a number becomes its value.
+struct Named
+{
+    const char* name;
+    double (*get)(const Settings&, const TrainSchedule&);
+    void (*set)(Settings&, TrainSchedule&, double);
+};
+#define NCR_SETTING(name, expression, type) \
+    {name, [](const Settings& s, const TrainSchedule& t) { (void)s; (void)t; return (double)(expression); }, \
+     [](Settings& s, TrainSchedule& t, double v) { (void)s; (void)t; expression = (type)v; }}
+#define NCR_SWITCH(name, expression) \
+    {name, [](const Settings& s, const TrainSchedule& t) { (void)s; (void)t; return (expression) ? 1.0 : 0.0; }, \
+     [](Settings& s, TrainSchedule& t, double v) { (void)s; (void)t; expression = v != 0.0; }}
+const Named kNamed[] = {
+    {"mode", [](const Settings& s, const TrainSchedule&) { return (double)(uint32_t)s.mode; },
+     [](Settings& s, TrainSchedule&, double v) { s.mode = (RenderMode)std::min((uint32_t)std::max(v, 0.0), 3u); }},
+    NCR_SWITCH("useNEE", s.useNEE),
+    NCR_SETTING("rhsGlossyBounces", s.rhsGlossyBounces, uint32_t),
+    NCR_SWITCH("diffTrainOnGlossy", s.diffTrainOnGlossy),
+    NCR_SWITCH("mirrorAlbedo", s.mirrorAlbedo),
+    NCR_SETTING("envColorEncoding", s.envColorEncoding, uint32_t),
+    NCR_SWITCH("postFilter", s.postFilter),
+    NCR_SWITCH("fxaa", s.fxaa),
+    NCR_SWITCH("animate", s.animate),
+    NCR_SWITCH("cameraAnimated", s.cameraAnimated),
+    NCR_SETTING("timeScale", s.timeScale, float),
+    NCR_SWITCH("trainSchedule", t.enabled),
+    NCR_SETTING("trainLrHot", t.lrHot, float),
+    NCR_SETTING("trainLrCold", t.lrCold, float),
+    NCR_SETTING("trainEmaHot", t.emaHot, float),
+    NCR_SETTING("trainEmaCold", t.emaCold, float),
+    NCR_SETTING("trainWarmupFrames", t.warmupFrames, uint32_t),
+    NCR_SETTING("trainHoldFrames", t.holdFrames, uint32_t),
+    NCR_SETTING("trainCoolFrames", t.coolFrames, float),
+    NCR_SETTING("trainCameraHeat", t.cameraHeat, float),
+    NCR_SETTING("trainSceneHeat", t.sceneHeat, float),
+    NCR_SETTING("trainLightMotionHeat", t.lightMotionHeat, float),
+    NCR_SETTING("trainObjectMotionHeat", t.objectMotionHeat, float),
+};
+#undef NCR_SETTING
+#undef NCR_SWITCH
+}  // namespace
+
+const std::vector<std::string>& Runtime::settingNames()
+{
+    static const std::vector<std::string> names = [] {
+        std::vector<std::string> list;
+        for (const Named& n : kNamed) list.push_back(n.name);
+        return list;
+    }();
+    return names;
+}
+
+bool Runtime::set(const std::string& name, double value)
+{
+    for (const Named& n : kNamed)
+    {
+        if (name != n.name) continue;
+        const bool wasAnimated = s->settings.cameraAnimated;
+        n.set(s->settings, s->schedule, value);
+        // What the bake cannot do stays as it is.
+        if (!s->hasPostFilter) s->settings.postFilter = false;
+        if (s->bake.track.samples == 0) s->settings.animate = s->settings.cameraAnimated = false;
+        if (!s->hasRenderPath) s->settings.mode = s->settings.mode == RenderMode::Idle ? RenderMode::Idle : RenderMode::Train;
+        else if (s->trainSectionEnd == 0 && s->settings.mode != RenderMode::Idle) s->settings.mode = RenderMode::Render;
+        if (s->settings.cameraAnimated && !wasAnimated) s->reapplySample = true;
+        return true;
+    }
+    return false;
+}
+
+double Runtime::get(const std::string& name) const
+{
+    for (const Named& n : kNamed)
+        if (name == n.name) return n.get(s->settings, s->schedule);
+    fail("no setting named " + name);
+}
 
 void Runtime::writeResults(const std::string& dir) const
 {

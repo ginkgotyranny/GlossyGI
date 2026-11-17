@@ -148,6 +148,21 @@ public:
     double runMs = 0.0, copyMs = 0.0, trainRunMs = 0.0, trainCopyMs = 0.0;
     uint32_t runs = 0, trainRuns = 0;
 
+    ~NnrtBackend() override
+    {
+        for (auto& [key, tensor] : mShared) OH_NNTensor_Destroy(&tensor);
+        for (Net& net : mNets)
+        {
+            for (Model* m : {&net.inference, &net.training})
+            {
+                for (NN_Tensor*& t : m->inputs) OH_NNTensor_Destroy(&t);
+                for (NN_Tensor*& t : m->outputs) OH_NNTensor_Destroy(&t);
+                if (m->executor) OH_NNExecutor_Destroy(&m->executor);
+                if (m->compilation) OH_NNCompilation_Destroy(&m->compilation);
+            }
+        }
+    }
+
 private:
     struct Model
     {

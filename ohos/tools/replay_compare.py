@@ -1,12 +1,17 @@
 #!/usr/bin/env python
 """Compares what the replayer produced (ohos/replay) with what Falcor produced in the baked frame.
 
-    python ohos/tools/replay_compare.py <bake dir> <replay output dir> [--all]
+    python ohos/tools/replay_compare.py <bake dir> <replay output dir> [--all] [--reference <bake dir>]
 
 The bake holds, as reference, every image and ray-batch buffer as it was at the end of the frame
 Falcor baked; the replayer writes the same resources after replaying that frame. For each one this
 prints how many bytes differ and, read as the type the bake records for it, how large the difference
 is. Resources are named by the shader variables they are bound to.
+
+With --reference the results are compared with those of another bake: Falcor's frame of the same
+scene that the replay was asked to reproduce (a later frame of an animation, another camera, other
+settings). Resources are then matched by the names they are bound with, since the two bakes number
+them independently, and only what both have is compared.
 
 Without --all only the resources the render path writes are listed (those the replay left untouched
 and Falcor left zero are skipped). Exit code: 0 if the G-buffer agrees (mean difference below 0.1% of the
@@ -56,12 +61,32 @@ def compare(reference, ours, dtype):
     return different_bytes, n, f"{different} of {a.size} values differ", different / max(a.size, 1)
 
 
+def key_of(paths, roles):
+    """What identifies a resource in any bake of the scene: its role, or the variables it is bound to."""
+    return roles[0] if roles else ",".join(paths)
+
+
 def main():
-    arguments = [a for a in sys.argv[1:] if not a.startswith("--")]
-    show_all = "--all" in sys.argv
+    argv = sys.argv[1:]
+    reference_folder = None
+    if "--reference" in argv:
+        at = argv.index("--reference")
+        reference_folder = argv[at + 1]
+        del argv[at:at + 2]
+    arguments = [a for a in argv if not a.startswith("--")]
+    show_all = "--all" in argv
     if len(arguments) != 2:
         sys.exit(__doc__)
     bake = bake_check.load(arguments[0])
+    reference_bake, reference_ids = bake, None
+    if reference_folder:
+        reference_bake = bake_check.load(reference_folder)
+        reference_ids = {}
+        for kind in ("buffer", "texture"):
+            for id_ in reference_bake[kind + "s"]:
+                paths, roles = names_of(reference_bake, kind, id_)
+                if paths or roles:
+                    reference_ids[(kind, key_of(paths, roles))] = id_
     failures = 0
     rows = []
     for file in sorted(os.listdir(arguments[1])):
@@ -69,9 +94,15 @@ def main():
             continue   # e.g. the tensors of a training step, which train_check.py reads
         kind = "texture" if file.startswith("texture") else "buffer"
         id_ = int(file[len(kind):-4])
-        reference = np.fromfile(os.path.join(arguments[0], "data", file), dtype=np.uint8)
-        ours = np.fromfile(os.path.join(arguments[1], file), dtype=np.uint8)
         paths, roles = names_of(bake, kind, id_)
+        reference_id = id_
+        if reference_ids is not None:
+            # The render path's resources carry the same names in both bakes; what only one has is skipped.
+            reference_id = reference_ids.get((kind, key_of(paths, roles)))
+            if reference_id is None:
+                continue
+        reference = np.fromfile(os.path.join(reference_folder or arguments[0], "data", f"{kind}{reference_id}.bin"), dtype=np.uint8)
+        ours = np.fromfile(os.path.join(arguments[1], file), dtype=np.uint8)
         label = (roles[0] if roles else "") + (" = " if roles and paths else "") + ", ".join(paths[:3])
         if kind == "texture":
             dtype = TEXTURE_TYPES.get(bake["textures"][id_]["format"], np.uint8)

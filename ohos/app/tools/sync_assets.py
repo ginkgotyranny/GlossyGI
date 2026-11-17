@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 """Puts what the app reads at run time into the HAP: entry/src/main/resources/rawfile/ncr.
 
-    python ohos/app/tools/sync_assets.py [--scenes <dir>] [--scene <name> ...] [--models <dir>] [--train-tile N]
+    python ohos/app/tools/sync_assets.py [--scenes <dir>] [--scene <scene>/<variant> ...] [--models <dir>] [--train-tile N]
 
-  scenes/<name>/   the runtime's files of each bake (ohos/tools/bake_files.py) in <dir>
-                   (default ohos/_build/scenes, filled by ohos/tools/bake_scene.py); --scene picks some
+  scenes/<scene>/<variant>/   only with --scene: the runtime's files of that bake (ohos/tools/bake_files.py)
+                   in <dir> (default ohos/_build/scenes, filled by ohos/tools/bake_scene.py). Scenes
+                   normally go to the phone on their own (ohos/app/tools/push_scenes.py), not into the
+                   HAP: there are fourteen of them, 60 to 400 MB each.
   shaders/         the runtime's own SPIR-V (ohos/replay/compile_shaders.py)
   models/          the NPU graphs: inference (256x256) and training (--train-tile samples, default
                    4096) of both networks (ohos/npu/export_models.py --om)
@@ -40,20 +42,18 @@ def sha1(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--scenes", default=os.path.join(OHOS, "_build", "scenes"))
-    parser.add_argument("--scene", action="append", help="only these scenes (repeatable)")
+    parser.add_argument("--scene", action="append", help="bundle this bake, <scene>/<variant> (repeatable)")
     parser.add_argument("--models", default=os.path.join(OHOS, "_build", "npu_models"))
     parser.add_argument("--train-tile", type=int, default=4096)
     args = parser.parse_args()
 
     # Source path for every asset path.
     wanted = {}
-    if not os.path.isdir(args.scenes):
-        sys.exit(f"no scenes in {args.scenes}: bake one first (python ohos/tools/bake_scene.py bathroom)")
-    names = args.scene or sorted(n for n in os.listdir(args.scenes) if os.path.exists(os.path.join(args.scenes, n, "replay.txt")))
-    if not names:
-        sys.exit(f"no packed bake in {args.scenes}")
+    names = args.scene or []
     for name in names:
-        bake = os.path.join(args.scenes, name)
+        bake = os.path.join(args.scenes, *name.split("/"))
+        if not os.path.exists(os.path.join(bake, "replay.txt")):
+            sys.exit(f"no packed bake {bake}: python ohos/tools/bake_scene.py {name.replace('/', ' ')}")
         if not os.path.exists(os.path.join(bake, "before.ckpt")):
             sys.exit(f"{bake} has no before.ckpt: bake it again with the current Falcor build")
         for f in runtime_files(bake):
@@ -89,7 +89,7 @@ def main():
                 removed += 1
     with open(os.path.join(TARGET, "manifest.txt"), "w", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
-    print(f"assets: {len(wanted)} files, {total / 1e6:.1f} MB (scenes: {', '.join(names)}); {copied} copied, {removed} removed")
+    print(f"assets: {len(wanted)} files, {total / 1e6:.1f} MB (scenes in the HAP: {', '.join(names) or 'none'}); {copied} copied, {removed} removed")
 
 
 if __name__ == "__main__":

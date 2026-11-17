@@ -28,6 +28,9 @@ names. It also repairs the SPIR-V in place where Falcor's Slang leaves out what 
     host <step> clearcounts <batch> | prefixsum <batch> diff|spec <count> | infer <batch> | train <batch>
     named <role> <bufferId>
     value <name> <number>
+  an animated scene (track.txt of the bake, as it is; the samples are in track.bin):
+    track <samples> <samplesPerSecond> <recordBytes> <loopSeconds>
+    trackrange uniform|buffer|geometry <id> <byteOffset> <bytes>
 """
 import os
 import sys
@@ -124,6 +127,15 @@ def main():
         out.append(f"named {role} {id_}")
     for name, value in bake["values"].items():
         out.append(f"value {name} {value!r}")   # full precision: the training schedule continues from these
+    track = os.path.join(folder, "track.txt")
+    track_samples = 0
+    if os.path.exists(track):
+        lines = [line.strip() for line in open(track) if line.strip()]
+        track_samples = int(lines[0].split()[1])
+        size = os.path.getsize(os.path.join(folder, "track.bin"))
+        if size != 20 + track_samples * int(lines[0].split()[3]):
+            problems.append(f"track.bin has {size} bytes, not what track.txt describes")
+        out += lines
 
     if problems:
         for p in problems:
@@ -133,7 +145,8 @@ def main():
         f.write("\n".join(out) + "\n")
     print(f"{folder}/replay.txt: {len(out)} records, {len(bake['passes'])} passes in {len(bake['calls'])} calls, "
           f"{len(storage_textures)} of {len(bake['textures'])} textures are shader outputs; "
-          f"{repaired} NonUniform decorations added to the SPIR-V")
+          f"{repaired} NonUniform decorations added to the SPIR-V"
+          + (f"; track of {track_samples} samples" if track_samples else ""))
 
 
 if __name__ == "__main__":

@@ -78,15 +78,26 @@ inline std::vector<char> readFile(const std::string& path)
     return data;
 }
 
+/// Where the camera is, as Falcor's Camera holds it.
+struct CameraPose
+{
+    float position[3] = {}, target[3] = {}, up[3] = {};
+    bool operator==(const CameraPose& o) const { return std::memcmp(this, &o, sizeof(CameraPose)) == 0; }
+    bool operator!=(const CameraPose& o) const { return !(*this == o); }
+};
+
 struct Buffer
 {
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkDeviceSize size = 0;
     void* data = nullptr;   // mapped for the buffer's lifetime, when host-visible
-    // A buffer shared with the NPU (Device::makeSharedBuffer): the dma-buf behind it and its size.
+    // A buffer shared with the NPU (Device::makeSharedBuffer): the dma-buf behind it and its size,
+    // and the native buffer (OH_NativeBuffer, OHNativeWindowBuffer) the memory belongs to.
     int fd = -1;
     size_t sharedSize = 0;
+    void* native = nullptr;
+    void* nativeWindow = nullptr;
     template <typename T> T* as() const { return static_cast<T*>(data); }
 };
 
@@ -127,6 +138,7 @@ struct Device
 
     PFN_vkGetAccelerationStructureBuildSizesKHR getBuildSizes = nullptr;
     PFN_vkCreateAccelerationStructureKHR createAS = nullptr;
+    PFN_vkDestroyAccelerationStructureKHR destroyAS = nullptr;
     PFN_vkCmdBuildAccelerationStructuresKHR cmdBuildAS = nullptr;
     PFN_vkGetAccelerationStructureDeviceAddressKHR getASAddress = nullptr;
 
@@ -228,6 +240,7 @@ struct Device
 
         getBuildSizes = (PFN_vkGetAccelerationStructureBuildSizesKHR)vkGetDeviceProcAddr(device, "vkGetAccelerationStructureBuildSizesKHR");
         createAS = (PFN_vkCreateAccelerationStructureKHR)vkGetDeviceProcAddr(device, "vkCreateAccelerationStructureKHR");
+        destroyAS = (PFN_vkDestroyAccelerationStructureKHR)vkGetDeviceProcAddr(device, "vkDestroyAccelerationStructureKHR");
         cmdBuildAS = (PFN_vkCmdBuildAccelerationStructuresKHR)vkGetDeviceProcAddr(device, "vkCmdBuildAccelerationStructuresKHR");
         getASAddress = (PFN_vkGetAccelerationStructureDeviceAddressKHR)vkGetDeviceProcAddr(device, "vkGetAccelerationStructureDeviceAddressKHR");
     }
@@ -300,6 +313,8 @@ struct Device
             BufferHandle* handle = window ? OH_NativeWindow_GetBufferHandleFromNative(window) : nullptr;
             if (!handle || handle->fd < 0) fail("a native buffer without a file descriptor");
             b.fd = handle->fd;
+            b.native = native;
+            b.nativeWindow = window;
 
             VkExternalMemoryBufferCreateInfo external = {VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
             external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OHOS_NATIVE_BUFFER_BIT_OHOS;
@@ -330,7 +345,24 @@ struct Device
     {
         if (b.buffer) vkDestroyBuffer(device, b.buffer, nullptr);
         if (b.memory) vkFreeMemory(device, b.memory, nullptr);
+#ifdef __OHOS__
+        if (b.native)
+        {
+            OH_NativeBuffer_Unmap(static_cast<OH_NativeBuffer*>(b.native));
+            if (b.nativeWindow) OH_NativeWindow_DestroyNativeWindowBuffer(static_cast<OHNativeWindowBuffer*>(b.nativeWindow));
+            OH_NativeBuffer_Unreference(static_cast<OH_NativeBuffer*>(b.native));
+        }
+#endif
         b = Buffer();
+    }
+
+    void destroy(Texture& t) const
+    {
+        if (t.view) vkDestroyImageView(device, t.view, nullptr);
+        if (t.storageView) vkDestroyImageView(device, t.storageView, nullptr);
+        if (t.image) vkDestroyImage(device, t.image, nullptr);
+        if (t.memory) vkFreeMemory(device, t.memory, nullptr);
+        t = Texture();
     }
 
     VkDeviceAddress address(const Buffer& b) const

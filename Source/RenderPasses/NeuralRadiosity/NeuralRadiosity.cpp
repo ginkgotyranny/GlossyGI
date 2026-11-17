@@ -415,6 +415,7 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
     }
 
     bakeExport(pRenderContext);
+    bakeTrack(pRenderContext);
     mFrameCount++;
 }
 
@@ -766,6 +767,7 @@ void NeuralRadiosity::updateTrainSchedule()
     if (is_set(updates, editChange)) events |= kTrainEventEdit;
     if (is_set(updates, lightMotion)) events |= kTrainEventLight;
     if (is_set(updates, objectMotion)) events |= kTrainEventObject;
+    mLastTrainEvents = events;
 
     float target = 0.f;
     if ((events & kTrainEventCamera) != 0)

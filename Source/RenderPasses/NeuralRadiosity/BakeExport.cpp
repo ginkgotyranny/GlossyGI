@@ -38,6 +38,28 @@
 //       geometry <globalInstanceID> <tlasInstance> <geometryIndex> <meshID> <materialID> <vbOffset>
 //                <ibOffset> <vertexCount> <indexCount> <index16> <frontFaceCW> <opaque> <12 floats: 3x4 transform>
 //
+//
+// Animated scenes: with NCR_BAKE_TRACK_RATE set (samples per second; the clock must step by that
+// rate, scripts/ncr_smoke.py does) and a scene that has animations, the frames after the baked one
+// are recorded as the bake's track, one loop of the scene's animation (Falcor wraps the scene's
+// time at the longest animation). Sample k is the scene k frames after the baked frame:
+//
+//   track.txt          track <samples> <rate> <recordBytes> <loopSeconds>
+//                      trackrange uniform 0 <byteOffset> <bytes>       part of the scene's uniform block (gScene)
+//                      trackrange buffer <id> <byteOffset> <bytes>     part of a scene buffer
+//                      trackrange geometry 0 <byteOffset> <bytes>      part of the geometry transforms: 12 floats
+//                                                                      (as in the geometry records) per global instance
+//                      The ranges are the bytes that differ from the baked frame in any sample.
+//   track.bin          "NRTK", version, samples, recordBytes, rate (float), then one record per sample:
+//                      the training schedule's event classes of that frame (uint32), the scene bounds
+//                      (min, max: 6 floats), then the bytes of every range in the order of track.txt.
+//
+// Vertex and index buffers are not tracked: the scenes animate rigid transforms only, and a scene
+// with skinned meshes or vertex caches is refused. A sample holds what is bound at each shader path
+// in that frame, not what one buffer object holds: Falcor swaps its current and previous matrix
+// buffers every frame (AnimationController::update), so the object bound as worldMatrices in the
+// baked frame is prevWorldMatrices in the next one.
+//
 // Without the variable nothing here runs.
 #include "NeuralRadiosity.h"
 #include "Core/API/ParameterBlock.h"
@@ -60,6 +82,7 @@ struct BakeSettings
     std::filesystem::path dir;
     uint32_t frame = 5;
     bool done = false;
+    float trackRate = 0.f;   // samples per second of the animation track; 0: none
 
     BakeSettings()
     {
@@ -70,6 +93,8 @@ struct BakeSettings
         dir = d;
         if (const char* f = std::getenv("NCR_BAKE_FRAME"))
             frame = (uint32_t)std::atoi(f);
+        if (const char* r = std::getenv("NCR_BAKE_TRACK_RATE"))
+            trackRate = (float)std::atof(r);
     }
 };
 BakeSettings gBake;
@@ -139,6 +164,10 @@ public:
         record("call {} {} {} {} {}", mCall, name, dims.x, dims.y, dims.z);
         walk("", "", pPass->getRootVar());
     }
+
+    /// The scene's buffers an animation can change: everything bound in gScene but the vertices and
+    /// indices, by id, with the shader path and array index they were first seen bound at.
+    const std::map<uint32_t, std::pair<std::string, uint32_t>>& sceneBuffers() const { return mSceneBuffers; }
 
     /// Records a buffer under a role name.
     void named(const std::string& name, const ref<Buffer>& pBuffer)
@@ -273,7 +302,12 @@ private:
                 Resource* pResource = boundResource(var);
                 ref<Buffer> pBuffer = pResource ? pResource->asBuffer() : nullptr;
                 if (pBuffer)
-                    record("{} buffer {}", where, bufferId(pBuffer.get()));
+                {
+                    const uint32_t id = bufferId(pBuffer.get());
+                    record("{} buffer {}", where, id);
+                    if (path.rfind("gScene.", 0) == 0 && path != "gScene.vertices.data" && path != "gScene.indexData.data")
+                        mSceneBuffers.emplace(id, std::make_pair(path, index));
+                }
                 else
                     record("{} null", where);
                 break;
@@ -371,11 +405,259 @@ private:
     std::map<const Buffer*, uint32_t> mBuffers;
     std::map<const Texture*, uint32_t> mTextures;
     std::map<const Sampler*, uint32_t> mSamplers;
+    std::map<uint32_t, std::pair<std::string, uint32_t>> mSceneBuffers;
     std::map<std::string, std::string> mUniformFiles;
     std::vector<ref<const Object>> mKeepAlive;
 };
 
 std::unique_ptr<Baker> gBaker;
+
+/// The 3x4 transform of every geometry instance, as the geometry records give it (zeros for what
+/// is not a triangle mesh).
+std::vector<uint8_t> geometryTransforms(const Scene& scene)
+{
+    const auto& matrices = scene.getAnimationController()->getGlobalMatrices();
+    std::vector<float> values((size_t)scene.getGeometryInstanceCount() * 12, 0.f);
+    for (uint32_t i = 0; i < scene.getGeometryInstanceCount(); ++i)
+    {
+        const GeometryInstanceData& instance = scene.getGeometryInstance(i);
+        if (instance.getType() != GeometryType::TriangleMesh)
+            continue;
+        const float4x4& m = matrices[instance.globalMatrixID];
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 4; ++col)
+                values[(size_t)i * 12 + row * 4 + col] = m[row][col];
+    }
+    std::vector<uint8_t> bytes(values.size() * sizeof(float));
+    std::memcpy(bytes.data(), values.data(), bytes.size());
+    return bytes;
+}
+
+/// Records the track of an animated scene (see the top of this file): the first capture is the
+/// baked frame, every later one is kept as its differences from it.
+class TrackRecorder
+{
+public:
+    TrackRecorder(
+        const std::filesystem::path& dir, const ref<Scene>& pScene, const ref<ParameterBlock>& pSceneBlock,
+        const std::map<uint32_t, std::pair<std::string, uint32_t>>& buffers, float rate, double loopSeconds
+    )
+        : mDir(dir), mpScene(pScene), mpSceneBlock(pSceneBlock), mRate(rate), mLoopSeconds(loopSeconds)
+    {
+        mSamples = std::max(1u, (uint32_t)std::llround(loopSeconds * rate));
+        mTargets.push_back({"uniform", 0, "", 0});
+        for (const auto& [id, binding] : buffers)
+            mTargets.push_back({"buffer", id, binding.first, binding.second});
+        mTargets.push_back({"geometry", 0, "", 0});
+    }
+
+    uint32_t samples() const { return mSamples; }
+
+    /// One sample; true once the track is complete and written.
+    bool capture(RenderContext* pRenderContext, uint32_t events)
+    {
+        pRenderContext->submit(true);   // the scene updates some of its buffers on the GPU
+        Sample sample;
+        sample.events = events;
+        const AABB& bounds = mpScene->getSceneBounds();
+        const float box[6] = {bounds.minPoint.x, bounds.minPoint.y, bounds.minPoint.z, bounds.maxPoint.x, bounds.maxPoint.y, bounds.maxPoint.z};
+        std::memcpy(sample.bounds, box, sizeof(box));
+        for (size_t t = 0; t < mTargets.size(); ++t)
+        {
+            Target& target = mTargets[t];
+            std::vector<uint8_t> now;
+            if (target.kind == "uniform")
+            {
+                now.resize(mpSceneBlock->getSize());
+                std::memcpy(now.data(), mpSceneBlock->getRawData(), now.size());
+            }
+            else if (target.kind == "buffer")
+            {
+                const ref<Buffer> pBuffer = boundBuffer(target);
+                now.resize(pBuffer->getSize());
+                pBuffer->getBlob(now.data(), 0, now.size());
+            }
+            else
+            {
+                now = geometryTransforms(*mpScene);
+            }
+            if (mSampleList.empty())
+            {
+                target.base = std::move(now);
+                target.changed.assign((target.base.size() + kChunk - 1) / kChunk, false);
+                continue;
+            }
+            if (now.size() != target.base.size())
+                FALCOR_THROW("NCR bake: a scene buffer changed its size during the animation ({} {})", target.kind, target.id);
+            for (size_t chunk = 0; chunk < target.changed.size(); ++chunk)
+            {
+                const size_t offset = chunk * kChunk, size = std::min(kChunk, now.size() - offset);
+                if (std::memcmp(now.data() + offset, target.base.data() + offset, size) == 0)
+                    continue;
+                target.changed[chunk] = true;
+                Difference d;
+                d.target = (uint32_t)t;
+                d.chunk = (uint32_t)chunk;
+                std::memcpy(d.bytes, now.data() + offset, size);
+                sample.differences.push_back(d);
+                mStoredBytes += sizeof(Difference);
+            }
+        }
+        if (mStoredBytes > (size_t(3) << 30))
+            FALCOR_THROW("NCR bake: the animation changes too much scene data per frame for a track (over 3 GB of differences)");
+        mSampleList.push_back(std::move(sample));
+        if (mSampleList.size() < mSamples)
+            return false;
+        write();
+        return true;
+    }
+
+private:
+    static constexpr size_t kChunk = 16;
+    struct Target
+    {
+        std::string kind;
+        uint32_t id;
+        std::string path;   // a buffer: where it is bound, e.g. gScene.worldMatrices, and the array element
+        uint32_t index;
+        std::vector<uint8_t> base;
+        std::vector<bool> changed;   // per chunk: differs from the base in some sample
+    };
+    struct Difference
+    {
+        uint32_t target, chunk;
+        uint8_t bytes[kChunk];
+    };
+    struct Sample
+    {
+        uint32_t events = 0;
+        float bounds[6] = {};
+        std::vector<Difference> differences;
+    };
+    struct Range
+    {
+        uint32_t target, offset, bytes, recordOffset;
+    };
+
+    /// The buffer bound at a target's shader path now. The path goes through the scene's block and
+    /// the blocks inside it (gScene.materials.materialData).
+    ref<Buffer> boundBuffer(const Target& target) const
+    {
+        ShaderVar var = mpSceneBlock->getRootVar();
+        std::string rest = target.path.substr(target.path.find('.') + 1);   // without "gScene."
+        while (true)
+        {
+            const size_t dot = rest.find('.');
+            var = member(var, rest.substr(0, dot));
+            if (dot == std::string::npos)
+                break;
+            rest = rest.substr(dot + 1);
+        }
+        if (var.getType()->getKind() == ReflectionType::Kind::Array)
+            var = var[target.index];
+        Resource* pResource = boundResource(var);
+        ref<Buffer> pBuffer = pResource ? pResource->asBuffer() : nullptr;
+        if (!pBuffer)
+            FALCOR_THROW("NCR bake: nothing is bound at {} during the animation", target.path);
+        return pBuffer;
+    }
+
+    static ShaderVar member(ShaderVar var, const std::string& name)
+    {
+        const ReflectionResourceType* pResource = var.getType()->asResourceType();
+        if (pResource && pResource->getType() == ReflectionResourceType::Type::ConstantBuffer)
+        {
+            ref<ParameterBlock> pBlock = var.getParameterBlock();
+            if (!pBlock)
+                FALCOR_THROW("NCR bake: no parameter block bound where the track needs one");
+            var = pBlock->getRootVar();
+        }
+        return var[name];
+    }
+
+    void write()
+    {
+        // The ranges: runs of changed chunks.
+        std::vector<Range> ranges;
+        std::vector<std::vector<int64_t>> chunkAt(mTargets.size());   // target, chunk -> offset in the record, or -1
+        uint32_t recordBytes = sizeof(uint32_t) + 6 * sizeof(float);
+        for (size_t t = 0; t < mTargets.size(); ++t)
+        {
+            const Target& target = mTargets[t];
+            chunkAt[t].assign(target.changed.size(), -1);
+            size_t chunk = 0;
+            while (chunk < target.changed.size())
+            {
+                if (!target.changed[chunk])
+                {
+                    ++chunk;
+                    continue;
+                }
+                const size_t first = chunk;
+                while (chunk < target.changed.size() && target.changed[chunk])
+                {
+                    chunkAt[t][chunk] = (int64_t)recordBytes + (int64_t)((chunk - first) * kChunk);
+                    ++chunk;
+                }
+                Range r;
+                r.target = (uint32_t)t;
+                r.offset = (uint32_t)(first * kChunk);
+                r.bytes = (uint32_t)(std::min(chunk * kChunk, target.base.size()) - first * kChunk);
+                r.recordOffset = recordBytes;
+                recordBytes += r.bytes;
+                ranges.push_back(r);
+            }
+        }
+        std::ofstream index(mDir / "track.txt", std::ios::trunc);
+        index << fmt::format("track {} {} {} {}\n", mSamples, mRate, recordBytes, mLoopSeconds);
+        for (const Range& r : ranges)
+            index << fmt::format("trackrange {} {} {} {}\n", mTargets[r.target].kind, mTargets[r.target].id, r.offset, r.bytes);
+
+        // The record of the baked frame, then every sample as that record with its differences.
+        std::vector<uint8_t> baseRecord(recordBytes, 0);
+        for (const Range& r : ranges)
+            std::memcpy(baseRecord.data() + r.recordOffset, mTargets[r.target].base.data() + r.offset, r.bytes);
+        std::ofstream f(mDir / "track.bin", std::ios::binary | std::ios::trunc);
+        const uint32_t header[4] = {0x4B54524Eu /* "NRTK" */, 1u, mSamples, recordBytes};
+        f.write(reinterpret_cast<const char*>(header), sizeof(header));
+        f.write(reinterpret_cast<const char*>(&mRate), sizeof(float));
+        for (size_t s = 0; s < mSampleList.size(); ++s)
+        {
+            const Sample& sample = mSampleList[s];
+            std::vector<uint8_t> record = baseRecord;
+            // The baked frame's own events are those of a scene that has just been loaded: take the
+            // next frame's, which are the animation's.
+            const uint32_t events = (s == 0 && mSampleList.size() > 1) ? mSampleList[1].events : sample.events;
+            std::memcpy(record.data(), &events, sizeof(uint32_t));
+            std::memcpy(record.data() + sizeof(uint32_t), sample.bounds, sizeof(sample.bounds));
+            for (const Difference& d : sample.differences)
+            {
+                const int64_t at = chunkAt[d.target][d.chunk];
+                const size_t size = std::min(kChunk, mTargets[d.target].base.size() - (size_t)d.chunk * kChunk);
+                std::memcpy(record.data() + at, d.bytes, size);
+            }
+            f.write(reinterpret_cast<const char*>(record.data()), (std::streamsize)record.size());
+        }
+        if (!f.good() || !index.good())
+            FALCOR_THROW("NCR bake: cannot write the track to {}", mDir.string());
+        logInfo(
+            "NCR bake: track of {} samples at {} per second ({} s), {} ranges, {} bytes per sample, written to {}",
+            mSamples, mRate, mLoopSeconds, ranges.size(), recordBytes, mDir.string()
+        );
+    }
+
+    std::filesystem::path mDir;
+    ref<Scene> mpScene;
+    ref<ParameterBlock> mpSceneBlock;
+    float mRate;
+    double mLoopSeconds;
+    uint32_t mSamples = 0;
+    std::vector<Target> mTargets;
+    std::vector<Sample> mSampleList;
+    size_t mStoredBytes = 0;
+};
+
+std::unique_ptr<TrackRecorder> gTrack;
 } // namespace
 
 void NeuralRadiosity::bakeBegin()
@@ -476,6 +758,7 @@ void NeuralRadiosity::bakeExport(RenderContext* pRenderContext)
         baker.record("value train.lrCold {}", mTrainLrCold);
         baker.record("value train.emaHot {}", mTrainEmaHot);
         baker.record("value train.emaCold {}", mTrainEmaCold);
+        baker.record("value train.warmupFrames {}", mTrainWarmupFrames);
         baker.record("value train.holdFrames {}", mTrainHoldFrames);
         baker.record("value train.coolFrames {}", mTrainCoolFrames);
         baker.record("value train.cameraHeat {}", mTrainCameraHeat);
@@ -507,5 +790,28 @@ void NeuralRadiosity::bakeExport(RenderContext* pRenderContext)
         );
     }
     logInfo("NCR bake: wrote frame {} to {}", mFrameCount, gBake.dir.string());
+
+    // An animated scene: this frame is the first sample of the track, the following frames the rest.
+    double loopSeconds = 0.0;
+    for (const auto& pAnimation : mpScene->getAnimations())
+        loopSeconds = std::max(loopSeconds, pAnimation->getDuration());
+    if (gBake.trackRate > 0.f && loopSeconds > 0.0)
+    {
+        const auto pController = mpScene->getAnimationController();
+        if (pController->hasSkinnedMeshes() || pController->hasAnimatedVertexCaches())
+            FALCOR_THROW("NCR bake: the track holds rigid animation only; this scene animates vertices");
+        const ref<ParameterBlock> pSceneBlock = mpRandomSmooth->getRootVar()["gScene"].getParameterBlock();
+        gTrack = std::make_unique<TrackRecorder>(gBake.dir, mpScene, pSceneBlock, baker.sceneBuffers(), gBake.trackRate, loopSeconds);
+        gTrack->capture(pRenderContext, 0);
+        logInfo("NCR bake: recording a track of {} samples", gTrack->samples());
+    }
     gBaker.reset();
+}
+
+void NeuralRadiosity::bakeTrack(RenderContext* pRenderContext)
+{
+    if (!gTrack || mFrameCount == gBake.frame)
+        return;
+    if (gTrack->capture(pRenderContext, mLastTrainEvents))
+        gTrack.reset();
 }

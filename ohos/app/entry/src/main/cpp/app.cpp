@@ -1,20 +1,30 @@
 // NCR on HarmonyOS: the native side of the app.
 //
-//   ArkTS (EntryAbility, pages/Index)  ->  init(resourceManager, filesDir, args), setForeground, getStatus
-//   XComponent                         ->  surface created / changed / destroyed (UI thread)
-//   render thread                      ->  assets, Vulkan device, the NCR runtime (ohos/replay), and per
-//                                          frame: runtime.frame(), the Display pass, a copy into the
-//                                          swapchain image, present
+//   ArkTS (EntryAbility, pages/Index)  ->  init(resourceManager, filesDir, args), setForeground,
+//                                          getState() (JSON for the panel), set(name, value),
+//                                          command(name, argument)
+//   XComponent                         ->  surface created / changed / destroyed, touches: the
+//                                          camera gestures (UI thread)
+//   render thread                      ->  assets, Vulkan device, and per scene the NCR runtime
+//                                          (ohos/replay); per frame: runtime.frame(), the Display
+//                                          pass, a copy into the swapchain image, present
 //
 // The runtime is the one the command-line replayer uses: the frames of a Falcor bake, rendered and
 // trained on the phone, the MLPs on the NPU. Everything the native side prints (stdout, stderr) goes
-// to <files>/ncr.log and to hilog (tag NCR); getStatus() gives the page one line of progress or the error.
+// to <files>/ncr.log and to hilog (tag NCR).
 //
-// Launch arguments (one string, --name=value or --flag): --scene=<name> (default: the first scene
-// in the assets), --networks=npu|tiles, --model=bake|<checkpoint path>, --train-tile=<n>,
-// --no-train, --copy-tiles, --cpu-prefix-sum, --loss=<every n frames>, --log-every=<n frames>,
-// --save-at=<frame>: after that frame write display.bin, trained.ckpt and schedule.txt to <files>/out
-// (and with --save-results every image and ray-batch buffer, as the replayer does).
+// Scenes are baked by ohos/tools/bake_scene.py and live on the phone as <files>/scenes/<scene>/<variant>
+// (variant: static or anim; ohos/app/tools/push_scenes.sh puts them there) or, bundled in the HAP,
+// as <files>/ncr/scenes/... The panel picks one; the render thread takes the current runtime down
+// and brings the next one up. The device and the swapchain stay.
+//
+// Launch arguments (one string, --name=value or --flag): --scene=<name> and --variant=static|anim
+// (default: the scene of the last run, else the first one found), --networks=npu|tiles,
+// --model=bake|<checkpoint path>, --train-tile=<n>, --no-train, --copy-tiles, --cpu-prefix-sum,
+// --loss=<every n frames>, --log-every=<n frames>, --set=<name>:<value>[,<name>:<value>...] (settings
+// of the panel, see Runtime::settingNames), --dt=<seconds> (animation step per frame instead of the
+// clock), --save-at=<frame>: after that frame write display.bin, trained.ckpt and schedule.txt to
+// <files>/out (and with --save-results every image and ray-batch buffer, as the replayer does).
 #include "ncr_runtime.h"
 
 #include <ace/xcomponent/native_interface_xcomponent.h>
@@ -24,6 +34,8 @@
 #include <rawfile/raw_file.h>
 #include <rawfile/raw_file_manager.h>
 
+#include <dirent.h>
+#include <ftw.h>
 #include <pthread.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -56,6 +68,12 @@ struct Shared
     bool foreground = true;
     bool threadStarted = false;
     std::string status = "starting";
+    std::string state = "{\"status\":\"starting\"}";   // what the panel shows, as JSON
+
+    // From the panel, taken by the render thread at the start of a frame.
+    std::vector<std::pair<std::string, double>> sets;
+    std::vector<std::pair<std::string, std::string>> commands;
+    double rotateX = 0.0, rotateY = 0.0, panX = 0.0, panY = 0.0, dolly = 0.0;   // camera gestures since the last frame
 };
 Shared gShared;
 
@@ -131,10 +149,24 @@ std::string readTextFile(const std::string& path)
     return text.str();
 }
 
+bool fileExists(const std::string& path)
+{
+    struct stat info;
+    return stat(path.c_str(), &info) == 0;
+}
+
 void makeDirectories(const std::string& path)
 {
     for (size_t slash = path.find('/', 1); slash != std::string::npos; slash = path.find('/', slash + 1)) mkdir(path.substr(0, slash).c_str(), 0770);
     mkdir(path.c_str(), 0770);
+}
+
+/// Deletes a folder and everything in it.
+void removeTree(const std::string& path)
+{
+    nftw(
+        path.c_str(), [](const char* file, const struct stat*, int, struct FTW*) { return std::remove(file) == 0 ? 0 : 0; }, 16,
+        FTW_DEPTH | FTW_PHYS);
 }
 
 void extractAssets(NativeResourceManager* resources, const std::string& target)
@@ -147,7 +179,9 @@ void extractAssets(NativeResourceManager* resources, const std::string& target)
         std::printf("assets up to date in %s\n", target.c_str());
         return;
     }
-    std::remove(installed.c_str());   // written last: an interrupted extraction is redone
+    // What an earlier version extracted goes first (an older HAP carried a scene), and the manifest
+    // is written last, so an interrupted extraction is redone.
+    removeTree(target);
     std::vector<std::string> files;
     std::istringstream lines(manifest);
     std::string line;
@@ -187,22 +221,54 @@ void extractAssets(NativeResourceManager* resources, const std::string& target)
     std::printf("extracted %zu files, %.1f MB, to %s in %.1f s\n", files.size(), bytes / 1e6, target.c_str(), msSince(start) / 1000.0);
 }
 
-/// The scenes in the assets, by the manifest: the folders under scenes/.
-std::vector<std::string> sceneNames(const std::string& assets)
+/// A baked scene on the phone: media/scenes/<scene> as its static or animated scene file.
+struct SceneEntry
+{
+    std::string scene, variant, dir;
+    std::string key() const { return scene + "/" + variant; }
+};
+
+std::vector<std::string> subdirectories(const std::string& path)
 {
     std::vector<std::string> names;
-    std::istringstream lines(readTextFile(assets + "/manifest.txt"));
-    std::string line;
-    while (std::getline(lines, line))
+    if (DIR* dir = opendir(path.c_str()))
     {
-        const size_t tab = line.find('\t');
-        if (tab == std::string::npos || line.compare(tab + 1, 7, "scenes/") != 0) continue;
-        const std::string rest = line.substr(tab + 8);
-        const std::string name = rest.substr(0, rest.find('/'));
-        if (std::find(names.begin(), names.end(), name) == names.end()) names.push_back(name);
+        while (dirent* entry = readdir(dir))
+        {
+            const std::string name = entry->d_name;
+            struct stat info;
+            if (name != "." && name != ".." && stat((path + "/" + name).c_str(), &info) == 0 && S_ISDIR(info.st_mode)) names.push_back(name);
+        }
+        closedir(dir);
     }
     std::sort(names.begin(), names.end());
     return names;
+}
+
+/// The packed bakes under <files>/scenes (pushed) and <files>/ncr/scenes (from the HAP):
+/// <scene>/<variant>/replay.txt, or <scene>/replay.txt for a bake without a variant folder (static).
+std::vector<SceneEntry> findScenes(const std::string& filesDir)
+{
+    std::vector<SceneEntry> scenes;
+    auto add = [&](const std::string& scene, const std::string& variant, const std::string& dir) {
+        for (const SceneEntry& e : scenes)
+            if (e.scene == scene && e.variant == variant) return;
+        scenes.push_back({scene, variant, dir});
+    };
+    for (const std::string& root : {filesDir + "/scenes", filesDir + "/ncr/scenes"})
+    {
+        for (const std::string& scene : subdirectories(root))
+        {
+            const std::string dir = root + "/" + scene;
+            if (fileExists(dir + "/replay.txt")) add(scene, "static", dir);
+            for (const std::string& variant : subdirectories(dir))
+                if (fileExists(dir + "/" + variant + "/replay.txt")) add(scene, variant, dir + "/" + variant);
+        }
+    }
+    std::sort(scenes.begin(), scenes.end(), [](const SceneEntry& a, const SceneEntry& b) {
+        return a.scene != b.scene ? a.scene < b.scene : a.variant > b.variant;   // static before anim
+    });
+    return scenes;
 }
 
 std::map<std::string, std::string> parseArgs(const std::string& text)
@@ -235,13 +301,26 @@ std::map<std::string, std::string> parseArgs(const std::string& text)
     return args;
 }
 
+std::string jsonString(const std::string& text)
+{
+    std::string out = "\"";
+    for (char c : text)
+    {
+        if (c == '"' || c == '\\') out += '\\', out += c;
+        else if (c == '\n') out += "\\n";
+        else if ((unsigned char)c < 0x20) out += ' ';
+        else out += c;
+    }
+    return out + "\"";
+}
+
 // ------------------------------------------------------------------------------------------------
 // Presentation: a swapchain on the XComponent's window at the render resolution (the compositor
 // scales it to the component), filled by copying the Display pass's 8-bit pixels into its images.
 class Presenter
 {
 public:
-    Presenter(Device& dev, OHNativeWindow* window, uint32_t width, uint32_t height) : mDev(dev)
+    Presenter(Device& dev, OHNativeWindow* window, uint32_t width, uint32_t height) : mDev(dev), mWidth(width), mHeight(height)
     {
         // Render at the bake's resolution; the compositor scales to the component.
         const int32_t geometry = OH_NativeWindow_NativeWindowHandleOpt(window, SET_BUFFER_GEOMETRY, (int32_t)width, (int32_t)height);
@@ -328,6 +407,8 @@ public:
     }
 
     bool bgra() const { return mBgra; }
+    uint32_t width() const { return mWidth; }
+    uint32_t height() const { return mHeight; }
 
     /// Shows the frame. False when the swapchain has to be made anew.
     bool present(const Display& display)
@@ -387,6 +468,7 @@ public:
 
 private:
     Device& mDev;
+    uint32_t mWidth, mHeight;
     VkSurfaceKHR mSurface = VK_NULL_HANDLE;
     VkSwapchainKHR mSwapchain = VK_NULL_HANDLE;
     VkExtent2D mExtent = {};
@@ -396,6 +478,61 @@ private:
     std::vector<VkSemaphore> mPresentable;
     VkFence mFence = VK_NULL_HANDLE;
 };
+
+// ------------------------------------------------------------------------------------------------
+// The camera under the fingers. The gestures arrive as fractions of the view: one finger turns the
+// view (the picture follows the finger), two fingers move the camera sideways and up or down, a
+// pinch moves it forward or back. `extent` is the size of the scene, which sets how far a full
+// swipe goes.
+void moveCamera(CameraPose& pose, double rotateX, double rotateY, double panX, double panY, double dolly, double extent)
+{
+    auto dot = [](const double* a, const double* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    auto cross = [](const double* a, const double* b, double* out) {
+        out[0] = a[1] * b[2] - a[2] * b[1];
+        out[1] = a[2] * b[0] - a[0] * b[2];
+        out[2] = a[0] * b[1] - a[1] * b[0];
+    };
+    auto normalize = [&](double* v) {
+        const double length = std::sqrt(dot(v, v));
+        if (length > 0.0)
+            for (int i = 0; i < 3; i++) v[i] /= length;
+    };
+    // Rodrigues: v turned by `angle` about the unit axis.
+    auto rotate = [&](double* v, const double* axis, double angle) {
+        double c[3];
+        cross(axis, v, c);
+        const double d = dot(axis, v), cosA = std::cos(angle), sinA = std::sin(angle);
+        for (int i = 0; i < 3; i++) v[i] = v[i] * cosA + c[i] * sinA + axis[i] * d * (1.0 - cosA);
+    };
+    double position[3], forward[3], up[3], right[3], above[3];
+    for (int i = 0; i < 3; i++)
+    {
+        position[i] = pose.position[i];
+        forward[i] = (double)pose.target[i] - pose.position[i];
+        up[i] = pose.up[i];
+    }
+    const double distance = std::max(std::sqrt(dot(forward, forward)), 1e-6);
+    normalize(forward);
+    normalize(up);
+    const double kTurn = 1.2;   // radians for a swipe across the whole view
+    rotate(forward, up, rotateX * kTurn);
+    cross(forward, up, right);
+    normalize(right);
+    // Looking straight up or down is where the view would flip: stop 8 degrees short of it.
+    const double elevation = std::asin(std::clamp(dot(forward, up), -1.0, 1.0)), limit = 1.43;
+    const double pitch = std::clamp(elevation + rotateY * kTurn, -limit, limit) - elevation;
+    rotate(forward, right, pitch);
+    normalize(forward);
+    cross(forward, up, right);
+    normalize(right);
+    cross(right, forward, above);
+    for (int i = 0; i < 3; i++)
+    {
+        position[i] += (-right[i] * panX + above[i] * panY) * extent * 0.5 + forward[i] * dolly * extent * 0.5;
+        pose.position[i] = (float)position[i];
+        pose.target[i] = (float)(position[i] + forward[i] * distance);
+    }
+}
 
 // ------------------------------------------------------------------------------------------------
 // The render thread.
@@ -419,52 +556,131 @@ void saveResults(Runtime& runtime, const Display& display, bool bgra, const std:
     std::printf("saved the results of frame %u to %s\n", runtime.framesDone(), dir.c_str());
 }
 
-void renderLoop(const std::string& filesDir, NativeResourceManager* resources, const std::string& launchArgs)
+/// What the render thread keeps from one scene to the next.
+struct App
 {
-    std::printf("NCR app, launch arguments \"%s\"\n", launchArgs.c_str());
-    const std::map<std::string, std::string> args = parseArgs(launchArgs);
-    auto arg = [&](const char* name, const std::string& fallback) {
+    std::string filesDir, assets;
+    std::map<std::string, std::string> args;
+    RuntimeOptions options;
+    uint32_t logEvery = 30, saveAt = 0;
+    bool saveEverything = false;
+    double fixedStep = -1.0;   // --dt: seconds of animation per frame; < 0: the clock
+    Device dev;
+    std::unique_ptr<Presenter> presenter;
+    std::vector<SceneEntry> scenes;
+    std::string wanted;        // scene/variant to run next
+    std::string model = "bake";
+    std::string message;       // the outcome of the last command, for the panel
+
+    std::string arg(const char* name, const std::string& fallback) const
+    {
         auto it = args.find(name);
         return it == args.end() ? fallback : it->second;
-    };
+    }
 
-    const std::string assets = filesDir + "/ncr";
-    extractAssets(resources, assets);
-    const std::vector<std::string> scenes = sceneNames(assets);
-    if (scenes.empty()) fail("the assets hold no scene (ohos/app/tools/sync_assets.py)");
-    const std::string scene = arg("scene", scenes.front());
-    if (std::find(scenes.begin(), scenes.end(), scene) == scenes.end()) fail("no scene " + scene + " in the assets");
+    const SceneEntry* find(const std::string& key) const
+    {
+        for (const SceneEntry& e : scenes)
+            if (e.key() == key) return &e;
+        return nullptr;
+    }
 
-    RuntimeOptions options;
-    options.networks = arg("networks", "npu");
-    options.shaderDir = assets + "/shaders";
-    options.modelDir = assets + "/models";
-    options.trainTile = (uint32_t)std::stoul(arg("train-tile", "4096"));
-    options.noTrain = args.count("no-train") != 0;
-    options.copyTiles = args.count("copy-tiles") != 0;
-    options.cpuPrefixSum = args.count("cpu-prefix-sum") != 0;
-    options.lossInterval = (uint32_t)std::stoul(arg("loss", "0"));
-    const uint32_t logEvery = std::max(1u, (uint32_t)std::stoul(arg("log-every", "30")));
-    const uint32_t saveAt = (uint32_t)std::stoul(arg("save-at", "0"));
-    const bool saveEverything = args.count("save-results") != 0;
+    std::string modelPath(const SceneEntry& scene) const { return filesDir + "/models/" + scene.scene + "-" + scene.variant + ".ckpt"; }
+};
 
-    setStatus("creating the Vulkan device");
-    Device dev;
-    DeviceOptions deviceOptions;
-    deviceOptions.instanceExtensions = {VK_KHR_SURFACE_EXTENSION_NAME, VK_OHOS_SURFACE_EXTENSION_NAME};
-    deviceOptions.deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-    dev.create(deviceOptions);
-    std::printf("Vulkan device created: %s\n", dev.name);
+/// The part of the panel's state that does not depend on a running scene.
+std::string baseState(const App& app, const std::string& status, const SceneEntry* current, bool loaded)
+{
+    std::string json = "{\"status\":" + jsonString(status) + ",\"message\":" + jsonString(app.message) + ",\"scenes\":[";
+    std::string last;
+    bool first = true;
+    for (const SceneEntry& e : app.scenes)
+    {
+        if (e.scene != last)
+        {
+            json += std::string(first ? "" : "]},") + "{\"name\":" + jsonString(e.scene) + ",\"variants\":[" + jsonString(e.variant);
+            first = false;
+            last = e.scene;
+        }
+        else
+        {
+            json += "," + jsonString(e.variant);
+        }
+    }
+    json += first ? "]" : "]}]";
+    json += ",\"scene\":" + jsonString(current ? current->scene : "") + ",\"variant\":" + jsonString(current ? current->variant : "");
+    json += std::string(",\"loaded\":") + (loaded ? "true" : "false");
+    return json;
+}
 
-    setStatus("loading " + scene + ": scene data, acceleration structures, pipelines, NPU models");
-    Runtime runtime(dev, assets + "/scenes/" + scene, arg("model", "bake"), options);
-    const std::string title = format("%s %ux%u, %s", scene.c_str(), runtime.width(), runtime.height(),
-                                     options.networks == "npu" ? "MLPs on the NPU" : "MLPs on the CPU");
-    std::unique_ptr<Presenter> presenter;
+void publish(const std::string& json, const std::string& status)
+{
+    std::lock_guard<std::mutex> lock(gShared.mutex);
+    gShared.state = json;
+    gShared.status = status;
+}
+
+/// Takes what the panel asked for since the last frame.
+void takeInput(std::vector<std::pair<std::string, double>>& sets, std::vector<std::pair<std::string, std::string>>& commands, double gestures[5])
+{
+    std::lock_guard<std::mutex> lock(gShared.mutex);
+    sets.swap(gShared.sets);
+    commands.swap(gShared.commands);
+    const double values[5] = {gShared.rotateX, gShared.rotateY, gShared.panX, gShared.panY, gShared.dolly};
+    std::memcpy(gestures, values, sizeof(values));
+    gShared.rotateX = gShared.rotateY = gShared.panX = gShared.panY = gShared.dolly = 0.0;
+}
+
+/// Commands that do not need a running scene. True if it was one.
+bool appCommand(App& app, const std::string& name, const std::string& argument)
+{
+    if (name == "scene")
+    {
+        app.wanted = argument;
+        app.model = "bake";
+        return true;
+    }
+    if (name == "rescan")
+    {
+        app.scenes = findScenes(app.filesDir);
+        return true;
+    }
+    return false;
+}
+
+/// Runs one scene until the panel asks for another one (or for this one again). Throws on errors.
+void runScene(App& app, const SceneEntry& scene)
+{
+    const std::string name = scene.scene + " (" + scene.variant + ")";
+    publish(baseState(app, "loading " + name, &scene, false) + "}", "loading " + name + ": scene data, acceleration structures, pipelines, NPU models");
+    const auto loadStart = std::chrono::steady_clock::now();
+    Runtime runtime(app.dev, scene.dir, app.model, app.options);
+    std::printf("scene %s loaded in %.1f s (model: %s)\n", name.c_str(), msSince(loadStart) / 1000.0, app.model.c_str());
+    // Settings given at launch (--set=name:value,...), for scripted runs.
+    {
+        std::istringstream pairs(app.arg("set", ""));
+        std::string pair;
+        while (std::getline(pairs, pair, ','))
+        {
+            const size_t colon = pair.find(':');
+            if (colon == std::string::npos || !runtime.set(pair.substr(0, colon), std::stod(pair.substr(colon + 1)))) fail("--set: no setting " + pair);
+        }
+    }
+    writeFile(app.filesDir + "/last_scene.txt", scene.key().data(), scene.key().size());
+    const std::string title = format("%s %ux%u, %s", name.c_str(), runtime.width(), runtime.height(),
+                                     app.options.networks == "npu" ? "MLPs on the NPU" : "MLPs on the CPU");
+    const CameraPose bakedCamera = runtime.camera();
+    float box[6] = {};
+    double extent = 1.0;
+    if (runtime.sceneBounds(box))
+        extent = std::sqrt((double)(box[3] - box[0]) * (box[3] - box[0]) + (double)(box[4] - box[1]) * (box[4] - box[1]) + (double)(box[5] - box[2]) * (box[5] - box[2]));
+
     std::unique_ptr<Display> display;
     bool displayBgra = false;   // the channel order the Display pass writes, the swapchain's
-    double msSum = 0.0, presentSum = 0.0;
+    double msSum = 0.0, presentSum = 0.0, shownMs = 0.0;
     uint32_t msCount = 0;
+    auto lastFrame = std::chrono::steady_clock::now();
+    bool firstFrame = true;
 
     for (;;)
     {
@@ -476,11 +692,11 @@ void renderLoop(const std::string& filesDir, NativeResourceManager* resources, c
             release = gShared.surfaceGone && gShared.windowClaimed;
             window = gShared.surfaceGone ? nullptr : gShared.window;
             foreground = gShared.foreground;
-            if (!presenter && window && foreground) gShared.windowClaimed = true;   // claimed before it is used
+            if (!app.presenter && window && foreground) gShared.windowClaimed = true;   // claimed before it is used
         }
         if (release)
         {
-            presenter.reset();
+            app.presenter.reset();
             std::lock_guard<std::mutex> lock(gShared.mutex);
             gShared.windowClaimed = false;
             gShared.changed.notify_all();
@@ -491,41 +707,248 @@ void renderLoop(const std::string& filesDir, NativeResourceManager* resources, c
         {
             // In the background, or no surface: neither the GPU nor the NPU is used.
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            lastFrame = std::chrono::steady_clock::now();
             continue;
         }
-        if (!presenter)
+        if (app.presenter && (app.presenter->width() != runtime.width() || app.presenter->height() != runtime.height())) app.presenter.reset();
+        if (!app.presenter) app.presenter = std::make_unique<Presenter>(app.dev, window, runtime.width(), runtime.height());
+        if (!display || app.presenter->bgra() != displayBgra)
         {
-            presenter = std::make_unique<Presenter>(dev, window, runtime.width(), runtime.height());
-            if (!display || presenter->bgra() != displayBgra)
-            {
-                display = std::make_unique<Display>(dev, options.shaderDir, runtime.outputImage(), presenter->bgra());
-                displayBgra = presenter->bgra();
-            }
+            display.reset();
+            display = std::make_unique<Display>(app.dev, app.options.shaderDir, runtime.outputImage(), app.presenter->bgra());
+            displayBgra = app.presenter->bgra();
         }
 
-        runtime.frame();
+        // What the panel asked for since the last frame.
+        std::vector<std::pair<std::string, double>> sets;
+        std::vector<std::pair<std::string, std::string>> commands;
+        double gestures[5];
+        takeInput(sets, commands, gestures);
+        for (const auto& [setting, value] : sets)
+            if (!runtime.set(setting, value)) std::printf("no setting named %s\n", setting.c_str());
+        bool leave = false;
+        for (const auto& [command, argument] : commands)
+        {
+            if (appCommand(app, command, argument))
+            {
+                leave = leave || command == "scene";
+            }
+            else if (command == "resetSchedule")
+            {
+                runtime.schedule().reset();
+                app.message = "training schedule reset";
+            }
+            else if (command == "resetCamera")
+            {
+                runtime.setCamera(bakedCamera);
+            }
+            else if (command == "saveModel")
+            {
+                if (runtime.trainSteps() == 0)
+                {
+                    app.message = "nothing trained yet: no model saved";
+                }
+                else
+                {
+                    makeDirectories(app.filesDir + "/models");
+                    runtime.saveCheckpoint(app.modelPath(scene));
+                    app.message = "model saved: models/" + scene.scene + "-" + scene.variant + ".ckpt";
+                }
+            }
+            else if (command == "loadModel")
+            {
+                if (fileExists(app.modelPath(scene)))
+                {
+                    app.wanted = scene.key();
+                    app.model = app.modelPath(scene);
+                    leave = true;
+                }
+                else
+                {
+                    app.message = "no saved model for this scene";
+                }
+            }
+            else if (command == "resetModel")
+            {
+                app.wanted = scene.key();
+                app.model = "bake";
+                leave = true;
+            }
+            else
+            {
+                std::printf("unknown command %s\n", command.c_str());
+            }
+        }
+        if (leave) return;
+        const bool freeCamera = !runtime.animated() || !runtime.settings().cameraAnimated;
+        if (freeCamera && (gestures[0] != 0.0 || gestures[1] != 0.0 || gestures[2] != 0.0 || gestures[3] != 0.0 || gestures[4] != 0.0))
+        {
+            CameraPose pose = runtime.camera();
+            moveCamera(pose, gestures[0], gestures[1], gestures[2], gestures[3], gestures[4], extent);
+            runtime.setCamera(pose);
+        }
+
+        // The animation follows the clock; a long gap (loading, the background) is not played back.
+        const auto now = std::chrono::steady_clock::now();
+        double seconds = firstFrame ? 0.0 : std::min(std::chrono::duration<double>(now - lastFrame).count(), 0.5);
+        if (app.fixedStep >= 0.0 && !firstFrame) seconds = app.fixedStep;
+        lastFrame = now;
+        firstFrame = false;
+
+        runtime.frame(seconds);
         const auto t0 = std::chrono::steady_clock::now();
-        if (!presenter->present(*display)) presenter.reset();   // made anew in the next iteration
+        if (!app.presenter->present(*display)) app.presenter.reset();   // made anew in the next iteration
         const double presentMs = msSince(t0);
+        if (runtime.settings().mode == RenderMode::Idle) std::this_thread::sleep_for(std::chrono::milliseconds(30));
 
         msSum += runtime.lastFrameMs();
         presentSum += presentMs;
         msCount++;
+        shownMs = shownMs == 0.0 ? runtime.lastFrameMs() + presentMs : shownMs * 0.8 + (runtime.lastFrameMs() + presentMs) * 0.2;
         const uint32_t frame = runtime.framesDone();
-        setStatus(format("%s | frame %u | %.0f ms + %.0f ms present%s", title.c_str(), frame, runtime.lastFrameMs(), presentMs,
-                         runtime.trains() ? " | training" : ""));
-        if (frame == 1 || frame % logEvery == 0)
+        static const char* const kModes[] = {"idle", "render", "training", "training + render"};
+        const RenderMode mode = runtime.settings().mode;
+        const bool training = runtime.trains() && (mode == RenderMode::Train || mode == RenderMode::OnlineTrain);
+        const std::string status = format("%s | frame %u | %.0f ms + %.0f ms present | %s", title.c_str(), frame, runtime.lastFrameMs(), presentMs,
+                                          training || mode == RenderMode::Idle || mode == RenderMode::Render ? kModes[(uint32_t)mode] : "render (cannot train)");
+
+        // The panel's state.
+        const TrainSchedule& schedule = runtime.schedule();
+        std::string json = baseState(app, status, &scene, true);
+        json += format(",\"frame\":%u,\"frameMs\":%.2f,\"presentMs\":%.2f,\"smoothMs\":%.2f,\"trainSteps\":%u,\"events\":%u", runtime.bakedFrame() + frame,
+                       runtime.lastFrameMs(), presentMs, shownMs, runtime.trainSteps(), runtime.lastEvents());
+        json += format(",\"caps\":{\"animated\":%s,\"postFilter\":%s,\"lights\":%s,\"renderPath\":%s,\"train\":%s,\"savedModel\":%s}",
+                       runtime.animated() ? "true" : "false", runtime.hasPostFilter() ? "true" : "false", runtime.hasLights() ? "true" : "false",
+                       runtime.hasRenderPath() ? "true" : "false", runtime.trains() ? "true" : "false", fileExists(app.modelPath(scene)) ? "true" : "false");
+        json += ",\"settings\":{";
+        bool firstSetting = true;
+        for (const std::string& setting : Runtime::settingNames())
         {
-            std::printf("frame %u: %.1f ms (%.1f ms on average over %u frames), present %.1f ms\n", frame, runtime.lastFrameMs(), msSum / msCount, msCount,
-                        presentSum / msCount);
-            for (const auto& [name, ms] : runtime.lastTimings()) std::printf("  %8.1f ms  %s\n", ms, name.c_str());
+            json += format("%s\"%s\":%.9g", firstSetting ? "" : ",", setting.c_str(), runtime.get(setting));
+            firstSetting = false;
+        }
+        json += format("},\"schedule\":{\"heat\":%.4f,\"holdLeft\":%u,\"learningRate\":%.6g,\"emaDecay\":%.6g}", schedule.heat, schedule.holdLeft,
+                       schedule.learningRate, schedule.emaDecay);
+        json += format(",\"anim\":{\"time\":%.3f,\"length\":%.3f,\"sample\":%u,\"samples\":%u}", runtime.animationTime(), runtime.animationLength(),
+                       runtime.trackSample(), runtime.trackSamples());
+        json += format(",\"info\":{\"width\":%u,\"height\":%u,\"batchSize\":%.0f,\"numRHS\":%.0f,\"specRays\":%.0f,\"networks\":%s,\"model\":%s}",
+                       runtime.width(), runtime.height(), runtime.bakeValue("lhs.size"), runtime.bakeValue("numRHS"), runtime.bakeValue("numSpecRays"),
+                       jsonString(app.options.networks == "npu" ? "NPU" : "CPU").c_str(), jsonString(app.model == "bake" ? "fresh" : "saved").c_str());
+        json += ",\"timings\":[";
+        bool firstTiming = true;
+        for (const auto& [what, ms] : runtime.lastTimings())
+        {
+            json += format("%s{\"name\":%s,\"ms\":%.2f}", firstTiming ? "" : ",", jsonString(what).c_str(), ms);
+            firstTiming = false;
+        }
+        json += "]}";
+        publish(json, status);
+
+        if (frame == 1 || frame % app.logEvery == 0)
+        {
+            std::printf("frame %u: %.1f ms (%.1f ms on average over %u frames), present %.1f ms; track sample %u, events 0x%x, heat %.3f\n", frame,
+                        runtime.lastFrameMs(), msSum / msCount, msCount, presentSum / msCount, runtime.trackSample(), runtime.lastEvents(), schedule.heat);
+            for (const auto& [what, ms] : runtime.lastTimings()) std::printf("  %8.1f ms  %s\n", ms, what.c_str());
             msSum = presentSum = 0.0;
             msCount = 0;
         }
-        if (frame == saveAt)
+        if (frame == app.saveAt)
         {
             runtime.printSummary();
-            saveResults(runtime, *display, displayBgra, filesDir + "/out", saveEverything);
+            saveResults(runtime, *display, displayBgra, app.filesDir + "/out", app.saveEverything);
+        }
+    }
+}
+
+void renderLoop(const std::string& filesDir, NativeResourceManager* resources, const std::string& launchArgs)
+{
+    std::printf("NCR app, launch arguments \"%s\"\n", launchArgs.c_str());
+    App app;
+    app.filesDir = filesDir;
+    app.args = parseArgs(launchArgs);
+    app.assets = filesDir + "/ncr";
+    extractAssets(resources, app.assets);
+
+    app.options.networks = app.arg("networks", "npu");
+    app.options.shaderDir = app.assets + "/shaders";
+    app.options.modelDir = app.assets + "/models";
+    app.options.trainTile = (uint32_t)std::stoul(app.arg("train-tile", "4096"));
+    app.options.noTrain = app.args.count("no-train") != 0;
+    app.options.copyTiles = app.args.count("copy-tiles") != 0;
+    app.options.cpuPrefixSum = app.args.count("cpu-prefix-sum") != 0;
+    app.options.lossInterval = (uint32_t)std::stoul(app.arg("loss", "0"));
+    app.logEvery = std::max(1u, (uint32_t)std::stoul(app.arg("log-every", "30")));
+    app.saveAt = (uint32_t)std::stoul(app.arg("save-at", "0"));
+    app.saveEverything = app.args.count("save-results") != 0;
+    app.fixedStep = std::stod(app.arg("dt", "-1"));
+    app.model = app.arg("model", "bake");
+
+    setStatus("creating the Vulkan device");
+    DeviceOptions deviceOptions;
+    deviceOptions.instanceExtensions = {VK_KHR_SURFACE_EXTENSION_NAME, VK_OHOS_SURFACE_EXTENSION_NAME};
+    deviceOptions.deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    app.dev.create(deviceOptions);
+    std::printf("Vulkan device created: %s\n", app.dev.name);
+
+    // The first scene: the one asked for, else the last run's, else the first there is.
+    app.scenes = findScenes(filesDir);
+    std::printf("%zu baked scenes on the phone\n", app.scenes.size());
+    if (app.args.count("scene"))
+    {
+        const std::string scene = app.arg("scene", "");
+        app.wanted = scene + "/" + app.arg("variant", "static");
+        if (!app.find(app.wanted) && !app.args.count("variant") && app.find(scene + "/anim")) app.wanted = scene + "/anim";
+    }
+    else
+    {
+        app.wanted = readTextFile(filesDir + "/last_scene.txt");
+        if (!app.find(app.wanted) && !app.scenes.empty()) app.wanted = app.scenes.front().key();
+    }
+
+    for (;;)
+    {
+        const SceneEntry* scene = app.find(app.wanted);
+        std::string status;
+        if (scene)
+        {
+            const SceneEntry current = *scene;
+            try
+            {
+                runScene(app, current);   // returns when the panel asks for a scene
+                vkDeviceWaitIdle(app.dev.device);
+                continue;
+            }
+            catch (const std::exception& e)
+            {
+                std::printf("FAIL %s: %s\n", current.key().c_str(), e.what());
+                status = "error in " + current.key() + ": " + e.what();
+                app.model = "bake";
+            }
+        }
+        else
+        {
+            status = app.scenes.empty() ? "no baked scene on the phone: bash ohos/app/tools/push_scenes.sh"
+                                        : "no scene " + app.wanted + " on the phone: pick one in the panel";
+        }
+        // No scene runs: wait for the panel to pick one.
+        app.wanted.clear();
+        while (app.wanted.empty())
+        {
+            publish(baseState(app, status, nullptr, false) + "}", status);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::vector<std::pair<std::string, double>> sets;
+            std::vector<std::pair<std::string, std::string>> commands;
+            double gestures[5];
+            takeInput(sets, commands, gestures);
+            for (const auto& [command, argument] : commands) appCommand(app, command, argument);
+            // The window may go away meanwhile.
+            std::lock_guard<std::mutex> lock(gShared.mutex);
+            if (gShared.surfaceGone && gShared.windowClaimed)
+            {
+                app.presenter.reset();
+                gShared.windowClaimed = false;
+                gShared.changed.notify_all();
+            }
         }
     }
 }
@@ -555,7 +978,8 @@ void* renderThread(void*)
     catch (const std::exception& e)
     {
         std::printf("FAIL %s\n", e.what());
-        setStatus(std::string("error: ") + e.what());
+        const std::string status = std::string("error: ") + e.what();
+        publish("{\"status\":" + jsonString(status) + "}", status);
     }
     // No swapchain is left on the window: the UI thread need not wait for one.
     std::lock_guard<std::mutex> lock(gShared.mutex);
@@ -612,7 +1036,63 @@ void onSurfaceDestroyed(OH_NativeXComponent*, void*)
     std::printf("surface destroyed\n");
 }
 
-void dispatchTouchEvent(OH_NativeXComponent*, void*) {}
+// Touches on the picture move the camera: one finger turns the view (the picture follows the
+// finger), two fingers move the camera sideways and up or down, a pinch moves it forward or back.
+// Touches that land on the panel never get here. The gestures are summed as fractions of the view
+// until the render thread takes them; it ignores them while the camera follows its path.
+struct Touches
+{
+    size_t count = 0;   // fingers down at the last event
+    float x = 0.0f, y = 0.0f, spread = 0.0f;
+};
+Touches gTouches;   // UI thread only
+
+void dispatchTouchEvent(OH_NativeXComponent* component, void* window)
+{
+    OH_NativeXComponent_TouchEvent touch;
+    if (OH_NativeXComponent_GetTouchEvent(component, window, &touch) != OH_NATIVEXCOMPONENT_RESULT_SUCCESS) return;
+    uint64_t width = 0, height = 0;
+    OH_NativeXComponent_GetXComponentSize(component, window, &width, &height);
+    if (width == 0 || height == 0) return;
+    // The fingers that are down after this event.
+    std::vector<std::pair<float, float>> points;
+    if (touch.type != OH_NATIVEXCOMPONENT_CANCEL)
+    {
+        for (uint32_t i = 0; i < touch.numPoints && i < OH_MAX_TOUCH_POINTS_NUMBER; i++)
+        {
+            const OH_NativeXComponent_TouchPoint& p = touch.touchPoints[i];
+            if (touch.type == OH_NATIVEXCOMPONENT_UP && p.id == touch.id) continue;
+            if (!p.isPressed && touch.type != OH_NATIVEXCOMPONENT_DOWN && p.id != touch.id) continue;
+            points.push_back({p.x, p.y});
+        }
+        if (points.empty() && touch.type != OH_NATIVEXCOMPONENT_UP) points.push_back({touch.x, touch.y});
+    }
+    float x = 0.0f, y = 0.0f, spread = 0.0f;
+    for (const auto& [px, py] : points)
+    {
+        x += px / (float)points.size();
+        y += py / (float)points.size();
+    }
+    if (points.size() >= 2) spread = std::hypot(points[0].first - points[1].first, points[0].second - points[1].second);
+    if (touch.type == OH_NATIVEXCOMPONENT_MOVE && points.size() == gTouches.count && !points.empty())
+    {
+        const double moveX = (x - gTouches.x) / (double)width, moveY = (y - gTouches.y) / (double)height;
+        std::lock_guard<std::mutex> lock(gShared.mutex);
+        if (points.size() == 1)
+        {
+            gShared.rotateX += moveX;
+            gShared.rotateY += moveY;
+        }
+        else
+        {
+            gShared.panX += moveX;
+            gShared.panY += moveY;
+            if (gTouches.spread > 1.0f && spread > 1.0f) gShared.dolly += std::log(spread / gTouches.spread);
+        }
+    }
+    // A finger put down or lifted starts the gesture anew from where the fingers are now.
+    gTouches = {points.size(), x, y, spread};
+}
 
 // ------------------------------------------------------------------------------------------------
 // NAPI.
@@ -664,16 +1144,42 @@ napi_value napiSetForeground(napi_env env, napi_callback_info info)
     return nullptr;
 }
 
-napi_value napiGetStatus(napi_env env, napi_callback_info)
+napi_value napiGetState(napi_env env, napi_callback_info)
 {
-    std::string status;
+    std::string state;
     {
         std::lock_guard<std::mutex> lock(gShared.mutex);
-        status = gShared.status;
+        state = gShared.state;
     }
     napi_value result = nullptr;
-    napi_create_string_utf8(env, status.c_str(), status.size(), &result);
+    napi_create_string_utf8(env, state.c_str(), state.size(), &result);
     return result;
+}
+
+napi_value napiSet(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value argv[2] = {nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc < 2) return nullptr;
+    double value = 0.0;
+    napi_get_value_double(env, argv[1], &value);
+    std::lock_guard<std::mutex> lock(gShared.mutex);
+    gShared.sets.push_back({napiString(env, argv[0]), value});
+    return nullptr;
+}
+
+napi_value napiCommand(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value argv[2] = {nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc < 1) return nullptr;
+    const std::string name = napiString(env, argv[0]);
+    const std::string argument = argc >= 2 ? napiString(env, argv[1]) : std::string();
+    std::lock_guard<std::mutex> lock(gShared.mutex);
+    gShared.commands.push_back({name, argument});
+    return nullptr;
 }
 
 napi_value moduleInit(napi_env env, napi_value exports)
@@ -681,7 +1187,9 @@ napi_value moduleInit(napi_env env, napi_value exports)
     napi_property_descriptor properties[] = {
         {"init", nullptr, napiInit, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setForeground", nullptr, napiSetForeground, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"getStatus", nullptr, napiGetStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getState", nullptr, napiGetState, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"set", nullptr, napiSet, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"command", nullptr, napiCommand, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties);
     // The library is loaded twice: by `import entry from 'libentry.so'` (no XComponent) and by the

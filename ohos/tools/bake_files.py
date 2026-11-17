@@ -5,7 +5,8 @@
 
 Prints them relative to the bake, one per line: the index (replay.txt), the SPIR-V of every pass, the
 buffers and textures the passes read, the uniform blocks, and the model at the start of the baked
-frame (before.ckpt, before_working.bin) when the bake has them. The reference results Falcor left at
+frame (before.ckpt, before_working.bin) when the bake has them, and the track of an animated
+scene (track.bin). The reference results Falcor left at
 the end of the frame (the buffers and images the passes write) are not among them: they stay on the
 PC. Used by ohos/replay/run_device.sh and the app's asset sync. Standard library only.
 """
@@ -27,7 +28,7 @@ def runtime_files(bake):
             files.append(f"data/texture{p[1]}.bin")
         elif p[0] == "element" and p[5] == "uniform":
             files.append(p[7])
-    for model in ("before.ckpt", "before_working.bin"):
+    for model in ("before.ckpt", "before_working.bin", "track.bin"):
         if os.path.exists(os.path.join(bake, model)):
             files.append(model)
     return sorted(set(files))

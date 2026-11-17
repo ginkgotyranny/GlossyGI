@@ -42,8 +42,11 @@ ohos/tools/train_check.py      one training step of the replayer against the ref
 ohos/tools/train_compare.py    N frames of training in the replayer against N frames of training in Falcor
 ohos/tools/display_check.py    the image the runtime shows (tone mapped, 8-bit) against Falcor's ToneMapper output
 ohos/tools/bake_files.py       the files of a bake the runtime reads (what goes to the phone)
-ohos/tools/bake_scene.py       one command from a scene to a packed bake: runs Falcor, then bake_pack.py
-ohos/app/                      the HarmonyOS app (HAP): the runtime behind an XComponent; its own README.md
+ohos/tools/bake_scene.py       one command from a scene to a packed bake: runs Falcor, then bake_pack.py; static and
+                               anim variants, an animated scene with its track; --all bakes every scene
+ohos/tools/track_check.py      an animated bake's track against the scene of a later frame of another Falcor run
+ohos/app/                      the HarmonyOS app (HAP): the runtime behind an XComponent, with the panel, scene
+                               choice and touch camera; its own README.md
 ohos/tools/raw_to_png.py       a dumped RGBA32F image as PNG
 ohos/tools/png_stats.py        mean / saturation / difference of PNG frames, standard library only
 ohos/_build/                   generated files (git-ignored)
@@ -451,8 +454,10 @@ a swapchain, and writes its log to the app's files folder. `ohos/app/README.md` 
 signing, the launch arguments and where things are on the phone.
 
 ```bash
-python ohos/tools/bake_scene.py bathroom     # Falcor bakes frame 0 in Online Train mode: ohos/_build/scenes/bathroom
-bash ohos/app/tools/deploy.sh --args "--save-at=60" --pull-out 75   # build, install, start; log, screenshot, frame 60's results
+python ohos/tools/bake_scene.py --all        # Falcor bakes frame 0 of every scene and variant: ohos/_build/scenes/<scene>/<variant>
+bash ohos/app/tools/deploy.sh                # build, install, start; log, screenshot
+python ohos/app/tools/push_scenes.py         # the bakes into the app's files folder on the phone
+bash ohos/app/tools/deploy.sh --no-build --args "--scene=bathroom --save-at=60" --pull-out 75   # frame 60's results
 ```
 
 Checked on the phone, 2026-11-13, bathroom baked with the project's defaults (fresh model, 32,768
@@ -468,6 +473,53 @@ training samples per frame, 640x360):
 
 The swapchain is released before the window when the XComponent's surface is destroyed; the system did
 not destroy the surface in these runs (Home keeps it), so that path has run only by reading the code.
+
+### Scenes, animation and the camera
+
+The phone runs the desktop's scenes: every folder of `media/scenes` with a scene file, as static
+(`scene-v4.pyscene`) and animated (`scene-animation.pyscene`) variant, the choice `run.bat` offers.
+Nine scenes, fourteen bakes of 250 to 430 MB, of which 80 to 260 MB go to the phone. The app has a
+panel like the desktop's (scene, variant, camera path, animation playback; the NeuralRadiosity panel;
+the training schedule; frame times, see `ohos/app/README.md`) and moves the camera by touch.
+
+**The track.** A bake is one recorded frame; an animated scene changes the scene's data from frame to
+frame. With `NCR_BAKE_TRACK_RATE` set (`bake_scene.py` sets 30 for an animated variant), Falcor plays
+one loop of the scene's animation after the baked frame, the clock stepping 1/30 s, and `BakeExport.cpp`
+records every frame as a sample: the bytes of the scene's uniform block, of every scene buffer the
+passes bind (except vertices and indices) and of every geometry instance's transform that differ from
+the baked frame in any sample, plus the scene bounds and the event classes the training schedule saw.
+`track.txt` lists the changed byte ranges, `track.bin` holds one record per sample (0.8 to 51 KB; 960
+samples for 32 s, 1,920 for dining-room's 64 s). A sample is what is bound at each shader path in that
+frame, not what one buffer object holds: Falcor swaps its current and previous matrix buffers every
+frame (`AnimationController::update`), so the object bound as `worldMatrices` in one frame is
+`prevWorldMatrices` in the next; recording by object made every second sample one frame stale.
+Rigid animation only: a scene with skinned meshes or vertex caches is refused (none of these has one).
+
+**The runtime** (`Runtime::frame(seconds)`) maps the animation time to a sample, writes its ranges into
+the scene's buffers, uniform block and instance transforms, rebuilds the top-level acceleration
+structure and gives the passes the sample's scene bounds (`bboxMin`, `bboxMax`): 0.7 to 1.2 ms on the
+phone. The events of the samples a frame passed over go to the training schedule, graded as in Falcor
+(`TrainSchedule::advance`). The camera follows the track, or, with the path off or in a static scene,
+is set by the caller (`Runtime::setCamera`): position, target and up become Falcor's `CameraData`
+(`matrixFromLookAt`, `perspective`, the jitter, `invViewProj`, `cameraU/V/W`; the lens as baked), the
+previous frame's matrices move to the `prev` members, and the schedule sees a camera event. The
+switches of the pass's panel are the uniforms Falcor sets for them (`Settings`; `Runtime::set` by name,
+`ncr_replay --set`, `--list-settings`); the render mode selects the training part, the render part, both
+or neither of the recorded frame; *Post Filter* off skips its two passes. Untouched, every setting is
+the baked value and the replay is the one before (a static bake replays to the byte as with the
+previous runtime).
+
+| Check, 2026-11-16 | Result |
+|---|---|
+| Every track's sample 333 (an odd frame) against a bake of frame 333 from a second Falcor run, nine scenes (`track_check.py`) | scene uniform block, every scene buffer (matrices, lights, light collection, materials), all instance transforms and the bounds equal; only uninitialised padding differs between the runs |
+| cornell-box anim, track sample 333 and 400, render mode with a 300-step checkpoint, PC replay against Falcor's frame (`replay_compare.py --reference`) | G-buffer identical (same triangle in 100% of the pixels, positions and normals equal to the bit); final image 77.3 / 77.5 dB |
+| The same frame with the camera set from outside (`--camera`, the pose of Falcor's frame): every camera matrix recomputed | same triangle in 100% of the pixels, positions within 2e-6; 77.3 dB |
+| Phone: the app (`--scene=cornell-box --variant=anim --dt=0.0333333 --save-at=30`) against `ncr_replay --networks npu --frames 30 --dt 0.0333333` | `display.bin`, `trained.ckpt`, `schedule.txt` identical to the byte |
+| Phone: switching through six scenes in the app | 2.9 to 3.6 s per load (0.2 s when the driver has the pipelines), resident memory 263 to 327 MB, back to 285 MB afterwards |
+
+`track_check.py` needs a bake of a later frame of the same scene with the clock at the track's rate
+(`NCR_SMOKE_FPS=30`, `NCR_BAKE_FRAME=<n>`); `replay_compare.py --reference <bake>` matches resources by
+the names they are bound with, since two bakes number them independently.
 
 ### What the phone's driver does differently
 
@@ -504,6 +556,8 @@ triangle, was suspected first and is fine (test `load16`).
    The prefix sums run on the GPU.
 4. The HarmonyOS app. Done: the runtime as a library with Falcor's training schedule and the display
    pass; the app (`ohos/app`) that runs it on the phone, trains on the NPU and shows the image, with
-   its build, signing and deployment scripts (above).
-   Next: a moving camera (touch); then, when frame rate matters again: sample counts for the phone, the
-   cluster-reuse cone trace, training across frames.
+   its build, signing and deployment scripts (above); the panel, every scene in its static and
+   animated variant, the animation played back from the bake's track, the camera on its path or under
+   the fingers.
+   Next, when frame rate matters again: sample counts for the phone, the cluster-reuse cone trace,
+   training across frames.
