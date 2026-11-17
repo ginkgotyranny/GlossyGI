@@ -59,7 +59,8 @@ Mogwai for this project, as far as the phone has it:
 
 | Section | Controls | Desktop counterpart |
 |---|---|---|
-| Scene | the scenes, static / anim, *Camera Animated*, *Play Animation*, *Time Scale*, the animation time, *Reset Camera*, *Rescan Scenes* | `run.bat`'s scene and variant, `--camera-anim`, Mogwai's time controls |
+| Scene | the scenes, static / anim, *Play Animation*, *Time Scale*, the animation time, *Rescan Scenes* | `run.bat`'s scene and variant, Mogwai's time controls |
+| Camera | *Camera Animated*, *Move Speed* (0.25x, 1x, 3x, 10x of the scene's camera speed), the camera's position and direction, *Reset Camera* | `--camera-anim`, Mogwai's camera controls (Ctrl and Shift change the speed by 0.25 and 10) |
 | NeuralRadiosity | *Render Mode* (Idle, Render, Train, Online Train), *Save / Load model state*, *Reset model*, *Use NEE*, *RHS Glossy Bounces*, *Diffuse Trains On Glossy*, *Mirror Albedo*, *Env Color Encoding*, *Post Filter*, *FXAA*, the batch sizes | the pass's panel (`NeuralRadiosity::renderUI`) |
 | Training Schedule | *Enable*, heat and hold, learning rate and EMA decay now, the events, every schedule setting, *Reset schedule* | the pass's "Training Schedule" group |
 | Frame Times | the frame and each recorded segment of it | Mogwai's profiler |
@@ -71,9 +72,21 @@ Mogwai for this project, as far as the phone has it:
   ConeTrace for more rays).
 - *Save model state* writes `<files>/models/<scene>-<variant>.ckpt`; *Load model state* restarts the
   scene from it, *Reset model* from the bake's fresh model.
-- The camera: while it does not follow its path (a static scene, or *Camera Animated* off), one finger
-  on the picture turns the view, two fingers move the camera sideways and up or down, a pinch moves it
-  forward or back. The touches are read in the XComponent's native callback (`dispatchTouchEvent`).
+- The camera, with two thumbs as on a gamepad, which Falcor's first-person camera also takes: the left
+  half of the screen is a stick (it appears where the finger goes down) that moves the camera along
+  the view and sideways, at the scene's camera speed at full stick (the desktop's WASD speed, 1 unit
+  per second in these scenes, times *Move Speed*); a drag on the right half turns the view, right and
+  down as the mouse does on the desktop, half a turn for a drag across the whole screen; ▲ and ▼ at
+  the bottom right move it up and down while held. Both thumbs work at once; a finger keeps its role
+  until it is lifted. Touching the picture turns the camera path off (on the desktop the camera's
+  *Animated* box has to be unticked before WASD moves it). With the panel shown the right half is the
+  strip left of it; hidden, the whole right half.
+- The touches are read by a layer of the page over the whole screen (`pages/Index.ets`), which passes
+  the stick, the up / down buttons and the turns to the native side (`cameraStick`, `cameraLift`,
+  `cameraLook`); the render thread moves the camera at the start of each frame by speed times the time
+  since the last frame (at most 0.5 s; Falcor clamps at 0.1 s, which at the phone's frame times would
+  slow the camera down). The panel and the buttons are children of the page's Stack of their own, so a
+  touch on them does not also reach the camera layer.
 - The animation follows the clock (*Time Scale* slows it down); `--dt` steps it by a fixed time per frame.
 
 ## Launch arguments

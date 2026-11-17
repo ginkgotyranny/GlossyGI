@@ -9,8 +9,15 @@ import entry from 'libentry.so';
 //
 // The native side publishes its state as JSON (entry.getState), polled here; a control calls
 // entry.set(name, value) or entry.command(name, argument), which the render thread applies at the
-// start of its next frame. Touches on the picture go to the native side, which moves the camera
-// (dispatchTouchEvent in app.cpp).
+// start of its next frame.
+//
+// The camera: a layer over the whole screen takes every touch no control takes. A finger put down on
+// the left half is a stick that moves the camera (as a gamepad's left stick does on the desktop), one
+// on the right half turns the view; the two work at the same time. The native side gets the stick,
+// the up / down buttons and the turns (entry.cameraStick, cameraLift, cameraLook) and moves the
+// camera at the start of each frame, while the camera does not follow its path; touching the picture
+// takes the camera off its path. The controls are children of the page's Stack of their own (none
+// spans the screen), so a touch on one does not also reach the layer below it.
 
 interface SceneInfo {
   name: string;
@@ -48,6 +55,7 @@ interface InfoState {
   specRays: number;
   networks: string;
   model: string;
+  cameraSpeed: number;   // units per second at full stick
 }
 
 interface Timing {
@@ -73,6 +81,7 @@ interface AppState {
   schedule?: ScheduleState;
   anim?: AnimState;
   info?: InfoState;
+  camera?: number[];   // position, target
   timings?: Timing[];
 }
 
@@ -89,6 +98,10 @@ class HeaderArgs {
 }
 
 const MODES: string[] = ['Idle', 'Render', 'Train', 'Online Train'];   // NeuralRadiosity::RenderMode
+const MOVE_SPEEDS: string[] = ['0.25x', '1x', '3x', '10x'];   // of the scene's camera speed (desktop: Ctrl, -, -, Shift)
+const PANEL_WIDTH: number = 330;
+const STICK: number = 64;   // radius of the stick, vp
+const KNOB: number = 26;
 const ENV_ENCODINGS: string[] = ['Linear', 'Signed log', 'Log'];
 const TEXT: string = '#FFFFFFFF';
 const DIM: string = '#FFB0B0B0';
@@ -101,11 +114,25 @@ struct Index {
   @State state: AppState = { status: 'starting' };
   @State showPanel: boolean = true;
   @State showScene: boolean = true;
+  @State showCamera: boolean = true;
   @State showPass: boolean = true;
   @State showSchedule: boolean = false;
   @State showStats: boolean = false;
   @State tick: number = 0;   // bumped to redraw at once after a control was used
+  // The stick as drawn: where its finger went down, and the knob.
+  @State stickShown: boolean = false;
+  @State stickX: number = 0;
+  @State stickY: number = 0;
+  @State knobX: number = 0;
+  @State knobY: number = 0;
   private timer: number = -1;
+  // The fingers on the camera layer: one moves (left half), one turns (right half); -1: none. A finger
+  // keeps its role until it is lifted, wherever it goes.
+  private layerWidth: number = 1;
+  private moveFinger: number = -1;
+  private lookFinger: number = -1;
+  private lookX: number = 0;
+  private lookY: number = 0;
   // What a control was just set to: shown until the native side reports it (or a moment has passed).
   private pending: Map<string, number> = new Map<string, number>();
   private pendingSince: Map<string, number> = new Map<string, number>();
@@ -172,6 +199,9 @@ struct Index {
     if (section === 'scene') {
       return this.showScene;
     }
+    if (section === 'camera') {
+      return this.showCamera;
+    }
     if (section === 'pass') {
       return this.showPass;
     }
@@ -184,6 +214,8 @@ struct Index {
   toggleSection(section: string): void {
     if (section === 'scene') {
       this.showScene = !this.showScene;
+    } else if (section === 'camera') {
+      this.showCamera = !this.showCamera;
     } else if (section === 'pass') {
       this.showPass = !this.showPass;
     } else if (section === 'schedule') {
@@ -191,6 +223,117 @@ struct Index {
     } else {
       this.showStats = !this.showStats;
     }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The camera.
+  freeCamera(): boolean {
+    return this.loaded() && (!this.cap('animated') || this.value('cameraAnimated') === 0);
+  }
+
+  // A touch on the picture takes the camera off its path: on the desktop the camera's "Animated" box
+  // has to be unticked before its controls move it.
+  takeCamera(): void {
+    if (this.loaded() && this.cap('animated') && this.value('cameraAnimated') !== 0) {
+      this.setValue('cameraAnimated', 0);
+    }
+  }
+
+  onCameraTouch(event: TouchEvent): void {
+    const changed: TouchObject[] = event.changedTouches.length > 0 ? event.changedTouches : event.touches;
+    if (event.type === TouchType.Down) {
+      for (let i = 0; i < changed.length; i++) {
+        this.fingerDown(changed[i]);
+      }
+    } else if (event.type === TouchType.Move) {
+      for (let i = 0; i < event.touches.length; i++) {
+        this.fingerMove(event.touches[i]);
+      }
+    } else if (event.type === TouchType.Up) {
+      for (let i = 0; i < changed.length; i++) {
+        this.fingerUp(changed[i].id);
+      }
+    } else {
+      // Cancelled: every finger is gone.
+      this.fingerUp(this.moveFinger);
+      this.fingerUp(this.lookFinger);
+    }
+  }
+
+  fingerDown(finger: TouchObject): void {
+    this.takeCamera();
+    if (finger.x < this.layerWidth / 2) {
+      if (this.moveFinger < 0) {
+        this.moveFinger = finger.id;
+        this.stickX = finger.x;
+        this.stickY = finger.y;
+        this.knobX = finger.x;
+        this.knobY = finger.y;
+        this.stickShown = true;
+        entry.cameraStick(0, 0);
+      }
+    } else if (this.lookFinger < 0) {
+      this.lookFinger = finger.id;
+      this.lookX = finger.x;
+      this.lookY = finger.y;
+    }
+  }
+
+  fingerMove(finger: TouchObject): void {
+    if (finger.id === this.moveFinger) {
+      // The stick: the offset from where the finger went down, at most its radius.
+      let dx: number = finger.x - this.stickX;
+      let dy: number = finger.y - this.stickY;
+      const length: number = Math.sqrt(dx * dx + dy * dy);
+      if (length > STICK) {
+        dx = dx * STICK / length;
+        dy = dy * STICK / length;
+      }
+      this.knobX = this.stickX + dx;
+      this.knobY = this.stickY + dy;
+      entry.cameraStick(dx / STICK, dy / STICK);
+    } else if (finger.id === this.lookFinger) {
+      // A swipe across the whole screen turns the view half way round; right turns right, down looks down.
+      const scale: number = Math.PI / Math.max(this.layerWidth, 1);
+      entry.cameraLook((finger.x - this.lookX) * scale, (finger.y - this.lookY) * scale);
+      this.lookX = finger.x;
+      this.lookY = finger.y;
+    }
+  }
+
+  fingerUp(id: number): void {
+    if (id < 0) {
+      return;
+    }
+    if (id === this.moveFinger) {
+      this.moveFinger = -1;
+      this.stickShown = false;
+      entry.cameraStick(0, 0);
+    } else if (id === this.lookFinger) {
+      this.lookFinger = -1;
+    }
+  }
+
+  cameraText(): string {
+    const c: number[] = this.state.camera ?? [];
+    if (c.length < 6) {
+      return '';
+    }
+    const dx: number = c[3] - c[0];
+    const dy: number = c[4] - c[1];
+    const dz: number = c[5] - c[2];
+    const yaw: number = Math.atan2(dx, -dz) * 180 / Math.PI;
+    const pitch: number = Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)) * 180 / Math.PI;
+    return 'Camera at (' + c[0].toFixed(2) + ', ' + c[1].toFixed(2) + ', ' + c[2].toFixed(2) + '), yaw ' + yaw.toFixed(0) + ', pitch ' +
+      pitch.toFixed(0);
+  }
+
+  speedText(): string {
+    const i: InfoState | undefined = this.state.info;
+    if (i === undefined) {
+      return '';
+    }
+    return 'Camera speed ' + i.cameraSpeed.toFixed(2) + ' units/s at full stick';
   }
 
   loaded(): boolean {
@@ -430,6 +573,25 @@ struct Index {
   }
 
   @Builder
+  LiftButton(label: string, direction: number) {
+    Button(label)
+      .fontSize(18)
+      .width(56)
+      .height(44)
+      .padding(0)
+      .margin(4)
+      .backgroundColor('#C0303030')
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) {
+          this.takeCamera();
+          entry.cameraLift(direction);
+        } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+          entry.cameraLift(0);
+        }
+      })
+  }
+
+  @Builder
   ScenePart() {
     Column() {
       Flex({ wrap: FlexWrap.Wrap }) {
@@ -468,16 +630,29 @@ struct Index {
       .width('100%')
       .height(38)
 
-      this.Check('Camera Animated', 'cameraAnimated', 'animated')
       this.Check('Play Animation', 'animate', 'animated')
       this.Stepper('Time Scale', 'timeScale', 0.25, 0, 4, 2)
       this.Line({ text: this.animText() })
       Flex({ wrap: FlexWrap.Wrap }) {
-        this.Action('Reset Camera', 'resetCamera', '')
         this.Action('Rescan Scenes', 'rescan', '')
       }
       .width('100%')
-      this.Line({ text: 'Drag: look around. Two fingers: move. Pinch: forward / back (camera not animated).' })
+    }
+    .width('100%')
+  }
+
+  @Builder
+  CameraPart() {
+    Column() {
+      this.Check('Camera Animated', 'cameraAnimated', 'animated')
+      this.Choice('Move Speed', 'moveSpeed', MOVE_SPEEDS)
+      this.Line({ text: this.speedText() })
+      this.Line({ text: this.cameraText() })
+      Flex({ wrap: FlexWrap.Wrap }) {
+        this.Action('Reset Camera', 'resetCamera', '')
+      }
+      .width('100%')
+      this.Line({ text: 'Left half of the screen: a stick that moves the camera. Right half: drag to turn the view. ▲ ▼ (bottom right, hold): up and down. Touching the picture stops the camera path.' })
     }
     .width('100%')
   }
@@ -566,6 +741,10 @@ struct Index {
           this.ScenePart()
         }
         if (this.loaded()) {
+          this.Header({ title: 'Camera', section: 'camera' })
+          if (this.showCamera) {
+            this.CameraPart()
+          }
           this.Header({ title: 'NeuralRadiosity', section: 'pass' })
           if (this.showPass) {
             this.PassPart()
@@ -590,15 +769,18 @@ struct Index {
       .justifyContent(FlexAlign.Start)
       .padding({ left: 12, right: 12, bottom: 16 })
     }
-    .width(330)
+    .width(PANEL_WIDTH)
     .height('100%')
     .scrollBar(BarState.Auto)
     .backgroundColor('#C0181818')
+    // At the right edge of the page's Stack.
+    .position({ x: '100%', y: 0 })
+    .markAnchor({ x: PANEL_WIDTH, y: 0 })
   }
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      // The renderer draws at the bake's resolution (16:9); the compositor scales it to this size.
+      // The picture: the renderer draws at the bake's resolution (16:9); the compositor scales it.
       Row() {
         XComponent({ id: 'ncr', type: XComponentType.SURFACE, libraryname: 'entry' })
           .height('100%')
@@ -608,46 +790,72 @@ struct Index {
       .height('100%')
       .justifyContent(FlexAlign.Center)
 
-      // Over the picture: the panel on the right, the status line and the panel's switch on the left.
-      Row() {
-        Column() {
-          Row() {
-            Button(this.showPanel ? 'Hide UI' : 'Show UI')
-              .fontSize(12)
-              .height(28)
-              .padding({ left: 10, right: 10 })
-              .backgroundColor('#C0303030')
-              .onClick(() => {
-                this.showPanel = !this.showPanel;
-              })
-            Text(this.frameText())
-              .fontSize(12)
-              .fontColor(Color.White)
-              .backgroundColor('#99000000')
-              .padding(4)
-              .margin({ left: 8 })
-          }
-          Text(this.state.status)
-            .fontSize(11)
-            .fontColor(Color.White)
-            .backgroundColor('#99000000')
-            .padding(4)
-            .margin({ top: 6 })
-            .constraintSize({ maxWidth: 420 })
-        }
-        .alignItems(HorizontalAlign.Start)
-        .margin(8)
-        .hitTestBehavior(HitTestMode.Transparent)
-
-        Blank()
-        if (this.showPanel) {
-          this.Panel()
+      // The camera layer: every touch that no control takes, and the stick while a finger holds it.
+      Stack() {
+        if (this.stickShown) {
+          Circle({ width: STICK * 2, height: STICK * 2 })
+            .fill('#30FFFFFF')
+            .stroke('#90FFFFFF')
+            .strokeWidth(2)
+            .position({ x: this.stickX - STICK, y: this.stickY - STICK })
+            .hitTestBehavior(HitTestMode.None)
+          Circle({ width: KNOB * 2, height: KNOB * 2 })
+            .fill('#B0FFFFFF')
+            .position({ x: this.knobX - KNOB, y: this.knobY - KNOB })
+            .hitTestBehavior(HitTestMode.None)
         }
       }
       .width('100%')
       .height('100%')
-      .alignItems(VerticalAlign.Top)
-      .hitTestBehavior(HitTestMode.Transparent)
+      .onAreaChange((before: Area, after: Area) => {
+        this.layerWidth = Math.max(1, Number(after.width));
+      })
+      .onTouch((event: TouchEvent) => {
+        this.onCameraTouch(event);
+      })
+
+      // Top left: the panel's switch, the frame rate, the status line.
+      Column() {
+        Row() {
+          Button(this.showPanel ? 'Hide UI' : 'Show UI')
+            .fontSize(12)
+            .height(28)
+            .padding({ left: 10, right: 10 })
+            .backgroundColor('#C0303030')
+            .onClick(() => {
+              this.showPanel = !this.showPanel;
+            })
+          Text(this.frameText())
+            .fontSize(12)
+            .fontColor(Color.White)
+            .backgroundColor('#99000000')
+            .padding(4)
+            .margin({ left: 8 })
+        }
+        Text(this.state.status)
+          .fontSize(11)
+          .fontColor(Color.White)
+          .backgroundColor('#99000000')
+          .padding(4)
+          .margin({ top: 6 })
+          .constraintSize({ maxWidth: 420 })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .margin(8)
+
+      // Right: the panel, and while the camera is free the up and down buttons at the bottom right of
+      // the picture (left of the panel while it is shown).
+      if (this.showPanel) {
+        this.Panel()
+      }
+      if (this.freeCamera()) {
+        Column() {
+          this.LiftButton('▲', 1)
+          this.LiftButton('▼', -1)
+        }
+        .position({ x: '100%', y: '100%' })
+        .markAnchor({ x: (this.showPanel ? PANEL_WIDTH : 0) + 72, y: 112 })
+      }
     }
     .width('100%')
     .height('100%')

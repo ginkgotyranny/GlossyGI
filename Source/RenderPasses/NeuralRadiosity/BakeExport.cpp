@@ -742,6 +742,8 @@ void NeuralRadiosity::bakeExport(RenderContext* pRenderContext)
         baker.record("value {}diffStride {}", prefix, pBatch->sharedIO ? pBatch->diffStride : 0);
     }
     baker.record("value renderMode {}", (int)mRenderMode);
+    // How fast the desktop's first-person camera moves (units per second), for the phone's own controls.
+    baker.record("value cameraSpeed {}", mpScene->getCameraSpeed());
     baker.record("value numSpecRays {}", mNumSpecRays);
     baker.record("value numRHS {}", mNumRHS);
     baker.record("value clusterReuse {}", useClusterReuse() ? 1 : 0);

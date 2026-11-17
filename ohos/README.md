@@ -500,7 +500,8 @@ the scene's buffers, uniform block and instance transforms, rebuilds the top-lev
 structure and gives the passes the sample's scene bounds (`bboxMin`, `bboxMax`): 0.7 to 1.2 ms on the
 phone. The events of the samples a frame passed over go to the training schedule, graded as in Falcor
 (`TrainSchedule::advance`). The camera follows the track, or, with the path off or in a static scene,
-is set by the caller (`Runtime::setCamera`): position, target and up become Falcor's `CameraData`
+is set by the caller (`Runtime::setCamera`; the app moves it with two thumbs as Falcor's first-person
+controller moves it with a gamepad, `ohos/app/README.md`): position, target and up become Falcor's `CameraData`
 (`matrixFromLookAt`, `perspective`, the jitter, `invViewProj`, `cameraU/V/W`; the lens as baked), the
 previous frame's matrices move to the `prev` members, and the schedule sees a camera event. The
 switches of the pass's panel are the uniforms Falcor sets for them (`Settings`; `Runtime::set` by name,

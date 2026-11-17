@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 OUT = os.path.join(os.path.dirname(os.path.dirname(HERE)), "_build")
@@ -32,11 +33,25 @@ def hdc(*args):
 
 
 def nodes():
-    """Every element on the screen: (type, text, (x1, y1, x2, y2), attributes)."""
-    hdc("shell", f"uitest dumpLayout -p /data/local/tmp/ncr_layout.json -b {BUNDLE}")
+    """Every element on the screen: (type, text, (x1, y1, x2, y2), attributes). A dump now and then
+    comes back without the app's elements (the window is busy): it is taken again."""
+    for attempt in range(4):
+        found = dump()
+        if any(text for kind, text, box, a in found):
+            return found
+        time.sleep(1.0)
+    return found
+
+
+def dump():
     os.makedirs(OUT, exist_ok=True)
     local = os.path.join(OUT, "ui_layout.json")
+    if os.path.exists(local):
+        os.remove(local)   # a failed transfer must not leave the last dump in its place
+    hdc("shell", f"rm -f /data/local/tmp/ncr_layout.json; uitest dumpLayout -p /data/local/tmp/ncr_layout.json -b {BUNDLE}")
     hdc("file", "recv", "/data/local/tmp/ncr_layout.json", local)
+    if not os.path.exists(local):
+        return []
     found = []
 
     def walk(node):

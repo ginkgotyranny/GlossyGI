@@ -2,9 +2,9 @@
 //
 //   ArkTS (EntryAbility, pages/Index)  ->  init(resourceManager, filesDir, args), setForeground,
 //                                          getState() (JSON for the panel), set(name, value),
-//                                          command(name, argument)
-//   XComponent                         ->  surface created / changed / destroyed, touches: the
-//                                          camera gestures (UI thread)
+//                                          command(name, argument), cameraStick / cameraLift /
+//                                          cameraLook (the page's touches on the picture)
+//   XComponent                         ->  surface created / changed / destroyed (UI thread)
 //   render thread                      ->  assets, Vulkan device, and per scene the NCR runtime
 //                                          (ohos/replay); per frame: runtime.frame(), the Display
 //                                          pass, a copy into the swapchain image, present
@@ -73,7 +73,9 @@ struct Shared
     // From the panel, taken by the render thread at the start of a frame.
     std::vector<std::pair<std::string, double>> sets;
     std::vector<std::pair<std::string, std::string>> commands;
-    double rotateX = 0.0, rotateY = 0.0, panX = 0.0, panY = 0.0, dolly = 0.0;   // camera gestures since the last frame
+    // The camera controls (pages/Index.ets): the stick (x right, y down, within the unit circle) and
+    // the lift (-1 down, 1 up) as they are now, the look as radians turned since the last frame.
+    double stickX = 0.0, stickY = 0.0, lift = 0.0, lookYaw = 0.0, lookPitch = 0.0;
 };
 Shared gShared;
 
@@ -480,11 +482,18 @@ private:
 };
 
 // ------------------------------------------------------------------------------------------------
-// The camera under the fingers. The gestures arrive as fractions of the view: one finger turns the
-// view (the picture follows the finger), two fingers move the camera sideways and up or down, a
-// pinch moves it forward or back. `extent` is the size of the scene, which sets how far a full
-// swipe goes.
-void moveCamera(CameraPose& pose, double rotateX, double rotateY, double panX, double panY, double dolly, double extent)
+// The camera under two thumbs, as Falcor's first-person controller moves it with a gamepad
+// (FirstPersonCameraControllerCommon::update): the left stick moves along the view direction (y) and
+// sideways (x) and the triggers up and down, `distance` (speed times time) for a full stick; the right
+// thumb turns the view, yaw right and pitch down for positive angles, as the mouse does on the desktop.
+// The stick gets the gamepad's dead zone and power curve.
+struct CameraMove
+{
+    double stickX = 0.0, stickY = 0.0, lift = 0.0, yaw = 0.0, pitch = 0.0;
+    bool any() const { return stickX != 0.0 || stickY != 0.0 || lift != 0.0 || yaw != 0.0 || pitch != 0.0; }
+};
+
+void flyCamera(CameraPose& pose, const CameraMove& move, double distance)
 {
     auto dot = [](const double* a, const double* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
     auto cross = [](const double* a, const double* b, double* out) {
@@ -504,33 +513,43 @@ void moveCamera(CameraPose& pose, double rotateX, double rotateY, double panX, d
         const double d = dot(axis, v), cosA = std::cos(angle), sinA = std::sin(angle);
         for (int i = 0; i < 3; i++) v[i] = v[i] * cosA + c[i] * sinA + axis[i] * d * (1.0 - cosA);
     };
-    double position[3], forward[3], up[3], right[3], above[3];
+    double position[3], forward[3], up[3], right[3];
     for (int i = 0; i < 3; i++)
     {
         position[i] = pose.position[i];
         forward[i] = (double)pose.target[i] - pose.position[i];
         up[i] = pose.up[i];
     }
-    const double distance = std::max(std::sqrt(dot(forward, forward)), 1e-6);
+    const double targetDistance = std::max(std::sqrt(dot(forward, forward)), 1e-6);
     normalize(forward);
     normalize(up);
-    const double kTurn = 1.2;   // radians for a swipe across the whole view
-    rotate(forward, up, rotateX * kTurn);
+    // Yaw about the up vector: a positive angle turns the view to the right.
+    rotate(forward, up, -move.yaw);
     cross(forward, up, right);
     normalize(right);
-    // Looking straight up or down is where the view would flip: stop 8 degrees short of it.
+    // Pitch about the right vector, down for a positive angle; looking straight up or down is where
+    // the view would flip: stop 8 degrees short of it.
     const double elevation = std::asin(std::clamp(dot(forward, up), -1.0, 1.0)), limit = 1.43;
-    const double pitch = std::clamp(elevation + rotateY * kTurn, -limit, limit) - elevation;
+    const double pitch = std::clamp(elevation - move.pitch, -limit, limit) - elevation;
     rotate(forward, right, pitch);
     normalize(forward);
     cross(forward, up, right);
     normalize(right);
-    cross(right, forward, above);
+
+    // The stick as Falcor treats a gamepad's: dead zone 0.1, then a power curve of 1.2 per axis.
+    double sx = move.stickX, sy = move.stickY;
+    const double length = std::sqrt(sx * sx + sy * sy), kDeadZone = 0.1, kPower = 1.2;
+    const double scale = length > 0.0 ? std::max(length - kDeadZone, 0.0) / (1.0 - kDeadZone) : 0.0;
+    sx *= scale;
+    sy *= scale;
+    sx = std::pow(std::fabs(sx), kPower) * (sx < 0.0 ? -1.0 : 1.0);
+    sy = std::pow(std::fabs(sy), kPower) * (sy < 0.0 ? -1.0 : 1.0);
     for (int i = 0; i < 3; i++)
     {
-        position[i] += (-right[i] * panX + above[i] * panY) * extent * 0.5 + forward[i] * dolly * extent * 0.5;
+        // Pushing the stick up (y negative, as the screen counts) moves forward.
+        position[i] += (forward[i] * -sy + right[i] * sx + up[i] * move.lift) * distance;
         pose.position[i] = (float)position[i];
-        pose.target[i] = (float)(position[i] + forward[i] * distance);
+        pose.target[i] = (float)(position[i] + forward[i] * targetDistance);
     }
 }
 
@@ -571,6 +590,7 @@ struct App
     std::string wanted;        // scene/variant to run next
     std::string model = "bake";
     std::string message;       // the outcome of the last command, for the panel
+    uint32_t moveSpeed = 1;    // index into kMoveSpeeds
 
     std::string arg(const char* name, const std::string& fallback) const
     {
@@ -620,16 +640,19 @@ void publish(const std::string& json, const std::string& status)
     gShared.status = status;
 }
 
-/// Takes what the panel asked for since the last frame.
-void takeInput(std::vector<std::pair<std::string, double>>& sets, std::vector<std::pair<std::string, std::string>>& commands, double gestures[5])
+/// Takes what the panel asked for since the last frame, and the camera controls: the stick and the
+/// lift as they are now, the look turned since the last call.
+void takeInput(std::vector<std::pair<std::string, double>>& sets, std::vector<std::pair<std::string, std::string>>& commands, CameraMove& move)
 {
     std::lock_guard<std::mutex> lock(gShared.mutex);
     sets.swap(gShared.sets);
     commands.swap(gShared.commands);
-    const double values[5] = {gShared.rotateX, gShared.rotateY, gShared.panX, gShared.panY, gShared.dolly};
-    std::memcpy(gestures, values, sizeof(values));
-    gShared.rotateX = gShared.rotateY = gShared.panX = gShared.panY = gShared.dolly = 0.0;
+    move = {gShared.stickX, gShared.stickY, gShared.lift, gShared.lookYaw, gShared.lookPitch};
+    gShared.lookYaw = gShared.lookPitch = 0.0;
 }
+
+/// The speed factors of the panel's "Move Speed" (Falcor: Ctrl 0.25, Shift 10).
+constexpr double kMoveSpeeds[] = {0.25, 1.0, 3.0, 10.0};
 
 /// Commands that do not need a running scene. True if it was one.
 bool appCommand(App& app, const std::string& name, const std::string& argument)
@@ -670,10 +693,9 @@ void runScene(App& app, const SceneEntry& scene)
     const std::string title = format("%s %ux%u, %s", name.c_str(), runtime.width(), runtime.height(),
                                      app.options.networks == "npu" ? "MLPs on the NPU" : "MLPs on the CPU");
     const CameraPose bakedCamera = runtime.camera();
-    float box[6] = {};
-    double extent = 1.0;
-    if (runtime.sceneBounds(box))
-        extent = std::sqrt((double)(box[3] - box[0]) * (box[3] - box[0]) + (double)(box[4] - box[1]) * (box[4] - box[1]) + (double)(box[5] - box[2]) * (box[5] - box[2]));
+    // The scene's camera speed on the desktop (Scene::getCameraSpeed; bakes before it was recorded
+    // have none: Falcor's default).
+    const double cameraSpeed = runtime.bakeValue("cameraSpeed", 1.0);
 
     std::unique_ptr<Display> display;
     bool displayBgra = false;   // the channel order the Display pass writes, the swapchain's
@@ -722,10 +744,15 @@ void runScene(App& app, const SceneEntry& scene)
         // What the panel asked for since the last frame.
         std::vector<std::pair<std::string, double>> sets;
         std::vector<std::pair<std::string, std::string>> commands;
-        double gestures[5];
-        takeInput(sets, commands, gestures);
+        CameraMove move;
+        takeInput(sets, commands, move);
         for (const auto& [setting, value] : sets)
-            if (!runtime.set(setting, value)) std::printf("no setting named %s\n", setting.c_str());
+        {
+            if (setting == "moveSpeed")
+                app.moveSpeed = std::min((uint32_t)std::max(value, 0.0), (uint32_t)(sizeof(kMoveSpeeds) / sizeof(kMoveSpeeds[0]) - 1));
+            else if (!runtime.set(setting, value))
+                std::printf("no setting named %s\n", setting.c_str());
+        }
         bool leave = false;
         for (const auto& [command, argument] : commands)
         {
@@ -780,20 +807,25 @@ void runScene(App& app, const SceneEntry& scene)
             }
         }
         if (leave) return;
-        const bool freeCamera = !runtime.animated() || !runtime.settings().cameraAnimated;
-        if (freeCamera && (gestures[0] != 0.0 || gestures[1] != 0.0 || gestures[2] != 0.0 || gestures[3] != 0.0 || gestures[4] != 0.0))
-        {
-            CameraPose pose = runtime.camera();
-            moveCamera(pose, gestures[0], gestures[1], gestures[2], gestures[3], gestures[4], extent);
-            runtime.setCamera(pose);
-        }
 
         // The animation follows the clock; a long gap (loading, the background) is not played back.
+        // Falcor clamps its camera's step to 0.1 s, which at the phone's frame times would slow the
+        // camera down: 0.5 s here.
         const auto now = std::chrono::steady_clock::now();
         double seconds = firstFrame ? 0.0 : std::min(std::chrono::duration<double>(now - lastFrame).count(), 0.5);
         if (app.fixedStep >= 0.0 && !firstFrame) seconds = app.fixedStep;
         lastFrame = now;
         firstFrame = false;
+
+        // The camera moves while it does not follow its path (the page turns the path off when the
+        // picture is touched).
+        const bool freeCamera = !runtime.animated() || !runtime.settings().cameraAnimated;
+        if (freeCamera && move.any())
+        {
+            CameraPose pose = runtime.camera();
+            flyCamera(pose, move, cameraSpeed * kMoveSpeeds[app.moveSpeed] * seconds);
+            runtime.setCamera(pose);
+        }
 
         runtime.frame(seconds);
         const auto t0 = std::chrono::steady_clock::now();
@@ -827,13 +859,19 @@ void runScene(App& app, const SceneEntry& scene)
             json += format("%s\"%s\":%.9g", firstSetting ? "" : ",", setting.c_str(), runtime.get(setting));
             firstSetting = false;
         }
+        json += format(",\"moveSpeed\":%u", app.moveSpeed);
         json += format("},\"schedule\":{\"heat\":%.4f,\"holdLeft\":%u,\"learningRate\":%.6g,\"emaDecay\":%.6g}", schedule.heat, schedule.holdLeft,
                        schedule.learningRate, schedule.emaDecay);
         json += format(",\"anim\":{\"time\":%.3f,\"length\":%.3f,\"sample\":%u,\"samples\":%u}", runtime.animationTime(), runtime.animationLength(),
                        runtime.trackSample(), runtime.trackSamples());
-        json += format(",\"info\":{\"width\":%u,\"height\":%u,\"batchSize\":%.0f,\"numRHS\":%.0f,\"specRays\":%.0f,\"networks\":%s,\"model\":%s}",
+        const CameraPose pose = runtime.camera();
+        json += format(",\"camera\":[%.3f,%.3f,%.3f,%.3f,%.3f,%.3f]", pose.position[0], pose.position[1], pose.position[2], pose.target[0], pose.target[1],
+                       pose.target[2]);
+        json += format(",\"info\":{\"width\":%u,\"height\":%u,\"batchSize\":%.0f,\"numRHS\":%.0f,\"specRays\":%.0f,\"networks\":%s,\"model\":%s,"
+                       "\"cameraSpeed\":%.3f}",
                        runtime.width(), runtime.height(), runtime.bakeValue("lhs.size"), runtime.bakeValue("numRHS"), runtime.bakeValue("numSpecRays"),
-                       jsonString(app.options.networks == "npu" ? "NPU" : "CPU").c_str(), jsonString(app.model == "bake" ? "fresh" : "saved").c_str());
+                       jsonString(app.options.networks == "npu" ? "NPU" : "CPU").c_str(), jsonString(app.model == "bake" ? "fresh" : "saved").c_str(),
+                       cameraSpeed * kMoveSpeeds[app.moveSpeed]);
         json += ",\"timings\":[";
         bool firstTiming = true;
         for (const auto& [what, ms] : runtime.lastTimings())
@@ -938,8 +976,8 @@ void renderLoop(const std::string& filesDir, NativeResourceManager* resources, c
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             std::vector<std::pair<std::string, double>> sets;
             std::vector<std::pair<std::string, std::string>> commands;
-            double gestures[5];
-            takeInput(sets, commands, gestures);
+            CameraMove move;
+            takeInput(sets, commands, move);
             for (const auto& [command, argument] : commands) appCommand(app, command, argument);
             // The window may go away meanwhile.
             std::lock_guard<std::mutex> lock(gShared.mutex);
@@ -1036,63 +1074,8 @@ void onSurfaceDestroyed(OH_NativeXComponent*, void*)
     std::printf("surface destroyed\n");
 }
 
-// Touches on the picture move the camera: one finger turns the view (the picture follows the
-// finger), two fingers move the camera sideways and up or down, a pinch moves it forward or back.
-// Touches that land on the panel never get here. The gestures are summed as fractions of the view
-// until the render thread takes them; it ignores them while the camera follows its path.
-struct Touches
-{
-    size_t count = 0;   // fingers down at the last event
-    float x = 0.0f, y = 0.0f, spread = 0.0f;
-};
-Touches gTouches;   // UI thread only
-
-void dispatchTouchEvent(OH_NativeXComponent* component, void* window)
-{
-    OH_NativeXComponent_TouchEvent touch;
-    if (OH_NativeXComponent_GetTouchEvent(component, window, &touch) != OH_NATIVEXCOMPONENT_RESULT_SUCCESS) return;
-    uint64_t width = 0, height = 0;
-    OH_NativeXComponent_GetXComponentSize(component, window, &width, &height);
-    if (width == 0 || height == 0) return;
-    // The fingers that are down after this event.
-    std::vector<std::pair<float, float>> points;
-    if (touch.type != OH_NATIVEXCOMPONENT_CANCEL)
-    {
-        for (uint32_t i = 0; i < touch.numPoints && i < OH_MAX_TOUCH_POINTS_NUMBER; i++)
-        {
-            const OH_NativeXComponent_TouchPoint& p = touch.touchPoints[i];
-            if (touch.type == OH_NATIVEXCOMPONENT_UP && p.id == touch.id) continue;
-            if (!p.isPressed && touch.type != OH_NATIVEXCOMPONENT_DOWN && p.id != touch.id) continue;
-            points.push_back({p.x, p.y});
-        }
-        if (points.empty() && touch.type != OH_NATIVEXCOMPONENT_UP) points.push_back({touch.x, touch.y});
-    }
-    float x = 0.0f, y = 0.0f, spread = 0.0f;
-    for (const auto& [px, py] : points)
-    {
-        x += px / (float)points.size();
-        y += py / (float)points.size();
-    }
-    if (points.size() >= 2) spread = std::hypot(points[0].first - points[1].first, points[0].second - points[1].second);
-    if (touch.type == OH_NATIVEXCOMPONENT_MOVE && points.size() == gTouches.count && !points.empty())
-    {
-        const double moveX = (x - gTouches.x) / (double)width, moveY = (y - gTouches.y) / (double)height;
-        std::lock_guard<std::mutex> lock(gShared.mutex);
-        if (points.size() == 1)
-        {
-            gShared.rotateX += moveX;
-            gShared.rotateY += moveY;
-        }
-        else
-        {
-            gShared.panX += moveX;
-            gShared.panY += moveY;
-            if (gTouches.spread > 1.0f && spread > 1.0f) gShared.dolly += std::log(spread / gTouches.spread);
-        }
-    }
-    // A finger put down or lifted starts the gesture anew from where the fingers are now.
-    gTouches = {points.size(), x, y, spread};
-}
+// The page reads the touches (a layer over the picture, pages/Index.ets): the XComponent gets none.
+void dispatchTouchEvent(OH_NativeXComponent*, void*) {}
 
 // ------------------------------------------------------------------------------------------------
 // NAPI.
@@ -1182,6 +1165,48 @@ napi_value napiCommand(napi_env env, napi_callback_info info)
     return nullptr;
 }
 
+/// Up to `count` numbers from a NAPI call; missing ones are 0.
+void napiNumbers(napi_env env, napi_callback_info info, double* values, size_t count)
+{
+    size_t argc = 3;
+    napi_value argv[3] = {nullptr, nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    for (size_t i = 0; i < count; i++)
+    {
+        values[i] = 0.0;
+        if (i < argc) napi_get_value_double(env, argv[i], &values[i]);
+    }
+}
+
+napi_value napiCameraStick(napi_env env, napi_callback_info info)
+{
+    double v[2];
+    napiNumbers(env, info, v, 2);
+    std::lock_guard<std::mutex> lock(gShared.mutex);
+    gShared.stickX = std::clamp(v[0], -1.0, 1.0);
+    gShared.stickY = std::clamp(v[1], -1.0, 1.0);
+    return nullptr;
+}
+
+napi_value napiCameraLift(napi_env env, napi_callback_info info)
+{
+    double v[1];
+    napiNumbers(env, info, v, 1);
+    std::lock_guard<std::mutex> lock(gShared.mutex);
+    gShared.lift = std::clamp(v[0], -1.0, 1.0);
+    return nullptr;
+}
+
+napi_value napiCameraLook(napi_env env, napi_callback_info info)
+{
+    double v[2];
+    napiNumbers(env, info, v, 2);
+    std::lock_guard<std::mutex> lock(gShared.mutex);
+    gShared.lookYaw += v[0];
+    gShared.lookPitch += v[1];
+    return nullptr;
+}
+
 napi_value moduleInit(napi_env env, napi_value exports)
 {
     napi_property_descriptor properties[] = {
@@ -1190,6 +1215,9 @@ napi_value moduleInit(napi_env env, napi_value exports)
         {"getState", nullptr, napiGetState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"set", nullptr, napiSet, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"command", nullptr, napiCommand, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"cameraStick", nullptr, napiCameraStick, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"cameraLift", nullptr, napiCameraLift, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"cameraLook", nullptr, napiCameraLook, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties);
     // The library is loaded twice: by `import entry from 'libentry.so'` (no XComponent) and by the
