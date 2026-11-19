@@ -91,9 +91,24 @@ constexpr float kSquarePlusK = 10.0f;
 // NPU tiles: a batch goes to the NPU as tiles of kTile samples, channel-planar, shape (1, C, 256, 256).
 constexpr uint32_t kTile = 65536;
 constexpr uint32_t kOutputChannels = 16;   // the MLPs' padded output width; the first kOutputDim are used
+// The MLPs: hidden layers of kNeurons. How many layers each has is not fixed here: NCRConfig.h sets
+// it on the desktop (NCR_DIFF_N_HIDDEN_LAYERS, NCR_SPEC_N_HIDDEN_LAYERS), and the runtime reads it
+// off the size of the weight blocks in the checkpoint it starts from (mlpHiddenLayers).
+constexpr uint32_t kNeurons = 64, kMaxHiddenLayers = 8;
 }  // namespace cfg
 
 inline uint32_t padUp(uint32_t x, uint32_t align) { return (x + align - 1) & ~(align - 1); }
+
+/// The number of hidden layers of a bias-free MLP with `elements` weights: (kNeurons, inputDim),
+/// (kNeurons, kNeurons)..., (kOutputChannels, kNeurons). 0 when no such MLP has that many weights.
+inline uint32_t mlpHiddenLayers(uint32_t inputDim, size_t elements)
+{
+    const size_t ends = (size_t)cfg::kNeurons * inputDim + (size_t)cfg::kOutputChannels * cfg::kNeurons;
+    const size_t square = (size_t)cfg::kNeurons * cfg::kNeurons;
+    if (elements < ends || (elements - ends) % square != 0) return 0;
+    const size_t layers = (elements - ends) / square + 1;
+    return layers <= cfg::kMaxHiddenLayers ? (uint32_t)layers : 0;
+}
 
 struct GridLevel { uint32_t res, size, offset; };
 
@@ -179,10 +194,14 @@ struct Checkpoint
     // before_working.bin), which is what a fresh model has.
     std::vector<uint16_t> primGridWorking, clsGridWorking, diffWorking, specWorking;
 
-    static Header expectedHeader()
+    /// Element counts of the four blocks, as loaded. The grids are fixed (cfg); the MLPs have the
+    /// number of hidden layers the checkpoint was made with.
+    uint32_t counts[4] = {};
+
+    /// The header of a checkpoint (NRCK v2) of the loaded configuration.
+    Header header() const
     {
-        Header h = {{'N', 'R', 'C', 'K'}, 2, {gridEntries(cfg::kPrimBaseRes, cfg::kPrimLevels) * cfg::kPrimFeatures,
-                                              gridEntries(cfg::kClsBaseRes, cfg::kClsLevels) * cfg::kClsFeatures, 11264, 17408}};
+        Header h = {{'N', 'R', 'C', 'K'}, 2, {counts[0], counts[1], counts[2], counts[3]}};
         return h;
     }
 
@@ -191,8 +210,12 @@ struct Checkpoint
         std::ifstream f(path, std::ios::binary);
         Header header = {};
         f.read(reinterpret_cast<char*>(&header), sizeof(header));
-        const Header expected = expectedHeader();
-        if (!f || std::memcmp(&header, &expected, sizeof(header)) != 0) fail(path + " is not an NRCK v2 checkpoint of this network configuration");
+        const bool known = f && std::memcmp(header.magic, "NRCK", 4) == 0 && header.version == 2 &&
+                           header.counts[0] == gridEntries(cfg::kPrimBaseRes, cfg::kPrimLevels) * cfg::kPrimFeatures &&
+                           header.counts[1] == gridEntries(cfg::kClsBaseRes, cfg::kClsLevels) * cfg::kClsFeatures &&
+                           mlpHiddenLayers(cfg::kDiffInputDim, header.counts[2]) != 0 && mlpHiddenLayers(cfg::kSpecInputDim, header.counts[3]) != 0;
+        if (!known) fail(path + " is not an NRCK v2 checkpoint of a network configuration this runtime knows");
+        std::memcpy(counts, header.counts, sizeof(counts));
         std::vector<float>* masters[4] = {&primGridMaster, &clsGridMaster, &diffMaster, &specMaster};
         std::vector<uint16_t>* emas[4] = {&primGrid, &clsGrid, &diffEma, &specEma};
         for (int i = 0; i < 4; i++)
@@ -221,10 +244,10 @@ struct Checkpoint
         std::ifstream f(path, std::ios::binary);
         Header header = {};
         f.read(reinterpret_cast<char*>(&header), sizeof(header));
-        Header expected = expectedHeader();
+        Header expected = this->header();
         std::memcpy(expected.magic, "NRWK", 4);
         expected.version = 1;
-        if (!f || std::memcmp(&header, &expected, sizeof(header)) != 0) fail(path + " is not an NRWK file of this network configuration");
+        if (!f || std::memcmp(&header, &expected, sizeof(header)) != 0) fail(path + " is not an NRWK file of the checkpoint's network configuration");
         std::vector<uint16_t>* working[4] = {&primGridWorking, &clsGridWorking, &diffWorking, &specWorking};
         for (int i = 0; i < 4; i++)
         {
@@ -234,10 +257,10 @@ struct Checkpoint
         if (!f) fail(path + " is truncated");
     }
 
-    /// Writes a checkpoint Falcor loads (loadModelPath). Blocks in the order of the file.
-    static void save(const std::string& path, const float* const masters[4], const uint16_t* const emas[4])
+    /// Writes a checkpoint Falcor loads (loadModelPath), with this one's element counts. Blocks in the order of the file.
+    void save(const std::string& path, const float* const masters[4], const uint16_t* const emas[4]) const
     {
-        const Header header = expectedHeader();
+        const Header header = this->header();
         std::ofstream f(path, std::ios::binary);
         f.write(reinterpret_cast<const char*>(&header), sizeof(header));
         for (int i = 0; i < 4; i++) f.write(reinterpret_cast<const char*>(masters[i]), (std::streamsize)header.counts[i] * 4);
@@ -259,7 +282,7 @@ inline float emaDebiasOld(float decay, uint32_t step) { return 1.0f - std::pow(d
 inline float emaDebiasNew(float decay, uint32_t step) { return 1.0f / (1.0f - std::pow(decay, (float)step)); }
 }  // namespace adam
 
-/// One of the two MLPs: its weights and its optimizer, which runs on the CPU (28,672 weights in all).
+/// One of the two MLPs: its weights and its optimizer, which runs on the CPU (some 25,000 weights in all).
 /// `training` is the fp16 copy of the float32 masters the training graph computes with; `inference`
 /// is the fp16 EMA of those copies, which the inference graph computes with.
 struct Mlp
@@ -275,7 +298,8 @@ struct Mlp
     {
         specular = spec;
         inputDim = spec ? cfg::kSpecInputDim : cfg::kDiffInputDim;
-        hiddenLayers = spec ? 4 : 3;
+        hiddenLayers = mlpHiddenLayers(inputDim, masters.size());
+        if (hiddenLayers == 0) fail(format("%zu weights are not an MLP this runtime knows", masters.size()));
         master = masters;
         inference = ema;
         training = working;
@@ -288,9 +312,9 @@ struct Mlp
     /// Elements of every weight matrix, in the order of the parameter block: (64, in), (64, 64)..., (16, 64).
     std::vector<size_t> layerSizes() const
     {
-        std::vector<size_t> sizes = {(size_t)64 * inputDim};
-        for (uint32_t i = 1; i < hiddenLayers; i++) sizes.push_back(64 * 64);
-        sizes.push_back((size_t)cfg::kOutputChannels * 64);
+        std::vector<size_t> sizes = {(size_t)cfg::kNeurons * inputDim};
+        for (uint32_t i = 1; i < hiddenLayers; i++) sizes.push_back((size_t)cfg::kNeurons * cfg::kNeurons);
+        sizes.push_back((size_t)cfg::kOutputChannels * cfg::kNeurons);
         return sizes;
     }
 
@@ -367,7 +391,7 @@ public:
     {
         const uint32_t channels = specular ? cfg::kSpecInputDim : cfg::kDiffInputDim;
         const float* weights = (specular ? mSpec : mDiff).inferenceFloat.data();
-        const uint32_t hidden = specular ? 4 : 3;
+        const uint32_t hidden = (specular ? mSpec : mDiff).hiddenLayers;
         for (uint32_t t = 0; t < tiles; t++)
         {
             // Local copies: the tiles live in memory shared with the GPU, slow to walk element by element.
@@ -396,7 +420,7 @@ public:
             {
                 uint16_t* row = rows + (size_t)n * cfg::kDiffInputDim;
                 encodePrimary(row, cfg::kDiffPos);
-                forward(mDiff.inferenceFloat.data(), cfg::kDiffInputDim, 3, row, out + (size_t)n * cfg::kOutputDim);
+                forward(mDiff.inferenceFloat.data(), cfg::kDiffInputDim, mDiff.hiddenLayers, row, out + (size_t)n * cfg::kOutputDim);
             }
         });
     }
@@ -410,7 +434,7 @@ public:
                 uint16_t* row = rows + (size_t)n * cfg::kSpecInputDim;
                 encodePrimary(row, cfg::kSpecPos);
                 encodeClusters(row);
-                forward(mSpec.inferenceFloat.data(), cfg::kSpecInputDim, 4, row, out + (size_t)n * cfg::kOutputDim);
+                forward(mSpec.inferenceFloat.data(), cfg::kSpecInputDim, mSpec.hiddenLayers, row, out + (size_t)n * cfg::kOutputDim);
             }
         });
     }
@@ -438,7 +462,7 @@ public:
             std::vector<std::vector<double>> sums(threads, std::vector<double>(paramCount + 1, 0.0));
             parallel(tile, [&](uint32_t begin, uint32_t end, uint32_t thread) {
                 double* sum = sums[thread].data();
-                float a[5][64], d[64], e[64];
+                float a[cfg::kMaxHiddenLayers + 1][64], d[64], e[64];
                 for (uint32_t n = begin; n < end; n++)
                 {
                     if (halfToFloat(want[(size_t)(cfg::kOutputChannels - 1) * tile + n]) == 0.0f) continue;   // a slot beyond the batch

@@ -11,6 +11,12 @@
 // follows the track or is set by the caller; and the switches of the pass's panel (Settings) set the
 // same uniforms the pass sets. The training schedule sees the same event classes as in Falcor.
 //
+// A bake of the cluster-reuse render path (the desktop's enableTemporalSpecReuse: ClusterReproject,
+// ConeTraceScreen and ClusterSpatialReuse instead of the per-frame K-Means cone trace) has state that
+// lives across frames, which the runtime keeps as the pass does: the per-pixel cluster history and
+// lock state in ping-pong pairs, swapped every frame, the previous frame's G-buffer and specular mask
+// (copied at the end of the render part) and the previous frame's camera matrices.
+//
 // Shared by the command-line replayer (ncr_replay.cpp, Windows and the phone's shell) and the
 // HarmonyOS app (ohos/app). Errors are thrown as std::runtime_error.
 #pragma once
@@ -122,6 +128,11 @@ public:
     bool hasPostFilter() const;   // the baked frame ran the post filter, so it can be switched
     bool hasLights() const;       // the scene has lights to sample, so NEE can be switched
     bool hasRenderPath() const;   // the baked frame rendered (it was not baked in Train mode)
+    /// The render path is the cluster-reuse one: the specular cone clusters come from a per-pixel
+    /// history that is carried from frame to frame.
+    bool clusterReuse() const;
+    /// The pass's "Clear History": the next frame starts the cluster history empty.
+    void clearHistory();
     /// A setting or a training-schedule setting by name, as a number (booleans 0 or 1): what the
     /// command line and the app's panel go through. settingNames() lists them; set() is false for an
     /// unknown name, get() fails for one.

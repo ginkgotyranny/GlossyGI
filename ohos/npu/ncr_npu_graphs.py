@@ -18,6 +18,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+import ncr_config
+
 K_ACT = 10.0          # tiny-cuda-nn SquarePlus scale
 LOSS_EPS = 0.01       # RelativeL2Luminance: luminance^2 + 0.01
 LOSS_SCALE = 128.0    # tcnn::default_loss_scale<__half>()
@@ -46,9 +48,10 @@ class NetSpec:
         return sum(o * i for o, i in self.layer_shapes())
 
 
-# NCRConfig.h: primary grid 6 levels x 2 features; cluster grid 4 clusters x 4 features.
-DIFF = NetSpec("diff", input_dim=32, width=64, hidden_layers=3, encoding_dim=12)
-SPEC = NetSpec("spec", input_dim=64, width=64, hidden_layers=4, encoding_dim=12 + 16)
+# NCRConfig.h: primary grid 6 levels x 2 features; cluster grid 4 clusters x 4 features. The width
+# and the number of hidden layers are read from the header (ncr_config.py).
+DIFF = NetSpec("diff", input_dim=32, width=ncr_config.DIFF_NEURONS, hidden_layers=ncr_config.DIFF_HIDDEN_LAYERS, encoding_dim=12)
+SPEC = NetSpec("spec", input_dim=64, width=ncr_config.SPEC_NEURONS, hidden_layers=ncr_config.SPEC_HIDDEN_LAYERS, encoding_dim=12 + 16)
 NETS = {"diff": DIFF, "spec": SPEC}
 
 

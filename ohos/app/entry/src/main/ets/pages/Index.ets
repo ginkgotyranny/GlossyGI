@@ -31,6 +31,7 @@ interface Caps {
   renderPath: boolean;
   train: boolean;
   savedModel: boolean;
+  clusterReuse: boolean;
 }
 
 interface ScheduleState {
@@ -363,6 +364,9 @@ struct Index {
     if (name === 'train') {
       return caps.train;
     }
+    if (name === 'clusterReuse') {
+      return caps.clusterReuse;
+    }
     return true;
   }
 
@@ -678,6 +682,11 @@ struct Index {
       this.Choice('Env Color Encoding', 'envColorEncoding', ENV_ENCODINGS)
       this.Check('Post Filter', 'postFilter', 'postFilter')
       this.Check('FXAA', 'fxaa', 'fxaa')
+      this.Line({ text: 'Cluster reuse: ' + (this.cap('clusterReuse') ? 'on (spatiotemporal, as baked)' : 'off (K-Means every frame, as baked)') })
+      Flex({ wrap: FlexWrap.Wrap }) {
+        this.Action('Clear History', 'clearHistory', 'clusterReuse')
+      }
+      .width('100%')
     }
     .width('100%')
   }

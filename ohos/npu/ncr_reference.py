@@ -13,6 +13,8 @@ import struct
 
 import numpy as np
 
+import ncr_config
+
 # ---------------------------------------------------------------------------------------------
 # NCRConfig.h
 LOG2_HASHMAP_SIZE = 18
@@ -43,8 +45,16 @@ SPEC_CLS_POS = SPEC_POS + 3 * 5 + 1             # 44: after pos, dir, normal, al
 SPEC_CLS_SCALE = SPEC_CLS_POS + NUM_CLUSTERS * 3  # 56
 SPEC_CLS_WEIGHT = SPEC_CLS_SCALE + NUM_CLUSTERS   # 60
 
-DIFF_LAYERS = [(64, 32), (64, 64), (64, 64), (16, 64)]             # (Cout, Cin), tiny-cuda-nn order
-SPEC_LAYERS = [(64, 64), (64, 64), (64, 64), (64, 64), (16, 64)]
+
+
+def mlp_layers(input_dim, width, hidden_layers):
+    """(Cout, Cin) of every weight matrix of a FullyFusedMLP, in tiny-cuda-nn's order."""
+    return [(width, input_dim)] + [(width, width)] * (hidden_layers - 1) + [(OUTPUT_PAD, width)]
+
+
+# Width and number of hidden layers come from NCRConfig.h (ncr_config.py).
+DIFF_LAYERS = mlp_layers(DIFF_INPUT_DIM, ncr_config.DIFF_NEURONS, ncr_config.DIFF_HIDDEN_LAYERS)
+SPEC_LAYERS = mlp_layers(SPEC_INPUT_DIM, ncr_config.SPEC_NEURONS, ncr_config.SPEC_HIDDEN_LAYERS)
 
 
 # ---------------------------------------------------------------------------------------------

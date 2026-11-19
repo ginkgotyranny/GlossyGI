@@ -11,9 +11,18 @@ reuses NCR's algorithm, its shader logic and its checkpoints.
 
 | Part | Parameters | Runs on | Why |
 |---|---|---|---|
-| DiffNet, SpecNet (inference; forward + backward for training) | 11,264 + 17,408 | NPU, through NNRt on the HiAI Foundation device | bias-free MLPs of 1x1 convolutions, all channel counts multiples of 16 |
+| DiffNet, SpecNet (inference; forward + backward for training) | 11,264 + 13,312 | NPU, through NNRt on the HiAI Foundation device | bias-free MLPs of 1x1 convolutions, all channel counts multiples of 16 |
 | Primary and cluster hash grids (lookup, gradient scatter, Adam + EMA) | 7,051,018 | GPU compute | gather / scatter by hashed index, not a matrix operation |
 | Adam + EMA of the MLP weights | | CPU, float32 | tiny, and keeps tiny-cuda-nn's float32 master weights |
+
+The MLP sizes are those of `NCRConfig.h`, the desktop's one source: since 2026-11-18 both networks
+have three hidden layers of 64 (before, SpecNet had four: 17,408 weights; the numbers of 2026-11-13
+below were measured with that). Nothing in the port fixes them: the Python side reads them from the
+header (`ohos/npu/ncr_config.py`), the runtime from the checkpoint a bake carries. After a change
+there, export the models again and bake again (see "After a change of `NCRConfig.h`"). On the NPU the
+smaller SpecNet costs what the larger one did (probe, 2026-11-18: inference 256x256 2.1 ms; training
+graph 2,048 / 8,192 / 16,384 samples 4.6 / 11.3 / 20.6 ms; all one NPU partition), and the reference
+model with it passes the same 27 checks against the CUDA implementation (`verify_tcnn.py`).
 
 The grid lookup writes the encoding channels of the network input, as the CUDA kernels in
 `Source/RenderPasses/NeuralRadiosity/Model/HashGrid*.cu` do, and the training graph returns the gradient
@@ -23,6 +32,7 @@ layout.
 ## Layout
 
 ```
+ohos/npu/ncr_config.py         the MLP sizes, read from Source/RenderPasses/NeuralRadiosity/NCRConfig.h
 ohos/npu/ncr_npu_graphs.py     the two MLPs as NPU graphs (PyTorch): inference, and training with hand-written gradients
 ohos/npu/ncr_reference.py      the rest of the model in numpy: checkpoint format, input layout, grid lookup and scatter, Adam + EMA
 ohos/npu/verify_tcnn.py        the reference model against data dumped from the CUDA implementation, piece by piece
@@ -118,7 +128,7 @@ present.
 - Variable-length batches are run as fixed 2-D tiles (for example 256x256), one `RunSync` per tile.
 - The GPU is the limit. Grid lookups for the same frame cost about 27 ms, and 32 cone rays per specular
   sample about 50 ms; the per-frame K-Means cone trace is out of reach, the cluster-reuse path
-  (`ConeTraceScreen`) is the one to port.
+  (`ConeTraceScreen`) is the one to run (it does since 2026-11-18, see "The cluster-reuse render path").
 - Falcor shader modules that use 64-bit integers have to be replaced.
 
 ## The reference model and its parity with the CUDA implementation
@@ -201,7 +211,8 @@ With `NCR_BAKE_DIR` set, the NeuralRadiosity pass (`BakeExport.cpp`) writes, at 
   with its dispatch size, what was bound at each shader path and its uniform block as it was then (a
   pass such as ConeTrace or CompactBatch runs several times per frame, on different ray batches), and
   between the calls the steps Falcor does on the host: clearing the counts, the prefix sums, network
-  inference, the training step. Besides: the byte offset of every uniform member, so the replayer can
+  inference, the training step, and for the cluster-reuse render path reading the specular count
+  back and copying the G-buffer for the next frame. Besides: the byte offset of every uniform member, so the replayer can
   set per-frame values by name; the ray batches by role; and per geometry instance what is needed to
   rebuild the acceleration structures the way Falcor lays them out (`InstanceID() + GeometryIndex()` is
   the global instance index).
@@ -232,7 +243,9 @@ app (`ohos/app`) its other user. It creates the
 buffers, textures and samplers of the bake, rebuilds the acceleration structures, creates a compute
 pipeline per baked module and descriptor sets per recorded call, then runs the calls in order and does
 the host steps between them itself. For a frame in render mode that is FirstSmoothPass, the prefix sums,
-CompactPass, ConeTrace, SpecPrimary, the networks, ResolvePass, PostFilterPass, PostFXAAPass. The same
+CompactPass, the specular cone clusters (ClusterReproject, ConeTraceScreen, ClusterSpatialReuse with
+cluster reuse, which is the desktop's default now; ConeTrace and SpecPrimary without), the networks,
+ResolvePass, PostFilterPass, PostFXAAPass. The same
 source builds for Windows and for OpenHarmony. `--per-pass` submits every call on its own and prints
 its time.
 
@@ -300,6 +313,75 @@ zero-copy buffers remove; outputs back to rows about 3 ms. The whole frame, firs
 The prefix sums ran on the CPU in that measurement (1.5 ms on a local copy of the buffer; 82 ms when walking the shared
 buffer directly).
 
+### The cluster-reuse render path
+
+With `enableTemporalSpecReuse` (the default of the current `NCRConfig.h`) the render path does not
+trace 32 rays per specular pixel and cluster them every frame. It keeps a mixture of four depth
+modes per pixel from frame to frame and updates it with one to four rays (`NeuralRadiosity::clusterReuse`).
+The three passes are Falcor's baked SPIR-V like the others; what is new for the runtime is state
+that outlives a frame, and it keeps that state the way the pass does:
+
+| What | In Falcor | In the runtime |
+|---|---|---|
+| The specular count the passes are dispatched for | `submit(true)` and a readback before the three passes | host step `readcounts render`: submit, wait, read `counts` |
+| History and lock state, two buffers each, swapping roles every frame | `mClusterHistoryWriteIdx ^= 1` and rebinding | the bake names the pairs (`named cluster.history0/1`, `cluster.lockState0/1`); each call that binds them has a second group of descriptor sets with the pair swapped, used in every other frame the passes run |
+| Previous frame's position, direction, normal, roughness and specular mask | `savePrevGBuffer` at the end of `render()` | host step `saveprev`: four image copies and a buffer copy |
+| `historyValid` | false until the passes have run once after a clear | the same, from the second frame on (the baked frame keeps Falcor's value) |
+| The previous frame's camera (`prevViewProjMatNoJitter`), which ClusterReproject reprojects with and compares to tell a moving camera | Falcor's `Camera` | at the start of a frame the last frame's matrices become the `prev*` members of the scene's block, whether the camera came from the bake, a track sample or the caller |
+| "Clear History" | `clearRenderTemporalHistory` | `Runtime::clearHistory()` (the app's button) |
+
+A replay starts with the history empty, as Falcor's frame 0 does; the bake's copies of those buffers
+are Falcor's state after the baked frame, the reference. A training batch still goes through
+ConeTrace's K-Means, as on the desktop.
+
+Results, bathroom at 640x360, online training from a fresh model (frame 0 baked), 2026-11-18. The
+history depends on the geometry and the ray seeds only, not on the networks, so the same GPU must
+reproduce it exactly:
+
+| | PC (the GPU Falcor ran on) | Phone (Maleoon 955), MLPs on the NPU |
+|---|---|---|
+| Frame 0: history written by the frame, specular mask copy | identical to the byte | 0.16% of the history's bytes differ (other hit distances in their last places) |
+| Frame 0: network inputs of the 130,423 specular pixels / final image | identical / 82.7 dB | / 64.7 dB |
+| 31 frames against Falcor's frame 30 (a second bake): both history buffers, both lock states | identical to the byte | 2.8% of the history's bytes differ |
+| the same, final image / weight updates (cosine) / schedule state | 54.4 dB / 0.997-0.9999 / equal | 50.5 dB / 0.995-0.9999 / equal |
+| Animated scene (bathroom anim: camera path, moving objects), 61 frames stepping one track sample per frame, against Falcor's frame 60 | G-buffer equal, both history buffers and lock states identical to the byte; image 46.0 dB, weight updates 0.980-0.9996 | |
+
+Time of the three passes on the phone, the same scene (130,423 specular pixels): 50 ms while the
+pixels still accumulate (the first 30 frames or so: up to four rays each), then 21.6 ms once they
+are locked (frame 90: ClusterReproject 1.1, ConeTraceScreen 6.0, ClusterSpatialReuse 14.5), against
+about 60 ms for ConeTrace and SpecPrimary with 32 rays. The render part of that frame is 63 ms
+(G-buffer 2.3, prefix sums and compaction 5.6, clusters 21.6, grid lookups 14.9, four NPU tiles 10.6,
+resolve and filters 7.2, the copies 1.0) where it was 106 ms; the whole frame with the desktop's
+training sizes 268 ms (289 ms on average over 90 frames) where it was 316 ms.
+
+In the app, the same day: all fourteen bakes made again with the new preset and pushed (2,112 MB);
+bathroom static, frame 60: `display.bin`, `trained.ckpt` and `schedule.txt` identical to the byte to
+`ncr_replay --networks npu --frames 60` on the phone; bathroom anim with the camera on its path runs
+at about 270 ms a frame. The panel says which render path the bake holds and has *Clear History*. A
+bake of the earlier preset still on the phone is refused with the reason (the models in the HAP have
+another number of layers than its checkpoint), as is a saved model of another size.
+
+Not exercised: a baked frame without any specular pixel (the two passes are then recorded with zero
+items and skipped until a frame has some); none of the nine scenes has such a first frame.
+
+### After a change of `NCRConfig.h`
+
+The desktop keeps alternative presets next to the header (`NCRConfig-stage3.h` is the one before
+2026-11-18). After swapping one in (touch the file: a rename keeps the old modification time and the
+build would skip it) and building Falcor:
+
+```bash
+E:/MyProjects/MRRCGI/.venv/Scripts/python ohos/npu/export_models.py --only inf_256x256 --only _train_ --om   # if a network size changed
+python ohos/tools/bake_scene.py --all            # every scene again, with the new defaults
+bash ohos/app/tools/deploy.sh                    # the models are in the HAP
+python ohos/app/tools/push_scenes.py             # the scenes are not
+```
+
+The runtime needs no change for a different number of hidden layers (it reads it off the
+checkpoint's block sizes, up to eight layers of 64), but models, bakes and saved checkpoints must
+belong to the same preset: the NPU backend refuses a model whose inputs do not fit, and the
+runtime a checkpoint of another size than the bake's.
+
 ### Training
 
 A frame baked in a training mode contains the training step (`host <k> train lhs`), and the bake holds
@@ -314,7 +396,7 @@ masters rounded), and the training schedule: its settings and its state after th
 | Gradients of the MLP | NPU: `ncr_<net>_train_<N>_fp16.om`, one run per tile | dL/dw, summed over the tiles on the CPU, and dL/d(input) per sample |
 | Gradients of the grids | GPU: `ScatterGradients` | the encoding channels of dL/d(input) added to the grid entries the lookup read, in 2^-24 fixed point (integer atomics) |
 | Grid optimizers | GPU: `GridOptimizer`, once per grid | Adam on the float32 masters where the gradient is not zero, per-entry step counts; EMA over all entries; fp16 copies rounded to nearest even |
-| MLP optimizers | CPU | Adam + EMA on 28,672 weights, then the new weights go into the graphs' weight tensors |
+| MLP optimizers | CPU | Adam + EMA on the MLPs' weights (24,576 with the current preset), then the new weights go into the graphs' weight tensors |
 
 `--frames N` replays the frame N times as consecutive frames: the frame counter that seeds the samplers
 advances and the uniforms that depend on the sample counts are set as `NeuralRadiosity.cpp` sets them;
@@ -560,5 +642,6 @@ triangle, was suspected first and is fine (test `load16`).
    its build, signing and deployment scripts (above); the panel, every scene in its static and
    animated variant, the animation played back from the bake's track, the camera on its path or under
    the fingers.
-   Next, when frame rate matters again: sample counts for the phone, the cluster-reuse cone trace,
-   training across frames.
+   The desktop's "stage 4" preset (2026-11-18): SpecNet with three hidden layers, and the cluster-reuse
+   render path with its state kept across frames by the runtime (above).
+   Next, when frame rate matters again: sample counts for the phone, training across frames.

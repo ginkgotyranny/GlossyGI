@@ -61,17 +61,19 @@ Mogwai for this project, as far as the phone has it:
 |---|---|---|
 | Scene | the scenes, static / anim, *Play Animation*, *Time Scale*, the animation time, *Rescan Scenes* | `run.bat`'s scene and variant, Mogwai's time controls |
 | Camera | *Camera Animated*, *Move Speed* (0.25x, 1x, 3x, 10x of the scene's camera speed), the camera's position and direction, *Reset Camera* | `--camera-anim`, Mogwai's camera controls (Ctrl and Shift change the speed by 0.25 and 10) |
-| NeuralRadiosity | *Render Mode* (Idle, Render, Train, Online Train), *Save / Load model state*, *Reset model*, *Use NEE*, *RHS Glossy Bounces*, *Diffuse Trains On Glossy*, *Mirror Albedo*, *Env Color Encoding*, *Post Filter*, *FXAA*, the batch sizes | the pass's panel (`NeuralRadiosity::renderUI`) |
+| NeuralRadiosity | *Render Mode* (Idle, Render, Train, Online Train), *Save / Load model state*, *Reset model*, *Use NEE*, *RHS Glossy Bounces*, *Diffuse Trains On Glossy*, *Mirror Albedo*, *Env Color Encoding*, *Post Filter*, *FXAA*, the batch sizes, whether the render path is the cluster-reuse one, *Clear History* | the pass's panel (`NeuralRadiosity::renderUI`) |
 | Training Schedule | *Enable*, heat and hold, learning rate and EMA decay now, the events, every schedule setting, *Reset schedule* | the pass's "Training Schedule" group |
 | Frame Times | the frame and each recorded segment of it | Mogwai's profiler |
 
 - A switch the bake cannot honour is grey: no animation in a static scene, no NEE switch without lights.
-  The desktop's other panel entries change what Falcor compiles (ray counts, the cluster-reuse path)
-  and need a new bake.
+  The desktop's other panel entries change what Falcor compiles (ray counts, cluster reuse on or
+  off and its tunables) and need a new bake: a bake holds the render path Falcor ran, with the
+  desktop's default the cluster-reuse one (`NCR_ENABLE_CLUSTER_REUSE` in `NCRConfig.h`).
 - *Train* runs only the training part, with the baked shaders (the desktop's Train mode compiles
   ConeTrace for more rays).
 - *Save model state* writes `<files>/models/<scene>-<variant>.ckpt`; *Load model state* restarts the
-  scene from it, *Reset model* from the bake's fresh model.
+  scene from it, *Reset model* from the bake's fresh model. A model saved with another network
+  size (`NCRConfig.h`'s hidden layers at the time of its bake) is refused.
 - The camera, with two thumbs as on a gamepad, which Falcor's first-person camera also takes: the left
   half of the screen is a stick (it appears where the finger goes down) that moves the camera along
   the view and sideways, at the scene's camera speed at full stick (the desktop's WASD speed, 1 unit

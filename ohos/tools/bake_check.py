@@ -63,12 +63,14 @@ def call_batch(bake, call):
     """The ray batch (render, lhs, rhs) whose buffers a call has bound, or '-'."""
     roles = {}
     for role, (kind, id_) in bake["named"].items():
-        roles.setdefault(id_, set()).add(role.split(".")[0])
+        if kind == "buffer":
+            roles.setdefault(id_, set()).add(role.split(".")[0])
     votes = {}
     for record in call["binds"].values():
         if record[0] == "buffer":
             for batch in roles.get(int(record[1]), ()):
-                if batch != "dummy":
+                # "cluster" names the cluster-reuse state, which belongs to no batch.
+                if batch not in ("dummy", "cluster"):
                     votes[batch] = votes.get(batch, 0) + 1
     if not votes:
         return "-"

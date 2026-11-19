@@ -1326,6 +1326,7 @@ void NeuralRadiosity::clusterReuse(RenderContext* pRenderContext, const RenderDa
     // path still waits for the compaction counts.
     pRenderContext->submit(true);
     mpRenderBatch->readCounts();
+    bakeHost("readcounts render");
 
     // Ping-pong: the reproject pass reads [1 - write] and seeds [write], the cone
     // trace updates [write] in place, and the spatial pass only reads it.
@@ -1424,7 +1425,11 @@ void NeuralRadiosity::coneTraceScreenPass(RenderContext* pRenderContext, const R
 
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
-    if (mpRenderBatch->specSize == 0) return;
+    if (mpRenderBatch->specSize == 0)
+    {
+        bakeSkippedPass(mpConeTraceScreen, "ConeTraceScreen");
+        return;
+    }
 
     executePass(pRenderContext, mpConeTraceScreen, "ConeTraceScreen", uint3(mpRenderBatch->specSize, 1, 1));
 }
@@ -1470,7 +1475,11 @@ void NeuralRadiosity::clusterSpatialReusePass(RenderContext* pRenderContext, con
 
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
 
-    if (mpRenderBatch->specSize == 0) return;
+    if (mpRenderBatch->specSize == 0)
+    {
+        bakeSkippedPass(mpClusterSpatialReuse, "ClusterSpatialReuse");
+        return;
+    }
 
     executePass(pRenderContext, mpClusterSpatialReuse, "ClusterSpatialReuse", uint3(mpRenderBatch->specSize, 1, 1));
 }
@@ -1489,6 +1498,7 @@ void NeuralRadiosity::savePrevGBuffer(RenderContext* pRenderContext, const Rende
     pRenderContext->copyBufferRegion(
         mpPrevSpecActive.get(), 0, mpRenderBatch->specActive.get(), 0, mpPrevSpecActive->getSize()
     );
+    bakeHost("saveprev");
 }
 
 void NeuralRadiosity::modelInferenceCUDA(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch)

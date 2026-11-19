@@ -10,6 +10,11 @@
 //   GPU   ScatterGradients into the grids, GridOptimizer (Adam + EMA)  -> the grids' new weights
 //   CPU   Adam + EMA for the two MLPs                                  -> the MLPs' new weights
 // The prefix sums between the passes are a compute pass as well (shaders/PrefixSum).
+//
+// The cluster-reuse render path (NeuralRadiosity::clusterReuse) adds two host steps to the program:
+//   readcounts  the host waits for the GPU and reads the specular count the next passes are sized by
+//   saveprev    this frame's G-buffer and specular mask become the next frame's "previous" copies
+// and the calls of its three passes alternate between the two history buffers from frame to frame.
 #include "ncr_runtime.h"
 
 #include "replay_bake.h"
@@ -217,6 +222,15 @@ struct Runtime::State
     uint32_t pendingEvents = 0;       // seen since the training schedule last advanced
     uint32_t lastEvents = 0;
 
+    // The cluster-reuse render path's state across frames (NeuralRadiosity::clusterReuse).
+    bool clusterReuse = false;         // the bake's render path is that one
+    uint32_t clusterRuns = 0;          // frames its passes ran in
+    bool clusterAlternate = false;     // this frame's calls bind the history pairs swapped against the baked frame
+    bool clusterHistoryValid = false;  // a frame has written the history since it was last cleared (mClusterHistoryValid)
+    bool clearClusterHistory = false;  // Runtime::clearHistory: before the next frame
+    Bake::CameraHistory lastCamera;    // the camera of the last frame: the next frame's "previous" matrices
+    bool haveLastCamera = false;
+
     // Calls are recorded into one command buffer until a host step needs their results.
     VkCommandBuffer cb = VK_NULL_HANDLE;
     std::string pendingNames;
@@ -251,10 +265,22 @@ struct Runtime::State
         else
         {
             checkpoint.load(model);
+            // The NPU graphs and the bake belong to one network size: a checkpoint of another does not fit them.
+            if (fileExists(bakeDir + "/before.ckpt"))
+            {
+                Checkpoint baked;
+                baked.load(bakeDir + "/before.ckpt");
+                if (std::memcmp(baked.counts, checkpoint.counts, sizeof(baked.counts)) != 0)
+                    fail(format("%s has another network size than the bake (SpecNet %u hidden layers, the bake %u; DiffNet %u, the bake %u)",
+                                model.c_str(), mlpHiddenLayers(cfg::kSpecInputDim, checkpoint.counts[3]), mlpHiddenLayers(cfg::kSpecInputDim, baked.counts[3]),
+                                mlpHiddenLayers(cfg::kDiffInputDim, checkpoint.counts[2]), mlpHiddenLayers(cfg::kDiffInputDim, baked.counts[2])));
+            }
             std::printf("model: %s (training copies rebuilt from the masters, as Falcor loads a checkpoint)\n", model.c_str());
         }
         diffNet.init(false, checkpoint.diffMaster, checkpoint.diffEma, checkpoint.diffWorking);
         specNet.init(true, checkpoint.specMaster, checkpoint.specEma, checkpoint.specWorking);
+        std::printf("MLPs: DiffNet %u hidden layers (%zu weights), SpecNet %u hidden layers (%zu weights)\n", diffNet.hiddenLayers,
+                    diffNet.master.size(), specNet.hiddenLayers, specNet.master.size());
 
         for (const char* role : {"render", "lhs", "rhs"})
         {
@@ -280,6 +306,8 @@ struct Runtime::State
         inferShift = log2Exact(cfg::kTile);
         setUpSchedule();
         setUpSettings();
+        clusterReuse = bake.hasBuffer("cluster.history0");
+        if (clusterReuse) std::printf("render path: cluster reuse (per-pixel cluster history, carried from frame to frame)\n");
 
         ownPool = makeOwnPool(dev, 64, 320);
         sharedTiles = networks == "npu" && !options.copyTiles && dev.sharedMemory;
@@ -388,7 +416,7 @@ struct Runtime::State
             {
                 settings.diffTrainOnGlossy = memberOr(call, "diffTrainOnGlossy", 0) != 0;
             }
-            else if (call.pass == "SpecPrimary")
+            else if (call.pass == "SpecPrimary" || call.pass == "ClusterSpatialReuse")
             {
                 settings.mirrorAlbedo = memberOr(call, "enableMirrorAlbedo", 1) != 0;
                 settings.envColorEncoding = memberOr(call, "envColorEncoding", settings.envColorEncoding);
@@ -638,6 +666,45 @@ struct Runtime::State
         it->second.pass.dispatch(c, PrefixPush{count, 2, index}, count);
     }
 
+    /// NeuralRadiosity::savePrevGBuffer: what the next frame's ClusterReproject reads as the previous frame.
+    void savePreviousFrame()
+    {
+        VkCommandBuffer c = record("previous-frame copies");
+        static const char* const pairs[4][2] = {
+            {"gPos", "cluster.prevPos"}, {"gDir", "cluster.prevDir"}, {"gNormal", "cluster.prevNormal"}, {"gRoughness", "cluster.prevRoughness"}};
+        for (const auto& pair : pairs)
+        {
+            const Texture& from = bake.textures.at(bake.textureBoundAs(pair[0]));
+            const Texture& to = bake.texture(pair[1]);
+            VkImageCopy region = {};
+            region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.extent = {std::min(from.width, to.width), std::min(from.height, to.height), 1};
+            vkCmdCopyImage(c, from.image, VK_IMAGE_LAYOUT_GENERAL, to.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+        }
+        const Buffer& mask = bake.buffer("render.specActive");
+        const Buffer& previousMask = bake.buffer("cluster.prevSpecActive");
+        const VkBufferCopy copy = {0, 0, std::min(mask.size, previousMask.size)};
+        vkCmdCopyBuffer(c, mask.buffer, previousMask.buffer, 1, &copy);
+        VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+    }
+
+    /// NeuralRadiosity::clearRenderTemporalHistory.
+    void clearHistoryNow()
+    {
+        VkCommandBuffer c = record("clear cluster history");
+        for (const char* role : {"cluster.history0", "cluster.history1", "cluster.lockState0", "cluster.lockState1", "cluster.prevSpecActive"})
+            vkCmdFillBuffer(c, bake.buffer(role).buffer, 0, VK_WHOLE_SIZE, 0);
+        VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+        clusterHistoryValid = false;
+        clearClusterHistory = false;
+    }
+
     /// Falcor reads the compacted counts back where it syncs with CUDA.
     void readCounts(Batch& b)
     {
@@ -761,7 +828,7 @@ struct Runtime::State
             // The training copies the step started from, which train_check.py takes for the reference step.
             const uint16_t* working[4] = {primGrid.training.as<uint16_t>(), clsGrid.training.as<uint16_t>(), diffNet.training.data(), specNet.training.data()};
             std::ofstream f(dir + "/train_working.bin", std::ios::binary);
-            Checkpoint::Header header = Checkpoint::expectedHeader();
+            Checkpoint::Header header = checkpoint.header();
             std::memcpy(header.magic, "NRWK", 4);
             header.version = 1;
             f.write(reinterpret_cast<const char*>(&header), sizeof(header));
@@ -807,7 +874,7 @@ struct Runtime::State
         {
             setMember(call, "diffTrainOnGlossy", (uint32_t)(settings.diffTrainOnGlossy ? 1 : 0));
         }
-        else if (call.pass == "SpecPrimary")
+        else if (call.pass == "SpecPrimary" || call.pass == "ClusterSpatialReuse")
         {
             setMember(call, "enableMirrorAlbedo", (uint32_t)(settings.mirrorAlbedo ? 1 : 0));
             setMember(call, "envColorEncoding", settings.envColorEncoding);
@@ -834,6 +901,8 @@ struct Runtime::State
             set("batchCount", firstCount + frame);
             set("frameCount", firstCount + frame);
         }
+        // Whether there is a history to reproject from (the baked frame keeps what Falcor had).
+        if (call.pass == "ClusterReproject" && frame > 0) set("historyValid", clusterHistoryValid ? 1u : 0u);
         if (frame == 0) return;
         auto it = batches.find(call.batch);
         if (it == batches.end()) return;
@@ -852,12 +921,20 @@ struct Runtime::State
             dims[0] = specDispatchItems(b.specSize, b.size);
             set("dispatchThreadCount", dims[0]);
         }
+        else if (call.pass == "ConeTraceScreen" || call.pass == "ClusterSpatialReuse")
+        {
+            dims[0] = b.specSize;   // read back just before (host step readcounts), as on the desktop
+        }
     }
 
     void runFrame(double seconds)
     {
         timings.clear();
         updateScene(seconds);
+        // What the camera was in the last frame is this frame's "previous" camera, whichever way
+        // the scene got its camera for this frame (the bake, a track sample, the caller).
+        if (frame > 0 && haveLastCamera) bake.setCameraHistory(lastCamera);
+        if (clearClusterHistory && clusterReuse) clearHistoryNow();
         const RenderMode mode = settings.mode;
         const bool trainPart = mode == RenderMode::Train || mode == RenderMode::OnlineTrain;
         const bool renderPart = mode == RenderMode::Render || mode == RenderMode::OnlineTrain;
@@ -888,7 +965,16 @@ struct Runtime::State
                     bake.setUniform(call, "gConeTrace", "dispatchGroupCount", groups);
                     dims[0] = groups * groupSize;
                 }
-                bake.dispatch(record(call.pass), call, dims[0], dims[1], dims[2]);
+                if (call.pass == "ClusterReproject")
+                {
+                    // The history pairs swap roles every frame the cluster passes run (mClusterHistoryWriteIdx).
+                    clusterAlternate = (clusterRuns & 1u) != 0;
+                    clusterRuns++;
+                    clusterHistoryValid = true;   // after this frame; prepare() has given the pass the value before it
+                }
+                if (dims[0] == 0) continue;   // nothing to do (a frame without specular pixels)
+                const bool clusterCall = call.pass == "ClusterReproject" || call.pass == "ConeTraceScreen" || call.pass == "ClusterSpatialReuse";
+                bake.dispatch(record(call.pass), call, dims[0], dims[1], dims[2], clusterCall && clusterAlternate);
                 if (options.perPass) flush();
                 continue;
             }
@@ -932,12 +1018,23 @@ struct Runtime::State
                 flush();
                 if (training) train(batches.at(step.host[1]));
             }
+            else if (what == "readcounts")
+            {
+                flush();   // the passes that follow are dispatched for this frame's count
+                readCounts(batches.at(step.host[1]));
+            }
+            else if (what == "saveprev")
+            {
+                savePreviousFrame();
+            }
             else
             {
                 fail("unknown host step " + what);
             }
         }
         flush();
+        lastCamera = bake.cameraHistory();
+        haveLastCamera = true;
         lastFrameMs = 0.0;
         for (const auto& [name, ms] : timings) lastFrameMs += ms;
         frame++;
@@ -969,6 +1066,8 @@ const Settings& Runtime::settings() const { return s->settings; }
 bool Runtime::hasPostFilter() const { return s->hasPostFilter; }
 bool Runtime::hasLights() const { return s->hasLights; }
 bool Runtime::hasRenderPath() const { return s->hasRenderPath; }
+bool Runtime::clusterReuse() const { return s->clusterReuse; }
+void Runtime::clearHistory() { s->clearClusterHistory = true; }
 bool Runtime::animated() const { return s->bake.track.samples > 0; }
 double Runtime::animationLength() const { return s->bake.track.loopSeconds; }
 double Runtime::animationTime() const { return s->animationTime; }
@@ -1117,7 +1216,7 @@ void Runtime::saveCheckpoint(const std::string& path) const
     const float* masters[4] = {st.primGrid.master.as<float>(), st.clsGrid.master.as<float>(), st.diffNet.master.data(), st.specNet.master.data()};
     const uint16_t* emas[4] = {st.primGrid.inference.as<uint16_t>(), st.clsGrid.inference.as<uint16_t>(), st.diffNet.inference.data(),
                                st.specNet.inference.data()};
-    Checkpoint::save(path, masters, emas);
+    st.checkpoint.save(path, masters, emas);
 }
 
 void Runtime::printSummary() const

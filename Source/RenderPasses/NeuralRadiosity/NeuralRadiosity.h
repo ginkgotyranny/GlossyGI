@@ -325,6 +325,9 @@ private:
     /// only run the pass.
     void bakeBegin();
     void executePass(RenderContext* pRenderContext, const ref<ComputePass>& pPass, const char* name, const uint3& dims);
+    /// A pass this frame had nothing to do for (no specular pixel yet): the bake still needs its
+    /// shader and bindings, since later frames of the replay run it. Recorded with zero items.
+    void bakeSkippedPass(const ref<ComputePass>& pPass, const char* name);
     void bakeHost(const std::string& step);
     void bakeExport(RenderContext* pRenderContext);
     const char* batchRole(const RayBatchBuffer* pBatch) const;

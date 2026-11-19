@@ -12,7 +12,10 @@ names. It also repairs the SPIR-V in place where Falcor's Slang leaves out what 
     frame <width> <height> <frameCount>
     buffer <id> <bytes> <structSize> <load 0|1>      0: a ray-batch buffer, written by the passes; its baked
                                                      contents are reference results, not input
-    texture <id> <2D|Cube|3D> <VkFormat> <bytesPerPixel> <width> <height> <depth> <mips> <layers> <storage 0|1>
+    texture <id> <2D|Cube|3D> <VkFormat> <bytesPerPixel> <width> <height> <depth> <mips> <layers> <storage 0|1|2>
+                                                     0: read by the passes, contents in the bake; 1: written by a pass;
+                                                     2: kept by the runtime (the previous frame's G-buffer of the
+                                                     cluster-reuse path): starts cleared, nothing to load
     sampler <id> <min> <mag> <mip> <addressU> <addressV> <addressW> <maxAnisotropy> <lodBias> <minLod> <maxLod>
     scene vertices <bufferId> <stride> | scene indices <bufferId>
     geometry <globalInstanceID> <tlasInstance> <geometryIndex> <vbOffset> <ibOffset> <vertexCount> <indexCount>
@@ -26,7 +29,9 @@ names. It also repairs the SPIR-V in place where Falcor's Slang leaves out what 
     element <step> <set> <binding> <index> uniform <bytes> <file>
     element <step> <set> <binding> <index> accel|null
     host <step> clearcounts <batch> | prefixsum <batch> diff|spec <count> | infer <batch> | train <batch>
-    named <role> <bufferId>
+    host <step> readcounts <batch> | saveprev        the cluster-reuse path (BakeExport.cpp)
+    named <role> <bufferId>                          <batch>.<member>, or cluster.<member> for the cluster-reuse state
+    namedtexture <role> <textureId>                  cluster.prevPos and the other previous-frame copies
     value <name> <number>
   an animated scene (track.txt of the bake, as it is; the samples are in track.bin):
     track <samples> <samplesPerSecond> <recordBytes> <loopSeconds>
@@ -101,7 +106,8 @@ def main():
                     scene[b["name"]] = int(record[1])
                 program_lines.append(f"element {step} {b['set']} {b['binding']} {index} " + " ".join(record))
 
-    scratch = {id_ for kind, id_ in bake["named"].values()}
+    scratch = {id_ for kind, id_ in bake["named"].values() if kind == "buffer"}
+    kept_textures = {id_ for kind, id_ in bake["named"].values() if kind == "texture"}
     for id_, b in sorted(bake["buffers"].items()):
         out.append(f"buffer {id_} {b['bytes']} {b['structSize']} {0 if id_ in scratch else 1}")
     for id_, t in sorted(bake["textures"].items()):
@@ -110,7 +116,7 @@ def main():
             continue
         vk_format, bytes_per_pixel = FORMATS[t["format"]]
         out.append(f"texture {id_} {t['type']} {vk_format} {bytes_per_pixel} {t['width']} {t['height']} {t['depth']} "
-                   f"{t['mips']} {t['layers']} {1 if id_ in storage_textures else 0}")
+                   f"{t['mips']} {t['layers']} {1 if id_ in storage_textures else 2 if id_ in kept_textures else 0}")
     for id_, s in sorted(bake["samplers"].items()):
         out.append(f"sampler {id_} " + " ".join(s[:10]))
     if "gScene.vertices.data" in scene:
@@ -124,7 +130,7 @@ def main():
         out.append("geometry " + " ".join(str(x) for x in fields) + " " + " ".join(repr(x) for x in g[12:24]))
     out += pass_lines + program_lines
     for role, (kind, id_) in bake["named"].items():
-        out.append(f"named {role} {id_}")
+        out.append(f"{'named' if kind == 'buffer' else 'namedtexture'} {role} {id_}")
     for name, value in bake["values"].items():
         out.append(f"value {name} {value!r}")   # full precision: the training schedule continues from these
     track = os.path.join(folder, "track.txt")

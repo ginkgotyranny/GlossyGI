@@ -27,6 +27,10 @@
 //       host <k> clearcounts <batch>                  what Falcor does between passes on the CPU or in CUDA:
 //       host <k> prefixsum <batch> diff|spec <elementCount>             exclusive scan of the index buffer, total into counts
 //       host <k> infer <batch> | train <batch>                          network inference / one training step on that batch
+//       host <k> readcounts <batch>                   the host waits for the GPU and reads that batch's compacted counts
+//                                                     (the cluster-reuse passes are dispatched for the specular count)
+//       host <k> saveprev                             cluster reuse: this frame's G-buffer and specular mask are copied
+//                                                     to the "previous frame" copies the next frame reprojects from
 //     resources:
 //       buffer <id> <bytes> <structSize> <elementCount>                    contents in data/buffer<id>.bin
 //       texture <id> <type> <format> <width> <height> <depth> <mips> <layers>
@@ -34,6 +38,11 @@
 //       sampler <id> <min> <mag> <mip> <addressU> <addressV> <addressW> <maxAnisotropy> <lodBias>
 //               <minLod> <maxLod> <comparison> <borderR> <borderG> <borderB> <borderA>
 //       named <batch>.<member> buffer <id>       the buffers of the ray batches (render, lhs, rhs, dummy) by role
+//       named cluster.<member> buffer|texture <id>   cluster reuse (enableTemporalSpecReuse): the state that lives
+//                                                across frames. history0/1 and lockState0/1 are the ping-pong pairs
+//                                                (the frame after the baked one swaps them), prevSpecActive and the
+//                                                textures prevPos, prevDir, prevNormal, prevRoughness the copies
+//                                                "saveprev" writes. Their baked contents are the state after the frame.
 //       value <name> <number>                    sizes and switches at the baked frame
 //       geometry <globalInstanceID> <tlasInstance> <geometryIndex> <meshID> <materialID> <vbOffset>
 //                <ibOffset> <vertexCount> <indexCount> <index16> <frontFaceCW> <opaque> <12 floats: 3x4 transform>
@@ -174,6 +183,13 @@ public:
     {
         if (pBuffer)
             record("named {} buffer {}", name, bufferId(pBuffer.get()));
+    }
+
+    /// Records a texture under a role name.
+    void named(const std::string& name, const ref<Texture>& pTexture)
+    {
+        if (pTexture)
+            record("named {} texture {}", name, textureId(pTexture.get()));
     }
 
     /// The contents of every resource seen, as they are now.
@@ -686,6 +702,12 @@ void NeuralRadiosity::executePass(RenderContext* pRenderContext, const ref<Compu
         gBaker->call(name, pPass, dims);
 }
 
+void NeuralRadiosity::bakeSkippedPass(const ref<ComputePass>& pPass, const char* name)
+{
+    if (gBaker)
+        gBaker->call(name, pPass, uint3(0, 1, 1));
+}
+
 const char* NeuralRadiosity::batchRole(const RayBatchBuffer* pBatch) const
 {
     return pBatch == mpRenderBatch.get() ? "render" : pBatch == mpTrainLHSBatch.get() ? "lhs" : pBatch == mpTrainRHSBatch.get() ? "rhs" : "dummy";
@@ -747,6 +769,20 @@ void NeuralRadiosity::bakeExport(RenderContext* pRenderContext)
     baker.record("value numSpecRays {}", mNumSpecRays);
     baker.record("value numRHS {}", mNumRHS);
     baker.record("value clusterReuse {}", useClusterReuse() ? 1 : 0);
+    if (useClusterReuse())
+    {
+        // The state the cluster-reuse passes keep from frame to frame. The replay starts it empty
+        // (as a bake of frame 0 does) and keeps it itself.
+        baker.named("cluster.history0", mpClusterHistory[0]);
+        baker.named("cluster.history1", mpClusterHistory[1]);
+        baker.named("cluster.lockState0", mpClusterLockState[0]);
+        baker.named("cluster.lockState1", mpClusterLockState[1]);
+        baker.named("cluster.prevSpecActive", mpPrevSpecActive);
+        baker.named("cluster.prevPos", mpPrevPos);
+        baker.named("cluster.prevDir", mpPrevDir);
+        baker.named("cluster.prevNormal", mpPrevNormal);
+        baker.named("cluster.prevRoughness", mpPrevRoughness);
+    }
     if (mpNRModel)
     {
         // The optimizer settings the frame's training step ran with (the training schedule sets them).

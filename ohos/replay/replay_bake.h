@@ -4,6 +4,11 @@
 // had bound, and of the steps Falcor did on the host in between. A pass is a pipeline; every call of
 // it has its own descriptor sets and its own copy of the pass's uniform block.
 //
+// A bake of the cluster-reuse render path (enableTemporalSpecReuse) has state that lives across
+// frames: two history buffers and two lock-state buffers used as ping-pong pairs, and copies of the
+// previous frame's G-buffer. The bake names them (cluster.*). The calls that bind a pair get a
+// second group of descriptor sets with the pair swapped, for every other frame.
+//
 // The scene can change between frames in two ways. An animated scene comes with a track: what its
 // data is at evenly spaced times over one loop of the animation, which applyTrackSample() writes
 // into the scene's buffers, its uniform block and the top-level acceleration structure. And the
@@ -55,6 +60,7 @@ struct Call
     std::string batch;                               // render, lhs, rhs or -: the ray batch whose buffers it has bound
     std::vector<Element> elements;
     std::vector<VkDescriptorSet> sets;
+    std::vector<VkDescriptorSet> altSets;            // the same with the ping-pong pairs swapped; empty if it binds none
     std::map<std::string, Buffer*> uniformBlocks;    // block path -> its buffer
 };
 
@@ -111,6 +117,9 @@ public:
     std::map<uint32_t, Call> calls;             // by step
     std::vector<Step> program;                  // the frame, in execution order
     std::map<std::string, uint32_t> named;      // role, e.g. render.specInput -> buffer id
+    std::map<std::string, uint32_t> namedTextures;   // role, e.g. cluster.prevPos -> texture id
+    std::map<uint32_t, bool> textureKept;       // a texture the runtime keeps (starts cleared, nothing to load)
+    std::map<uint32_t, uint32_t> bufferSwap;    // ping-pong pairs: each buffer id -> its partner
     std::map<std::string, double> values;
     VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
     Track track;
@@ -148,6 +157,13 @@ public:
     void load()
     {
         parseIndex();
+        for (const char* pair : {"cluster.history", "cluster.lockState"})
+        {
+            const std::string a = std::string(pair) + "0", b = std::string(pair) + "1";
+            if (named.count(a) == 0 || named.count(b) == 0) continue;
+            bufferSwap[named[a]] = named[b];
+            bufferSwap[named[b]] = named[a];
+        }
         createResources();
         buildAccelerationStructures();
         createPasses();
@@ -284,7 +300,37 @@ public:
         writeVector("cameraW", w);
     }
 
+    /// What a frame leaves for the next one: the camera's matrices, which become the "previous
+    /// frame" members of the camera's shader data (reprojection reads prevViewProjMatNoJitter).
+    struct CameraHistory
+    {
+        float view[16] = {}, viewProjNoJitter[16] = {}, position[3] = {};
+    };
+
+    CameraHistory cameraHistory()
+    {
+        CameraHistory h;
+        std::memcpy(h.view, cameraMember("viewMat", 64), 64);
+        std::memcpy(h.viewProjNoJitter, cameraMember("viewProjMatNoJitter", 64), 64);
+        std::memcpy(h.position, cameraMember("posW", 12), 12);
+        return h;
+    }
+
+    void setCameraHistory(const CameraHistory& h)
+    {
+        std::memcpy(cameraMember("prevViewMat", 64), h.view, 64);
+        std::memcpy(cameraMember("prevViewProjMatNoJitter", 64), h.viewProjNoJitter, 64);
+        std::memcpy(cameraMember("prevPosW", 12), h.position, 12);
+    }
+
     bool hasBuffer(const std::string& role) const { return named.count(role) != 0; }
+
+    Texture& texture(const std::string& role)
+    {
+        auto it = namedTextures.find(role);
+        if (it == namedTextures.end()) fail("the bake has no texture named " + role);
+        return textures.at(it->second);
+    }
 
     Buffer& buffer(const std::string& role)
     {
@@ -347,8 +393,9 @@ public:
 
     /// Records one dispatch of a call over `dims` items (Falcor's ComputePass::execute convention:
     /// the group counts are the dimensions divided by the thread group size, rounded up), followed
-    /// by a barrier so that the next pass sees what this one wrote.
-    void dispatch(VkCommandBuffer cb, Call& c, uint32_t dimX, uint32_t dimY = 1, uint32_t dimZ = 1)
+    /// by a barrier so that the next pass sees what this one wrote. `alternate`: with the ping-pong
+    /// pairs swapped against the baked frame (a call that binds none has only one group of sets).
+    void dispatch(VkCommandBuffer cb, Call& c, uint32_t dimX, uint32_t dimY = 1, uint32_t dimZ = 1, bool alternate = false)
     {
         Pass& p = passes.at(c.pass);
         const uint32_t groups[3] = {(dimX + p.group[0] - 1) / p.group[0], (dimY + p.group[1] - 1) / p.group[1], (dimZ + p.group[2] - 1) / p.group[2]};
@@ -359,7 +406,8 @@ public:
                 fail(format("%s: %u thread groups in dimension %d, the device runs at most %u", p.name.c_str(), groups[a], a, dev.maxGroupCount[a]));
         }
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, (uint32_t)c.sets.size(), c.sets.data(), 0, nullptr);
+        const std::vector<VkDescriptorSet>& sets = alternate && !c.altSets.empty() ? c.altSets : c.sets;
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, (uint32_t)sets.size(), sets.data(), 0, nullptr);
         vkCmdDispatch(cb, groups[0], groups[1], groups[2]);
         VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -498,8 +546,9 @@ private:
                 in >> id >> type >> format >> t.bytesPerPixel >> t.width >> t.height >> t.depth >> t.mips >> t.layers >> storage;
                 t.format = (VkFormat)format;
                 t.cube = type == "Cube";
-                t.storage = storage != 0;
+                t.storage = storage == 1;
                 textures[id] = t;
+                textureKept[id] = storage == 2;
             }
             else if (kind == "sampler")
             {
@@ -596,6 +645,13 @@ private:
                 in >> role >> id;
                 named[role] = id;
             }
+            else if (kind == "namedtexture")
+            {
+                std::string role;
+                uint32_t id;
+                in >> role >> id;
+                namedTextures[role] = id;
+            }
             else if (kind == "value")
             {
                 std::string name;
@@ -642,9 +698,9 @@ private:
         for (auto& [id, t] : textures)
         {
             Texture created = dev.makeTexture(t.format, t.bytesPerPixel, t.width, t.height, t.depth, t.mips, t.layers, t.cube, t.storage);
-            if (t.storage)
+            if (t.storage || textureKept[id])
             {
-                dev.initTexture(created, nullptr);   // an output: starts cleared, the passes fill it
+                dev.initTexture(created, nullptr);   // an output, or the runtime's own: starts cleared
             }
             else
             {
@@ -816,20 +872,29 @@ private:
         return block.rfind("gScene", 0) == 0 ? block : "call" + std::to_string(c.step) + ":" + block;
     }
 
+    /// Whether a call binds a buffer of a ping-pong pair.
+    bool swaps(const Call& c) const
+    {
+        for (const Element& e : c.elements)
+            if (e.kind == "buffer" && bufferSwap.count(e.id) != 0) return true;
+        return false;
+    }
+
     void createPasses()
     {
-        // One pool for the descriptor sets of every call.
+        // One pool for the descriptor sets of every call (two groups for a call with swapped pairs).
         std::map<VkDescriptorType, uint32_t> totals;
         uint32_t setCount = 0;
         for (auto& [step, c] : calls)
         {
+            const uint32_t groups = swaps(c) ? 2 : 1;
             uint32_t maxSet = 0;
             for (const Binding& b : passes.at(c.pass).bindings)
             {
-                totals[b.type] += b.count;
+                totals[b.type] += b.count * groups;
                 maxSet = std::max(maxSet, b.set);
             }
-            setCount += maxSet + 1;
+            setCount += (maxSet + 1) * groups;
         }
         std::vector<VkDescriptorPoolSize> sizes;
         for (auto& [type, count] : totals) sizes.push_back({type, count});
@@ -879,21 +944,30 @@ private:
         for (auto& [step, c] : calls)
         {
             Pass& p = passes.at(c.pass);
-            c.sets.resize(p.setLayouts.size());
-            for (size_t set = 0; set < p.setLayouts.size(); set++)
+            auto allocate = [&](std::vector<VkDescriptorSet>& sets) {
+                sets.resize(p.setLayouts.size());
+                for (size_t set = 0; set < p.setLayouts.size(); set++)
+                {
+                    VkDescriptorSetAllocateInfo da = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+                    da.descriptorPool = mPool;
+                    da.descriptorSetCount = 1;
+                    da.pSetLayouts = &p.setLayouts[set];
+                    VK_CHECK(vkAllocateDescriptorSets(dev.device, &da, &sets[set]));
+                }
+            };
+            allocate(c.sets);
+            writeDescriptors(p, c, c.sets, false);
+            if (swaps(c))
             {
-                VkDescriptorSetAllocateInfo da = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-                da.descriptorPool = mPool;
-                da.descriptorSetCount = 1;
-                da.pSetLayouts = &p.setLayouts[set];
-                VK_CHECK(vkAllocateDescriptorSets(dev.device, &da, &c.sets[set]));
+                allocate(c.altSets);
+                writeDescriptors(p, c, c.altSets, true);
             }
-            writeDescriptors(p, c);
         }
         std::printf("pipelines: %zu passes created in %.0f ms; %zu calls in the recorded frame\n", passOrder.size(), totalMs, calls.size());
     }
 
-    void writeDescriptors(Pass& p, Call& c)
+    /// `swapped`: a buffer of a ping-pong pair is replaced by its partner.
+    void writeDescriptors(Pass& p, Call& c, const std::vector<VkDescriptorSet>& sets, bool swapped)
     {
         for (const Element& e : c.elements)
         {
@@ -908,7 +982,7 @@ private:
             accelInfo.accelerationStructureCount = 1;
             accelInfo.pAccelerationStructures = &tlas;
             VkWriteDescriptorSet w = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            w.dstSet = c.sets[e.set];
+            w.dstSet = sets[e.set];
             w.dstBinding = e.binding;
             w.dstArrayElement = e.index;
             w.descriptorCount = 1;
@@ -917,7 +991,7 @@ private:
             switch (binding->type)
             {
             case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-                if (e.kind == "buffer") bufferInfo.buffer = buffers.at(e.id).buffer;
+                if (e.kind == "buffer") bufferInfo.buffer = buffers.at(swapped && bufferSwap.count(e.id) != 0 ? bufferSwap.at(e.id) : e.id).buffer;
                 w.pBufferInfo = &bufferInfo;
                 break;
             case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:

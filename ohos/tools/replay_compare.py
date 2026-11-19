@@ -41,7 +41,7 @@ def names_of(bake, kind, id_):
         for (path, index), record in call["binds"].items():
             if record[0] == kind and int(record[1]) == id_:
                 found.add(path)
-    roles = [role for role, (k, i) in bake["named"].items() if kind == "buffer" and i == id_]
+    roles = [role for role, (k, i) in bake["named"].items() if k == kind and i == id_]
     return sorted(found, key=len), roles
 
 

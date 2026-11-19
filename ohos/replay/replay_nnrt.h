@@ -115,7 +115,7 @@ public:
             size_t offset = 0;
             for (size_t layer = 0; layer < layers; layer++)
             {
-                // The weight gradients are small (28,672 values in all) and stay in NNRt's own tensors.
+                // The weight gradients are small (some 25,000 values in all) and stay in NNRt's own tensors.
                 const uint16_t* g = static_cast<const uint16_t*>(OH_NNTensor_GetDataBuffer(outputs[layer]));
                 const size_t count = net.mlp->layerSizes()[layer];
                 for (size_t i = 0; i < count; i++) weightGradient[offset + i] += halfToFloat(g[i]);
@@ -243,7 +243,9 @@ private:
         size_t inputCount = 0, outputCount = 0;
         OH_NNExecutor_GetInputCount(m.executor, &inputCount);
         OH_NNExecutor_GetOutputCount(m.executor, &outputCount);
-        if (inputCount != inputBytes.size() || outputCount != outputBytes.size()) fail(path + " does not have the inputs and outputs of an NCR graph");
+        if (inputCount != inputBytes.size() || outputCount != outputBytes.size())
+            fail(path + " does not have the inputs and outputs of an NCR graph with " + std::to_string(mlp.hiddenLayers) +
+                 " hidden layers, which is what the checkpoint has (export the models again: ohos/npu/export_models.py)");
         for (size_t i = 0; i < inputCount + outputCount; i++)
         {
             const bool input = i < inputCount;

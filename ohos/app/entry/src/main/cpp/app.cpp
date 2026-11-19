@@ -765,6 +765,11 @@ void runScene(App& app, const SceneEntry& scene)
                 runtime.schedule().reset();
                 app.message = "training schedule reset";
             }
+            else if (command == "clearHistory")
+            {
+                runtime.clearHistory();
+                app.message = "cluster history cleared";
+            }
             else if (command == "resetCamera")
             {
                 runtime.setCamera(bakedCamera);
@@ -849,9 +854,11 @@ void runScene(App& app, const SceneEntry& scene)
         std::string json = baseState(app, status, &scene, true);
         json += format(",\"frame\":%u,\"frameMs\":%.2f,\"presentMs\":%.2f,\"smoothMs\":%.2f,\"trainSteps\":%u,\"events\":%u", runtime.bakedFrame() + frame,
                        runtime.lastFrameMs(), presentMs, shownMs, runtime.trainSteps(), runtime.lastEvents());
-        json += format(",\"caps\":{\"animated\":%s,\"postFilter\":%s,\"lights\":%s,\"renderPath\":%s,\"train\":%s,\"savedModel\":%s}",
+        json += format(",\"caps\":{\"animated\":%s,\"postFilter\":%s,\"lights\":%s,\"renderPath\":%s,\"train\":%s,\"savedModel\":%s,"
+                       "\"clusterReuse\":%s}",
                        runtime.animated() ? "true" : "false", runtime.hasPostFilter() ? "true" : "false", runtime.hasLights() ? "true" : "false",
-                       runtime.hasRenderPath() ? "true" : "false", runtime.trains() ? "true" : "false", fileExists(app.modelPath(scene)) ? "true" : "false");
+                       runtime.hasRenderPath() ? "true" : "false", runtime.trains() ? "true" : "false", fileExists(app.modelPath(scene)) ? "true" : "false",
+                       runtime.clusterReuse() ? "true" : "false");
         json += ",\"settings\":{";
         bool firstSetting = true;
         for (const std::string& setting : Runtime::settingNames())
