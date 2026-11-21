@@ -4,11 +4,15 @@ from falcor import *
 def render_graph_PathTracer():
     g = RenderGraph("NeuralRadiosity")
 
-    # Launcher option (run.bat / run.sh): NCR_MIRROR_ALBEDO=1 or 0 sets the pass's "Mirror Albedo" box.
-    # Unset: the pass's default, which is on.
+    # Launcher options (run.bat / run.sh), each 1 or 0; unset leaves the pass's default, which is on.
+    #   NCR_MIRROR_ALBEDO    the pass's "Mirror Albedo" box
+    #   NCR_TRAIN_SCHEDULE   "Enable" under "Training Schedule": the learning rate and EMA decay follow
+    #                        the heat; off keeps the hot values
     props = {}
     if "NCR_MIRROR_ALBEDO" in os.environ:
         props["enableMirrorAlbedo"] = os.environ["NCR_MIRROR_ALBEDO"] == "1"
+    if "NCR_TRAIN_SCHEDULE" in os.environ:
+        props["enableTrainSchedule"] = os.environ["NCR_TRAIN_SCHEDULE"] == "1"
 
     NeuralRadiosity = createPass("NeuralRadiosity", props)
     g.addPass(NeuralRadiosity, "NeuralRadiosity")

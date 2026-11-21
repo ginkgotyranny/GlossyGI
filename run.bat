@@ -13,7 +13,10 @@ rem   run.bat ptnrd kitchen
 rem   Options: --width/-w N   --height/-h N   --device/-d d3d12|vulkan   --gpu N
 rem            --camera-anim on|off     the cameras follow their animation path (default on)
 rem            --mirror-albedo on|off   NeuralRadiosity's Mirror Albedo (ncr only, default on)
-rem   Interactive mode asks for both after the scene variant.
+rem            --train-schedule on|off  NeuralRadiosity's online training schedule: learning rate and
+rem                                     EMA decay follow the heat (ncr only, default on; off keeps
+rem                                     the hot values)
+rem   Interactive mode asks for them after the scene variant.
 rem   Set NCR_RUN_DRYRUN=1 to print the command without launching.
 rem   Set NCR_BUILD_DIR=build\windows-vs2022-vk to launch a different build tree.
 rem ============================================================================
@@ -39,11 +42,13 @@ set "SCENE_SUFFIX_SET=0"
 set "SCENE_INTERACTIVE="
 set "CAMERA_ANIM="
 set "MIRROR_ALBEDO="
+set "TRAIN_SCHEDULE="
 rem Options for Mogwai's scripts (scripts\run_launch.py, scripts\NeuralRadiosity.py) come from this
 rem launcher only: values left in the calling shell must not leak in.
 set "NCR_GRAPH_SCRIPT="
 set "NCR_CAMERA_ANIMATED="
 set "NCR_MIRROR_ALBEDO="
+set "NCR_TRAIN_SCHEDULE="
 
 rem ---------------------------------------------------------------------------
 rem Script registry (alphabetical, same set as run.sh).
@@ -79,6 +84,7 @@ if /i "%A%"=="-d"         ( set "DEVICE_ARGS=!DEVICE_ARGS! --device-type=%~2" & 
 if /i "%A%"=="--gpu"      ( set "DEVICE_ARGS=!DEVICE_ARGS! --gpu=%~2" & shift & shift & goto argloop )
 if /i "%A%"=="--camera-anim"   ( set "CAMERA_ANIM=%~2" & shift & shift & goto argloop )
 if /i "%A%"=="--mirror-albedo" ( set "MIRROR_ALBEDO=%~2" & shift & shift & goto argloop )
+if /i "%A%"=="--train-schedule" ( set "TRAIN_SCHEDULE=%~2" & shift & shift & goto argloop )
 if not defined SCRIPT_KEY ( set "SCRIPT_KEY=%A%" & shift & goto argloop )
 if not defined SCENE_NAME ( set "SCENE_NAME=%A%" & shift & goto argloop )
 echo Unknown argument: %A%
@@ -207,8 +213,9 @@ if "!SCENE_SUFFIX_SET!"=="0" (
 )
 
 rem ---------------------------------------------------------------------------
-rem Camera animation and Mirror Albedo: asked after the variant when the scene was picked from the
-rem menu, unless given on the command line. Mirror Albedo belongs to NeuralRadiosity (ncr) only.
+rem Camera animation, Mirror Albedo and the training schedule: asked after the variant when the scene
+rem was picked from the menu, unless given on the command line. Mirror Albedo and the training
+rem schedule belong to NeuralRadiosity (ncr) only.
 rem ---------------------------------------------------------------------------
 if defined SCENE_INTERACTIVE (
     if not defined CAMERA_ANIM (
@@ -223,12 +230,23 @@ if defined SCENE_INTERACTIVE (
         if defined MIRROR_CHOICE set "MIRROR_CHOICE=!MIRROR_CHOICE: =!"
         if "!MIRROR_CHOICE!"=="2" ( set "MIRROR_ALBEDO=off" ) else ( set "MIRROR_ALBEDO=on" )
     )
+    if /i "!SCRIPT_KEY!"=="ncr" if not defined TRAIN_SCHEDULE (
+        set "SCHEDULE_CHOICE="
+        set /p SCHEDULE_CHOICE="Training schedule (LR / EMA heat): [1] on  [2] off [1]: "
+        if defined SCHEDULE_CHOICE set "SCHEDULE_CHOICE=!SCHEDULE_CHOICE: =!"
+        if "!SCHEDULE_CHOICE!"=="2" ( set "TRAIN_SCHEDULE=off" ) else ( set "TRAIN_SCHEDULE=on" )
+    )
 )
 call :onoff CAMERA_ANIM --camera-anim || exit /b 1
 call :onoff MIRROR_ALBEDO --mirror-albedo || exit /b 1
+call :onoff TRAIN_SCHEDULE --train-schedule || exit /b 1
 if defined MIRROR_ALBEDO if /i not "!SCRIPT_KEY!"=="ncr" (
     echo Note: --mirror-albedo belongs to the ncr script; ignored for !SCRIPT_KEY!
     set "MIRROR_ALBEDO="
+)
+if defined TRAIN_SCHEDULE if /i not "!SCRIPT_KEY!"=="ncr" (
+    echo Note: --train-schedule belongs to the ncr script; ignored for !SCRIPT_KEY!
+    set "TRAIN_SCHEDULE="
 )
 
 set "SCENE_BASE=%SCENE_ROOT%\%SCENE_NAME%"
@@ -253,6 +271,7 @@ echo  Scene  : %SCENE_NAME% (%SCENE_SUFFIX%)
 echo  File   : %SCENE_FILE%
 if defined CAMERA_ANIM echo  Camera : animation !CAMERA_ANIM!
 if defined MIRROR_ALBEDO echo  Mirror : albedo !MIRROR_ALBEDO!
+if defined TRAIN_SCHEDULE echo  Train  : schedule !TRAIN_SCHEDULE!
 echo  Window : %WIDTH%x%HEIGHT%
 echo  Binary : %BIN%
 if defined DEVICE_ARGS echo  Device :%DEVICE_ARGS%
@@ -270,11 +289,14 @@ if /i "!CAMERA_ANIM!"=="off" (
 )
 if /i "!MIRROR_ALBEDO!"=="on" set "NCR_MIRROR_ALBEDO=1"
 if /i "!MIRROR_ALBEDO!"=="off" set "NCR_MIRROR_ALBEDO=0"
+if /i "!TRAIN_SCHEDULE!"=="on" set "NCR_TRAIN_SCHEDULE=1"
+if /i "!TRAIN_SCHEDULE!"=="off" set "NCR_TRAIN_SCHEDULE=0"
 
 if defined NCR_RUN_DRYRUN (
     if defined NCR_GRAPH_SCRIPT echo [dryrun] set NCR_GRAPH_SCRIPT=!NCR_GRAPH_SCRIPT!
     if defined NCR_CAMERA_ANIMATED echo [dryrun] set NCR_CAMERA_ANIMATED=!NCR_CAMERA_ANIMATED!
     if defined NCR_MIRROR_ALBEDO echo [dryrun] set NCR_MIRROR_ALBEDO=!NCR_MIRROR_ALBEDO!
+    if defined NCR_TRAIN_SCHEDULE echo [dryrun] set NCR_TRAIN_SCHEDULE=!NCR_TRAIN_SCHEDULE!
     echo [dryrun] "%BIN%"%DEVICE_ARGS%!LAUNCH_ARGS! --width %WIDTH% --height %HEIGHT% --script "!LAUNCH_SCRIPT!" --scene "%SCENE_FILE%"
     exit /b 0
 )

@@ -19,7 +19,9 @@
 #   --width/-w N  --height/-h N
 #   --camera-anim on|off     the cameras follow their animation path (default on)
 #   --mirror-albedo on|off   NeuralRadiosity's Mirror Albedo (ncr only, default on)
-# Interactive mode asks for both after the scene variant.
+#   --train-schedule on|off  NeuralRadiosity's online training schedule: learning rate and EMA decay
+#                            follow the heat (ncr only, default on; off keeps the hot values)
+# Interactive mode asks for them after the scene variant.
 # NCR_RUN_DRYRUN=1 prints the command instead of launching.
 
 set -e
@@ -84,6 +86,7 @@ SCENE_NAME=""
 SCENE_SUFFIX="static"
 CAMERA_ANIM=""
 MIRROR_ALBEDO=""
+TRAIN_SCHEDULE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -91,6 +94,7 @@ while [[ $# -gt 0 ]]; do
         --height|-h) HEIGHT="$2"; shift 2 ;;
         --camera-anim)   CAMERA_ANIM="$2";   shift 2 ;;
         --mirror-albedo) MIRROR_ALBEDO="$2"; shift 2 ;;
+        --train-schedule) TRAIN_SCHEDULE="$2"; shift 2 ;;
         anim|animation) SCENE_SUFFIX="anim"; shift ;;
         *)
             if [[ -z "$SCRIPT_KEY" ]]; then
@@ -174,7 +178,8 @@ if [[ -z "$SCENE_NAME" ]]; then
         fi
     fi
 
-    # camera animation and Mirror Albedo (NeuralRadiosity only), unless given on the command line
+    # camera animation, and Mirror Albedo and the training schedule (NeuralRadiosity only), unless
+    # given on the command line
     if [[ -z "$CAMERA_ANIM" ]]; then
         read -rp "Camera animation: [1] on  [2] off [1]: " CAM_CHOICE
         case "${CAM_CHOICE:-1}" in 2|off) CAMERA_ANIM="off" ;; *) CAMERA_ANIM="on" ;; esac
@@ -182,6 +187,10 @@ if [[ -z "$SCENE_NAME" ]]; then
     if [[ "$SCRIPT_KEY" == "ncr" && -z "$MIRROR_ALBEDO" ]]; then
         read -rp "Mirror Albedo: [1] on  [2] off [1]: " MIRROR_CHOICE
         case "${MIRROR_CHOICE:-1}" in 2|off) MIRROR_ALBEDO="off" ;; *) MIRROR_ALBEDO="on" ;; esac
+    fi
+    if [[ "$SCRIPT_KEY" == "ncr" && -z "$TRAIN_SCHEDULE" ]]; then
+        read -rp "Training schedule (LR / EMA heat): [1] on  [2] off [1]: " SCHEDULE_CHOICE
+        case "${SCHEDULE_CHOICE:-1}" in 2|off) TRAIN_SCHEDULE="off" ;; *) TRAIN_SCHEDULE="on" ;; esac
     fi
 fi
 
@@ -196,9 +205,14 @@ normalize_onoff() {
 }
 CAMERA_ANIM="$(normalize_onoff "$CAMERA_ANIM" --camera-anim)" || exit 1
 MIRROR_ALBEDO="$(normalize_onoff "$MIRROR_ALBEDO" --mirror-albedo)" || exit 1
+TRAIN_SCHEDULE="$(normalize_onoff "$TRAIN_SCHEDULE" --train-schedule)" || exit 1
 if [[ -n "$MIRROR_ALBEDO" && "$SCRIPT_KEY" != "ncr" ]]; then
     echo "Note: --mirror-albedo belongs to the ncr script; ignored for $SCRIPT_KEY"
     MIRROR_ALBEDO=""
+fi
+if [[ -n "$TRAIN_SCHEDULE" && "$SCRIPT_KEY" != "ncr" ]]; then
+    echo "Note: --train-schedule belongs to the ncr script; ignored for $SCRIPT_KEY"
+    TRAIN_SCHEDULE=""
 fi
 
 # resolve suffix if user passed it as part of scene name (e.g. "living-room anim")
@@ -220,12 +234,13 @@ echo " Scene  : $SCENE_NAME ($SCENE_SUFFIX)"
 echo " File   : $SCENE_FILE"
 [[ -n "$CAMERA_ANIM" ]] && echo " Camera : animation $CAMERA_ANIM"
 [[ -n "$MIRROR_ALBEDO" ]] && echo " Mirror : albedo $MIRROR_ALBEDO"
+[[ -n "$TRAIN_SCHEDULE" ]] && echo " Train  : schedule $TRAIN_SCHEDULE"
 echo " Window : ${WIDTH}x${HEIGHT}"
 echo "============================================"
 
 # --- launch ---
 # Options for Mogwai's scripts (scripts/run_launch.py, scripts/NeuralRadiosity.py) come from here only.
-unset NCR_GRAPH_SCRIPT NCR_CAMERA_ANIMATED NCR_MIRROR_ALBEDO
+unset NCR_GRAPH_SCRIPT NCR_CAMERA_ANIMATED NCR_MIRROR_ALBEDO NCR_TRAIN_SCHEDULE
 LAUNCH_SCRIPT="$SCRIPT_FULL"
 LAUNCH_ARGS=()
 if [[ "$CAMERA_ANIM" == "off" ]]; then
@@ -239,9 +254,13 @@ case "$MIRROR_ALBEDO" in
     on)  export NCR_MIRROR_ALBEDO=1 ;;
     off) export NCR_MIRROR_ALBEDO=0 ;;
 esac
+case "$TRAIN_SCHEDULE" in
+    on)  export NCR_TRAIN_SCHEDULE=1 ;;
+    off) export NCR_TRAIN_SCHEDULE=0 ;;
+esac
 CMD=("$BIN" "${LAUNCH_ARGS[@]}" --width "$WIDTH" --height "$HEIGHT" --script "$LAUNCH_SCRIPT" --scene "$SCENE_FILE")
 if [[ -n "$NCR_RUN_DRYRUN" ]]; then
-    for v in NCR_GRAPH_SCRIPT NCR_CAMERA_ANIMATED NCR_MIRROR_ALBEDO; do
+    for v in NCR_GRAPH_SCRIPT NCR_CAMERA_ANIMATED NCR_MIRROR_ALBEDO NCR_TRAIN_SCHEDULE; do
         [[ -n "${!v}" ]] && echo "[dryrun] $v=${!v}"
     done
     echo "[dryrun] ${CMD[*]}"
