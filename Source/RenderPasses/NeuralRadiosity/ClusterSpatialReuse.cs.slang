@@ -2,11 +2,11 @@
 
     Temporal accumulation converges too slowly on freshly disoccluded pixels, so
     the neighbourhood fills in the missing modes for the current frame. Taps are
-    gathered inside the cone's screen-space projection and accepted by exactly
-    the same geometric test as the temporal path: the neighbour's world anchor
-    must lie inside *our* cone. Being purely geometric, that test rejects curved
-    surfaces, roughness jumps and occlusion differences on its own, which fits
-    the problem better than normal/depth bilateral weights.
+    gathered inside the cone's screen-space projection. Surface and roughness
+    compatibility is checked before testing world anchors against our cone.
+    Cone inclusion alone does not establish compatible sampling distributions
+    or visibility. Rejected cluster mass falls back to the pixel's own mixture,
+    rather than becoming false environment probability.
 
     The merged mixture is a convex combination, `M = (1-g) M_self + g M_neigh`,
     with g rising as the pixel's own evidence (sum n_k) falls. It is written to
@@ -66,6 +66,8 @@ struct ClusterSpatialReuse
 
     /// 0 disables the gather and writes the temporal result unchanged.
     uint enableSpatialReuse = 1;
+    /// Explicit frozen-model diagnostic only; normal rendering uses the new policy.
+    uint diagnosticLegacyReuse = 0;
     /// 0 keeps the environment color and skips the mirror ray.
     uint enableMirrorAlbedo = 1;
     /// kEnvColorEncoding* in MirrorAlbedo.slang.
@@ -93,6 +95,26 @@ struct ClusterSpatialReuse
         return max(2.f * camDist * tanHalfFovY / max(float(frameDim.y), 1.f), 1e-8f);
     }
 
+    /** Smooth compatibility avoids a binary gate flickering on near-threshold
+        surfaces. Alpha is roughness squared, so this compares NDF widths.
+        The plane test permits tangential neighbours but rejects depth steps.
+        It is a local surface test, not a reflected-ray visibility test.
+    */
+    float tapCompatibility(float3 pos, float3 normal, float roughness,
+                           float3 tapPos, float3 tapNormal, float tapRoughness)
+    {
+        const float alpha = max(roughness * roughness, 1e-4f);
+        const float tapAlpha = max(tapRoughness * tapRoughness, 1e-4f);
+        const float widthRatio = min(alpha, tapAlpha) / max(alpha, tapAlpha);
+        const float widthWeight = smoothstep(0.5f, 0.8f, widthRatio);
+        const float normalWeight = smoothstep(0.9f, 0.98f, dot(normal, tapNormal));
+        const float3 delta = tapPos - pos;
+        const float planeDistance = max(abs(dot(delta, normal)), abs(dot(delta, tapNormal)));
+        const float footprint = max(max(pixelFootprint(pos), pixelFootprint(tapPos)), epsScene);
+        const float planeWeight = 1.f - smoothstep(1.f, 2.f, planeDistance / footprint);
+        return widthWeight * normalWeight * planeWeight;
+    }
+
     void execute(const uint idx)
     {
         if (idx >= specSize) return;
@@ -104,7 +126,8 @@ struct ClusterSpatialReuse
         const float3 pos = gPos[pixel].xyz;
         const float3 rayDir = gDir[pixel].xyz;
         const float roughness = gRoughness[pixel];
-        const float3 reflectDir = normalize(reflect(rayDir, normalize(gNormal[pixel].xyz)));
+        const float3 normal = normalize(gNormal[pixel].xyz);
+        const float3 reflectDir = normalize(reflect(rayDir, normal));
 
         float tanLobe = 0.f;
         float cosLobe = 1.f;
@@ -126,7 +149,7 @@ struct ClusterSpatialReuse
             const uint hash = pixel.x * 1664525u + pixel.y * 1013904223u;
             const float baseAngle = float(hash % 64u) * kGoldenAngle;
 
-            uint validTaps = 0;
+            float validTapWeight = 0.f;
 
             [loop]
             for (uint i = 0; i < numTaps; ++i)
@@ -144,11 +167,15 @@ struct ClusterSpatialReuse
 
                 const float3 tapPos = gPos[tap].xyz;
                 const float3 tapNormal = normalize(gNormal[tap].xyz);
+                const float compatibility = diagnosticLegacyReuse != 0 ? 1.f :
+                    tapCompatibility(pos, normal, roughness, tapPos, tapNormal, gRoughness[tap]);
+                if (compatibility <= 0.f) continue;
                 const float3 tapReflect = normalize(reflect(gDir[tap].xyz, tapNormal));
                 const ClusterSet neighbor = unpackClusterSet(clusterHistory[tapIdx]);
 
                 uint neighborModes = 0;
                 uint accepted = 0;
+                float rejectedWeight = 0.f;
 
                 [unroll]
                 for (uint k = 0; k < kClusterCount; ++k)
@@ -159,27 +186,47 @@ struct ClusterSpatialReuse
                     const float3 anchor = clusterAnchor(tapPos, tapReflect, neighbor.t[k]);
 
                     float tCur = 0.f;
-                    if (!clusterInCone(anchor, pos, reflectDir, cosLobe, tCur)) continue;
+                    if (!clusterInCone(anchor, pos, reflectDir, cosLobe, tCur))
+                    {
+                        rejectedWeight += neighbor.w[k];
+                        continue;
+                    }
+                    const int slot = routeNeighborCluster(self, acc, tCur, tanLobe, epsScene, assignThreshold, diagnosticLegacyReuse == 0);
+                    if (slot < 0)
+                    {
+                        rejectedWeight += neighbor.w[k];
+                        continue;
+                    }
                     ++accepted;
-
-                    const int slot = routeNeighborCluster(self, acc, tCur, tanLobe, epsScene, assignThreshold);
-                    accumulateNeighborCluster(acc, slot, neighbor.w[k], tCur, neighbor.sigma[k]);
+                    accumulateNeighborCluster(acc, slot, compatibility * neighbor.w[k], tCur, neighbor.sigma[k]);
                 }
 
-                // A tap only votes when its evidence is actually about our cone.
-                // A neighbour whose modes all sit outside the cone says nothing
-                // about us, so counting it would shrink our weights for free; a
-                // neighbour with no modes at all does carry information (its cone
-                // escapes to the environment) and is counted.
-                if (accepted > 0 || neighborModes == 0) ++validTaps;
+                // Entirely incompatible taps provide no evidence. For partial
+                // rejection, replace only rejected hit mass by our own mixture;
+                // keep the neighbour's actual environment probability unchanged.
+                if (accepted > 0 || neighborModes == 0)
+                {
+                    validTapWeight += compatibility;
+                    if (diagnosticLegacyReuse == 0 && rejectedWeight > 0.f)
+                    {
+                        [unroll]
+                        for (uint k = 0; k < kClusterCount; ++k)
+                        {
+                            if (!isClusterActive(self, k)) continue;
+                            accumulateNeighborCluster(acc, k, compatibility * rejectedWeight * self.w[k], self.t[k], self.sigma[k]);
+                        }
+                    }
+                }
             }
 
-            if (validTaps > 0)
+            if (validTapWeight > 0.f)
             {
-                // A pixel that has barely observed anything leans on its neighbours.
                 const float confidence = saturate(clusterCountSum(self) / max(confidenceCount, 1e-3f));
-                const float gamma = lerp(gammaMax, gammaMin, confidence);
-                const float invTaps = 1.f / float(validTaps);
+                // A single weakly compatible neighbour must not get the full
+                // influence of a complete ring after normalization.
+                const float support = diagnosticLegacyReuse != 0 ? 1.f : saturate(validTapWeight / float(numTaps));
+                const float gamma = lerp(gammaMax, gammaMin, confidence) * support;
+                const float invTaps = 1.f / validTapWeight;
 
                 [unroll]
                 for (uint k = 0; k < kClusterCount; ++k)

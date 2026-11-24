@@ -216,6 +216,15 @@ struct ClusterReproject
                         if (anyKept)
                         {
                             ClusterLockState lockState = unpackClusterLockState(clusterLockStateIn[prevIdx]);
+                            // The visibility probe is tied to a screen pixel and
+                            // its ray frame. Do not compare different probe rays
+                            // across camera motion, reprojection, or moving surfaces.
+                            if (cameraMoved() || any(prevPixel != pixel) ||
+                                length(posPrev - posCur) > epsScene ||
+                                dot(normalPrev, normalCur) < 0.99999f ||
+                                dot(reflectPrev, reflectCur) < 0.99999f ||
+                                abs(roughnessPrev - roughnessCur) > 1e-5f)
+                                if (lockState.visibilityDepth != kVisibilityResetPending) lockState.visibilityDepth = 0;
                             const float frameDrift = keptWeight > 0.f ? driftSum / keptWeight : 0.f;
                             lockState.drift += frameDrift;
                             if (cameraMoved() || frameDrift > motionDrift) capClusterObservations(cs, motionMemory);

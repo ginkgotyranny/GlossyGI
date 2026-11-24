@@ -1,6 +1,8 @@
 #include "Model.h"
 #include "HashGrid.h"
 #include "HashGridInterp.h"
+#include "TrainingBatch.h"
+#include "Diagnostics.h"
 // #include "NeuralModel.h"
 // #include "NeuralConeModel.h"
 #include <cuda_runtime.h>
@@ -9,6 +11,13 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <cmath>
+#include <cstdio>
+#include <random>
+#include <cstring>
+#include <limits>
+#include <fmt/format.h>
+#include "tiny-cuda-nn/random.h"
 #include "tiny-cuda-nn/config.h"
 #include "tiny-cuda-nn/loss.h"
 #include "tiny-cuda-nn/optimizer.h"
@@ -134,39 +143,119 @@ struct DebugDump {
 };
 DebugDump gDump;
 
+void syncInitialParameters(
+    cudaStream_t stream,
+    const tcnn::GPUMemory<float>& master,
+    tcnn::GPUMemory<precision_t>& working,
+    tcnn::GPUMemory<precision_t>& gradients,
+    precision_t* inference)
+{
+    const float* src = master.data();
+    precision_t* dst = working.data();
+    tcnn::parallel_for_gpu(stream, master.size(), [src, dst, inference] __device__ (size_t i) {
+        const precision_t value = precision_t(src[i]);
+        dst[i] = value;
+        inference[i] = value;
+    });
+    CUDA_CHECK_THROW(cudaMemsetAsync(gradients.data(), 0, gradients.bytes(), stream));
+}
+
+// Read back once at startup. Working and EMA values must match the rounded
+// master parameters exactly; FP32 -> FP16 quantization error itself is expected.
+void logInitializationStats(
+    const char* name,
+    const tcnn::GPUMemory<float>& master,
+    const precision_t* working,
+    const precision_t* inference,
+    const tcnn::Optimizer<precision_t>& optimizer)
+{
+    const size_t count = master.size();
+    CHECK_THROW(count > 0);
+    std::vector<float> fp32(count);
+    std::vector<precision_t> fp16(count), ema(count);
+    CUDA_CHECK_THROW(cudaMemcpy(fp32.data(), master.data(), master.bytes(), cudaMemcpyDeviceToHost));
+    CUDA_CHECK_THROW(cudaMemcpy(fp16.data(), working, count * sizeof(precision_t), cudaMemcpyDeviceToHost));
+    CUDA_CHECK_THROW(cudaMemcpy(ema.data(), inference, count * sizeof(precision_t), cudaMemcpyDeviceToHost));
+
+    double sum = 0., sumSquared = 0.;
+    float minValue = std::numeric_limits<float>::infinity();
+    float maxValue = -std::numeric_limits<float>::infinity();
+    float maxQuantizationError = 0.f, maxEmaError = 0.f;
+    size_t nonFiniteMaster = 0, nonFiniteWorking = 0, nonFiniteEma = 0;
+    size_t castMismatch = 0, emaMismatch = 0, zeroWorking = 0;
+    uint64_t fingerprint = 14695981039346656037ull;
+    for (size_t i = 0; i < count; ++i)
+    {
+        const float x = fp32[i], w = float(fp16[i]), e = float(ema[i]);
+        nonFiniteMaster += !std::isfinite(x);
+        nonFiniteWorking += !std::isfinite(w);
+        nonFiniteEma += !std::isfinite(e);
+        castMismatch += w != float(precision_t(x));
+        emaMismatch += e != w;
+        zeroWorking += w == 0.f;
+        if (std::isfinite(x))
+        {
+            minValue = std::min(minValue, x);
+            maxValue = std::max(maxValue, x);
+            sum += x;
+            sumSquared += double(x) * x;
+        }
+        if (std::isfinite(x) && std::isfinite(w)) maxQuantizationError = std::max(maxQuantizationError, std::abs(x - w));
+        if (std::isfinite(w) && std::isfinite(e)) maxEmaError = std::max(maxEmaError, std::abs(w - e));
+        uint32_t bits;
+        std::memcpy(&bits, &x, sizeof(bits));
+        for (uint32_t shift = 0; shift < 32; shift += 8)
+        {
+            fingerprint ^= (bits >> shift) & 0xffu;
+            fingerprint *= 1099511628211ull;
+        }
+    }
+    const double mean = sum / count;
+    const double stddev = std::sqrt(std::max(0., sumSquared / count - mean * mean));
+    fmt::print(
+        "[NCR Init] {} count={} fp32[min={:.7g} max={:.7g} mean={:.7g} std={:.7g}] "
+        "nonfinite[fp32={} working={} ema={}] working_zero={} cast_mismatch={} ema_mismatch={} "
+        "max_quant_error={:.7g} max_ema_error={:.7g} optimizer_step={} fingerprint={:016x}\n",
+        name, count, minValue, maxValue, mean, stddev, nonFiniteMaster, nonFiniteWorking, nonFiniteEma,
+        zeroWorking, castMismatch, emaMismatch, maxQuantizationError, maxEmaError, optimizer.step(), fingerprint
+    );
+    CHECK_THROW(nonFiniteMaster == 0 && nonFiniteWorking == 0 && nonFiniteEma == 0);
+    CHECK_THROW(castMismatch == 0 && emaMismatch == 0 && optimizer.step() == 0);
+}
+
 } // namespace
 
-NRModel::NRModel() {
+NRModel::NRModel(const NRModelConfig& config) : mConfig(config) {
+    CHECK_THROW(std::isfinite(mConfig.initGridScale) && mConfig.initGridScale > 0.f && mConfig.initGridScale <= 1.f);
     CUDA_CHECK_THROW(cudaStreamCreate(&mTrainStream));
     CUDA_CHECK_THROW(cudaStreamCreate(&mInferenceStream));
 
     mDiffGBufferDim = 3 * 4 + 1;
     mSpecGBufferDim = 3 * 5 + 1 + NCR_NUM_CLUSTERS * (3 + 1 + 1);
-    mDiffInputDim = padUp(NCR_N_FEATURES_PER_LEVEL * NCR_N_LEVELS + mDiffGBufferDim, 16);
-    mSpecInputDim = padUp(NCR_N_FEATURES_PER_LEVEL * NCR_N_LEVELS + NCR_N_FEATURES_PER_LEVEL_SPEC * NCR_NUM_CLUSTERS + mSpecGBufferDim, 16);
+    mDiffInputDim = padUp(mConfig.nFeaturesPerLevel * mConfig.nLevels + mDiffGBufferDim, 16);
+    mSpecInputDim = padUp(mConfig.nFeaturesPerLevel * mConfig.nLevels + mConfig.nFeaturesPerLevelSpec * NCR_NUM_CLUSTERS + mSpecGBufferDim, 16);
     mOutputDim = NCR_OUTPUT_DIM;
 
-    int seed = 1337;
-    std::seed_seq seq{seed};
+    std::seed_seq seq{mConfig.initSeed};
     std::vector<uint32_t> seeds(2);
     seq.generate(std::begin(seeds), std::end(seeds));
     mpRng = std::make_shared<tcnn::pcg32>(seeds.front());
 
     mPrimGridConfig = {
-        NCR_N_LEVELS,
-        NCR_N_FEATURES_PER_LEVEL,
-        NCR_LOG2_HASHMAP_SIZE,
-        NCR_BASE_RESOLUTION,
-        NCR_PER_LEVEL_SCALE
+        mConfig.nLevels,
+        mConfig.nFeaturesPerLevel,
+        mConfig.log2HashmapSize,
+        mConfig.baseResolution,
+        mConfig.perLevelScale
     };
     mClsGridConfig = {
         NCR_NUM_CLUSTERS,
-        NCR_N_LEVELS_SPEC,
-        NCR_N_FEATURES_PER_LEVEL_SPEC,
-        NCR_LOG2_HASHMAP_SIZE_SPEC,
-        NCR_BASE_RESOLUTION_SPEC,
-        NCR_PER_LEVEL_SCALE_SPEC,
-        NCR_INTERP_RATIO
+        mConfig.nLevelsSpec,
+        mConfig.nFeaturesPerLevelSpec,
+        mConfig.log2HashmapSizeSpec,
+        mConfig.baseResolutionSpec,
+        mConfig.perLevelScaleSpec,
+        mConfig.interpRatio
     };
 
     mDiffEncOffset = 0;
@@ -233,8 +322,8 @@ void NRModel::createOnlineModels()
         {"output_activation", "SquarePlus"},
         {"n_input_dims", mDiffInputDim},
         {"n_output_dims", mOutputDim},
-        {"n_neurons", NCR_DIFF_N_NEURONS},
-        {"n_hidden_layers", NCR_DIFF_N_HIDDEN_LAYERS}
+        {"n_neurons", mConfig.diffNNeurons},
+        {"n_hidden_layers", mConfig.diffNHiddenLayers}
     };
 
     const tcnn::json specNetConfig = {
@@ -243,8 +332,8 @@ void NRModel::createOnlineModels()
         {"output_activation", "SquarePlus"},
         {"n_input_dims", mSpecInputDim},
         {"n_output_dims", mOutputDim},
-        {"n_neurons", NCR_SPEC_N_NEURONS},
-        {"n_hidden_layers", NCR_SPEC_N_HIDDEN_LAYERS}
+        {"n_neurons", mConfig.specNNeurons},
+        {"n_hidden_layers", mConfig.specNHiddenLayers}
     };
 
     mpDiffNet = std::shared_ptr<tcnn::Network<precision_t, precision_t>>(tcnn::create_network<precision_t>(diffNetConfig));
@@ -257,6 +346,17 @@ void NRModel::createOnlineModels()
     mpSpecParamsFull     = std::make_shared<tcnn::GPUMemory<float>>(mpSpecNet->n_params());
     mpDiffNet->initialize_params(*mpRng, mpDiffParamsFull->data());
     mpSpecNet->initialize_params(*mpRng, mpSpecParamsFull->data());
+
+    std::seed_seq gridSeedSeq{mConfig.initSeed, 0x47524944u};
+    uint32_t gridSeed;
+    gridSeedSeq.generate(&gridSeed, &gridSeed + 1);
+    tcnn::pcg32 gridRng(gridSeed);
+    tcnn::generate_random_uniform<float>(
+        mTrainStream, gridRng, mpPrimGridsFull->size(), mpPrimGridsFull->data(), -mConfig.initGridScale, mConfig.initGridScale
+    );
+    tcnn::generate_random_uniform<float>(
+        mTrainStream, gridRng, mpClsGridsFull->size(), mpClsGridsFull->data(), -mConfig.initGridScale, mConfig.initGridScale
+    );
     mPaddedOutputDim = mpDiffNet->padded_output_width();
     CHECK_THROW(mpSpecNet->padded_output_width() == mPaddedOutputDim);
     CHECK_THROW(mpDiffNet->output_width() == mOutputDim);
@@ -290,6 +390,30 @@ void NRModel::createOnlineModels()
     mpClsGridsInference = mpClsGridOpt->custom_weights() ? mpClsGridOpt->custom_weights() : mpClsGrids->data();
     mpDiffParamsInference = mpDiffNetOpt->custom_weights() ? mpDiffNetOpt->custom_weights() : mpDiffParams->data();
     mpSpecParamsInference = mpSpecNetOpt->custom_weights() ? mpSpecNetOpt->custom_weights() : mpSpecParams->data();
+
+    // Like tcnn::Trainer::set_params_full_precision(): initialize all three
+    // representations before the first RHS inference/forward. Do NOT take a dummy
+    // optimizer step: Adam moments and counters must remain at their initial state.
+    // EMA stays in its existing debiased mode. At step 0 this is the inference
+    // snapshot; the first real step has ema_debias_old == 0 and uses updated weights.
+    syncInitialParameters(mTrainStream, *mpPrimGridsFull, *mpPrimGrids, *mpPrimGridsGradient, mpPrimGridsInference);
+    syncInitialParameters(mTrainStream, *mpClsGridsFull, *mpClsGrids, *mpClsGridsGradient, mpClsGridsInference);
+    syncInitialParameters(mTrainStream, *mpDiffParamsFull, *mpDiffParams, *mpDiffParamsGradient, mpDiffParamsInference);
+    syncInitialParameters(mTrainStream, *mpSpecParamsFull, *mpSpecParams, *mpSpecParamsGradient, mpSpecParamsInference);
+    // Required even when diagnostics are off: inference uses a different stream.
+    CUDA_CHECK_THROW(cudaStreamSynchronize(mTrainStream));
+
+    if (mConfig.initDiagnostics)
+    {
+        fmt::print("[NCR Init] seed={} grid_uniform=[{}, {}] mlp=Xavier working_bits={} ema=debiased-step0-snapshot\n",
+            mConfig.initSeed, -mConfig.initGridScale, mConfig.initGridScale, 8 * sizeof(precision_t));
+        logInitializationStats("primary_grid", *mpPrimGridsFull, mpPrimGrids->data(), mpPrimGridsInference, *mpPrimGridOpt);
+        logInitializationStats("cluster_grid", *mpClsGridsFull, mpClsGrids->data(), mpClsGridsInference, *mpClsGridOpt);
+        logInitializationStats("diffuse_mlp", *mpDiffParamsFull, mpDiffParams->data(), mpDiffParamsInference, *mpDiffNetOpt);
+        logInitializationStats("specular_mlp", *mpSpecParamsFull, mpSpecParams->data(), mpSpecParamsInference, *mpSpecNetOpt);
+        fmt::print("[NCR Init] PASS: finite parameters, rounded master == working == EMA, optimizer steps == 0.\n");
+        std::fflush(stdout);
+    }
 
     mpDiffNet->set_params(mpDiffParams->data(), mpDiffParamsInference, mpDiffParamsGradient->data());
     mpSpecNet->set_params(mpSpecParams->data(), mpSpecParamsInference, mpSpecParamsGradient->data());
@@ -463,6 +587,7 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
     const uint32_t diffBatchSize = (diffPtrs.inputPtr && diffPtrs.outputPtr) ? padUp(diffPtrs.size, kModelBatchAlign) : 0;
     const uint32_t specBatchSize = (specPtrs.inputPtr && specPtrs.outputPtr) ? padUp(specPtrs.size, kModelBatchAlign) : 0;
 
+    tcnn::json diagnostic;
     const float lossScale = tcnn::default_loss_scale<precision_t>();
     const bool dump = gDump.enabled && !gDump.trainDone && ++gDump.trainCalls == gDump.step;
     if (dump) {
@@ -488,9 +613,10 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
 
     if (diffBatchSize > 0) {
         tcnn::GPUMatrix<precision_t> diffInput(diffPtrs.inputPtr, mDiffInputDim, diffBatchSize);
-        tcnn::GPUMatrix<float> diffTarget(diffPtrs.outputPtr, mOutputDim, diffBatchSize);
+        tcnn::GPUMatrix<float> diffTarget(diffPtrs.outputPtr, mOutputDim, diffPtrs.size);
+        ncr::clearTrainingInputPadding(mTrainStream, diffInput, diffPtrs.size);
         // Forward writes the padded 16-wide tile. The loss supervises mOutputDim
-        // and zeros the gradient on the padded channels.
+        // and zeros the gradient on padded channels and padded samples.
         tcnn::GPUMatrix<precision_t> networkOutput{mPaddedOutputDim, diffBatchSize, mTrainStream};
         tcnn::GPUMatrix<precision_t> dL_dnetworkOutput{mPaddedOutputDim, diffBatchSize, mTrainStream};
         tcnn::GPUMatrix<precision_t> dL_dnetworkInput{mDiffInputDim, diffBatchSize, mTrainStream};
@@ -502,7 +628,7 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
             mTrainStream,
             mpPrimGrids->data(),
             diffInput.data(),
-            diffBatchSize,
+            diffPtrs.size,
             mDiffInputDim,
             mDiffEncOffset,
             mDiffPosOffset,
@@ -510,16 +636,25 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
         );
         auto ctx = mpDiffNet->forward(mTrainStream, diffInput, &networkOutput);
         // Loss
-        mpLoss->evaluate(mTrainStream, lossScale, networkOutput, diffTarget, loss, dL_dnetworkOutput);
+        ncr::evaluateValidSamples(mTrainStream, lossScale, *mpLoss, networkOutput, diffTarget, loss, dL_dnetworkOutput);
         // Backward
         mpDiffNet->backward(mTrainStream, *ctx, diffInput, networkOutput, dL_dnetworkOutput, &dL_dnetworkInput);
+        if (mTrainingDiagnostics) {
+            CUDA_CHECK_THROW(cudaStreamSynchronize(mTrainStream));
+            diagnostic["diff"]["target"] = ncr::outputStatistics(diffTarget.data(), diffPtrs.size, mOutputDim, mOutputDim);
+            diagnostic["diff"]["working_prediction_pre_update"] = ncr::outputStatistics(networkOutput.data(), diffPtrs.size, mPaddedOutputDim, mOutputDim);
+            diagnostic["diff"]["input_values"] = ncr::gradientStatistics(diffInput.data(), size_t(diffPtrs.size)*mDiffInputDim, true, 1.f);
+            diagnostic["diff"]["full_output_values"] = ncr::gradientStatistics(networkOutput.data(), size_t(diffPtrs.size)*mPaddedOutputDim, true, 1.f);
+            diagnostic["diff"]["loss_output_gradient"] = ncr::gradientStatistics(dL_dnetworkOutput.data(), size_t(diffPtrs.size)*mPaddedOutputDim, true, lossScale);
+            diagnostic["diff"]["network_input_gradient"] = ncr::gradientStatistics(dL_dnetworkInput.data(), size_t(diffPtrs.size)*mDiffInputDim, true, lossScale);
+        }
         HashGrid::launchBackward(
             mTrainStream,
             mpPrimGrids->data(),
             diffInput.data(),
             dL_dnetworkInput.data(),
             mpPrimGridsGradient->data(),
-            diffBatchSize,
+            diffPtrs.size,
             mDiffInputDim,
             mDiffEncOffset,
             mDiffPosOffset,
@@ -538,7 +673,8 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
     }
     if (specBatchSize > 0) {
         tcnn::GPUMatrix<precision_t> specInput(specPtrs.inputPtr, mSpecInputDim, specBatchSize);
-        tcnn::GPUMatrix<float> specTarget(specPtrs.outputPtr, mOutputDim, specBatchSize);
+        tcnn::GPUMatrix<float> specTarget(specPtrs.outputPtr, mOutputDim, specPtrs.size);
+        ncr::clearTrainingInputPadding(mTrainStream, specInput, specPtrs.size);
         tcnn::GPUMatrix<precision_t> networkOutput{mPaddedOutputDim, specBatchSize, mTrainStream};
         tcnn::GPUMatrix<precision_t> dL_dnetworkOutput{mPaddedOutputDim, specBatchSize, mTrainStream};
         tcnn::GPUMatrix<precision_t> dL_dnetworkInput{mSpecInputDim, specBatchSize, mTrainStream};
@@ -550,7 +686,7 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
             mTrainStream,
             mpPrimGrids->data(),
             specInput.data(),
-            specBatchSize,
+            specPtrs.size,
             mSpecInputDim,
             mSpecPrimEncOffset,
             mSpecPosOffset,
@@ -560,7 +696,7 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
             mTrainStream,
             mpClsGrids->data(),
             specInput.data(),
-            specBatchSize,
+            specPtrs.size,
             mSpecInputDim,
             mSpecClsEncOffset,
             mSpecClsPosOffset,
@@ -570,16 +706,29 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
         );
         auto ctx = mpSpecNet->forward(mTrainStream, specInput, &networkOutput);
         // Loss
-        mpLoss->evaluate(mTrainStream, lossScale, networkOutput, specTarget, loss, dL_dnetworkOutput);
+        ncr::evaluateValidSamples(mTrainStream, lossScale, *mpLoss, networkOutput, specTarget, loss, dL_dnetworkOutput);
         // Backward
         mpSpecNet->backward(mTrainStream, *ctx, specInput, networkOutput, dL_dnetworkOutput, &dL_dnetworkInput);
+        if (mTrainingDiagnostics) {
+            CUDA_CHECK_THROW(cudaStreamSynchronize(mTrainStream));
+            diagnostic["spec"]["target"] = ncr::outputStatistics(specTarget.data(), specPtrs.size, mOutputDim, mOutputDim);
+            diagnostic["spec"]["working_prediction_pre_update"] = ncr::outputStatistics(networkOutput.data(), specPtrs.size, mPaddedOutputDim, mOutputDim);
+            diagnostic["spec"]["input_columns"] = ncr::inputColumnStatistics(specInput.data(), specPtrs.size, mSpecInputDim);
+            diagnostic["spec"]["input_layout"] = {{"width",mSpecInputDim},{"primary_encoding",mSpecPrimEncOffset},
+                {"cluster_encoding",mSpecClsEncOffset},{"position",mSpecPosOffset},{"cluster_position",mSpecClsPosOffset},
+                {"cluster_scale",mSpecClsScaleOffset},{"cluster_weight",mSpecClsWeightOffset},{"clusters",NCR_NUM_CLUSTERS}};
+            diagnostic["spec"]["input_values"] = ncr::gradientStatistics(specInput.data(), size_t(specPtrs.size)*mSpecInputDim, true, 1.f);
+            diagnostic["spec"]["full_output_values"] = ncr::gradientStatistics(networkOutput.data(), size_t(specPtrs.size)*mPaddedOutputDim, true, 1.f);
+            diagnostic["spec"]["loss_output_gradient"] = ncr::gradientStatistics(dL_dnetworkOutput.data(), size_t(specPtrs.size)*mPaddedOutputDim, true, lossScale);
+            diagnostic["spec"]["network_input_gradient"] = ncr::gradientStatistics(dL_dnetworkInput.data(), size_t(specPtrs.size)*mSpecInputDim, true, lossScale);
+        }
         HashGrid::launchBackward(
             mTrainStream,
             mpPrimGrids->data(),
             specInput.data(),
             dL_dnetworkInput.data(),
             mpPrimGridsGradient->data(),
-            specBatchSize,
+            specPtrs.size,
             mSpecInputDim,
             mSpecPrimEncOffset,
             mSpecPosOffset,
@@ -591,7 +740,7 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
             specInput.data(),
             dL_dnetworkInput.data(),
             mpClsGridsGradient->data(),
-            specBatchSize,
+            specPtrs.size,
             mSpecInputDim,
             mSpecClsEncOffset,
             mSpecClsPosOffset,
@@ -614,6 +763,19 @@ void NRModel::train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs) {
         gDump.writeDevice("train_spec_params_grad", "f16", mpSpecParamsGradient->size(), 1, mpSpecParamsGradient->data(), sizeof(precision_t));
         gDump.writeDevice("train_prim_grid_grad", "f16", mpPrimGridsGradient->size(), 1, mpPrimGridsGradient->data(), sizeof(precision_t));
         gDump.writeDevice("train_cls_grid_grad", "f16", mpClsGridsGradient->size(), 1, mpClsGridsGradient->data(), sizeof(precision_t));
+    }
+    if (mTrainingDiagnostics) {
+        CUDA_CHECK_THROW(cudaStreamSynchronize(mTrainStream));
+        diagnostic["diff_count"] = diffPtrs.size;
+        diagnostic["spec_count"] = specPtrs.size;
+        diagnostic["learning_rate"] = mLearningRate;
+        diagnostic["ema_decay"] = mEmaDecay;
+        diagnostic["gradient"]["diff_mlp"] = ncr::gradientStatistics(mpDiffParamsGradient->data(), mpDiffParamsGradient->size(), diffBatchSize>0, lossScale);
+        diagnostic["gradient"]["spec_mlp"] = ncr::gradientStatistics(mpSpecParamsGradient->data(), mpSpecParamsGradient->size(), specBatchSize>0, lossScale);
+        diagnostic["gradient"]["primary_grid"] = ncr::gradientStatistics(mpPrimGridsGradient->data(), mpPrimGridsGradient->size(), diffBatchSize>0 || specBatchSize>0, lossScale);
+        diagnostic["gradient"]["cluster_grid"] = ncr::gradientStatistics(mpClsGridsGradient->data(), mpClsGridsGradient->size(), specBatchSize>0, lossScale);
+        diagnostic["optimizer_steps_before"] = {mpDiffNetOpt->step(), mpSpecNetOpt->step(), mpPrimGridOpt->step(), mpClsGridOpt->step()};
+        mLastTrainingDiagnostics = diagnostic.dump();
     }
     if (diffBatchSize > 0) {
         mpDiffNetOpt->step(mTrainStream, lossScale, mpDiffParamsFull->data(), mpDiffParams->data(), mpDiffParamsGradient->data());
@@ -775,4 +937,25 @@ void NRModel::loadState(const std::string& path) {
 
     CUDA_CHECK_THROW(cudaDeviceSynchronize());
     fmt::print("NRModel::loadState: loaded {}\n", path);
+}
+
+// Probe on scratch I/O. inference(false) selects working MLP weights; grids must
+// select the corresponding snapshot too. Neither path performs backward/step.
+std::string NRModel::probeDiagnostics(ModelIOPtrs specPtrs)
+{
+    if (!specPtrs.size) return "{}";
+    const uint32_t count = padUp(specPtrs.size, kModelBatchAlign);
+    tcnn::GPUMatrix<precision_t> input(mSpecInputDim, count, mInferenceStream);
+    tcnn::GPUMatrix<float> output(mOutputDim, count, mInferenceStream);
+    tcnn::json result;
+    for (bool ema : {false, true}) {
+        CUDA_CHECK_THROW(cudaMemcpyAsync(input.data(), specPtrs.inputPtr, size_t(specPtrs.size)*mSpecInputDim*sizeof(precision_t), cudaMemcpyDeviceToDevice, mInferenceStream));
+        ncr::clearTrainingInputPadding(mInferenceStream, input, specPtrs.size);
+        HashGrid::launchForward(mInferenceStream, ema?mpPrimGridsInference:mpPrimGrids->data(), input.data(), specPtrs.size, mSpecInputDim, mSpecPrimEncOffset, mSpecPosOffset, mPrimGridConfig);
+        HashGridInterp::launchForward(mInferenceStream, ema?mpClsGridsInference:mpClsGrids->data(), input.data(), specPtrs.size, mSpecInputDim, mSpecClsEncOffset, mSpecClsPosOffset, mSpecClsScaleOffset, mSpecClsWeightOffset, mClsGridConfig);
+        mpSpecNet->inference(mInferenceStream, input, output, ema);
+        CUDA_CHECK_THROW(cudaStreamSynchronize(mInferenceStream));
+        result[ema?"ema":"working"] = ncr::outputStatistics(output.data(), specPtrs.size, mOutputDim, mOutputDim);
+    }
+    return result.dump();
 }

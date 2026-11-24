@@ -43,6 +43,8 @@ struct PostFilterPass
     float sigmaAlbedo;
     float sigmaColor;
     uint enableFXAA = 1;
+    float highlightMinExcess = 0.1f; // Linear HDR difference after bilateral/FXAA.
+    uint highlightRequireQuietRing = 0; // Legacy diagnostic; FXAA can spread peaks into the ring.
 
     float gaussianWeight(float distance2, float sigma)
     {
@@ -151,6 +153,76 @@ struct PostFilterPass
         return fxaaExpand((lumaB < lumaMin || lumaB > lumaMax) ? rgbA : rgbB);
     }
 
+    /** Conservative single-pixel HDR outlier repair, after bilateral and FXAA. All eight neighbours must belong to a locally continuous
+        glossy surface and be strictly dimmer than the center. This cannot distinguish
+        a genuine isolated subpixel reflection from noise; use a high threshold.
+        Read only this stage's immutable input, never this dispatch's output.
+    */
+    float3 suppressIsolatedHighlight(uint2 pixel, float3 center)
+    {
+        const uint pixIdx = pixel.y * frameDim.x + pixel.x;
+        if (specActive[pixIdx] == 0 || gActive[pixel] == 0) return center;
+        // Require eight distinct neighbours; never duplicate edge pixels.
+        if (any(pixel == 0u) || any(pixel + 1u >= frameDim)) return center;
+        if (!all(isfinite(center))) return center;
+        const float centerLuma = luma(max(center, 0.f));
+        if (centerLuma <= highlightMinExcess) return center;
+        const float3 normal = normalize(gNormal[pixel].xyz);
+        const float3 albedo = gAlbedo[pixel].xyz;
+        const float roughness = gRoughness[pixel];
+        const float3 pos = gPos[pixel].xyz;
+        const float tanHalfFovY = 0.5f * gScene.camera.data.frameHeight / max(gScene.camera.data.focalLength, 1e-6f);
+        const float footprint = max(2.f * length(pos - gScene.camera.getPosition()) * tanHalfFovY / float(frameDim.y), 1e-6f);
+        float3 sumColor = 0.f;
+        float minLuma = 3.402823466e+38f;
+        float maxLuma = 0.f;
+        float sumLuma = 0.f;
+        [unroll]
+        for (int dy = -1; dy <= 1; ++dy)
+        {
+            [unroll]
+            for (int dx = -1; dx <= 1; ++dx)
+            {
+                if (dx == 0 && dy == 0) continue;
+                const uint2 tap = uint2(int2(pixel) + int2(dx, dy));
+                const float3 c = tempColor[tap].xyz;
+                if (!all(isfinite(c))) return center;
+                const float y = luma(max(c, 0.f));
+                // Most pixels cannot exceed even the first neighbour. Reject
+                // before geometry loads; the final blend would be exactly zero.
+                if (centerLuma - y <= max(highlightMinExcess, y)) return center;
+                if (specActive[tap.y * frameDim.x + tap.x] == 0 || gActive[tap] == 0) return center;
+                if (dot(normal, normalize(gNormal[tap].xyz)) < 0.995f ||
+                    any(abs(albedo - gAlbedo[tap].xyz) > 0.03f) ||
+                    abs(roughness - gRoughness[tap]) > 0.02f) return center;
+                const float3 delta = gPos[tap].xyz - pos;
+                if (length(delta) > 4.f * footprint || abs(dot(normal, delta)) > 0.1f * footprint) return center;
+
+                minLuma = min(minLuma, y);
+                maxLuma = max(maxLuma, y);
+                sumLuma += y;
+                sumColor += c;
+            }
+        }
+        // The old raw-image ring-flatness gate rejects FXAA halos. In the final
+        // image, keep the strict all-eight-neighbours contrast test instead.
+        // Connected bright lines still fail that test; retain the old gate for A/B.
+        if (highlightRequireQuietRing != 0 && maxLuma - minLuma > max(0.1f, 0.5f * sumLuma / 8.f)) return center;
+        // At least twice the brightest neighbour AND highlightMinExcess above it.
+        // The post-filtered peak is weaker than raw resolve, so its default floor
+        // is 0.1 HDR. Full replacement at 3x (or twice that floor), continuously.
+        const float threshold = max(highlightMinExcess, maxLuma);
+        const float strength = smoothstep(threshold, 2.f * threshold, centerLuma - maxLuma);
+        return lerp(center, sumColor / 8.f, strength);
+    }
+
+    void executeIsolatedHighlight(const uint2 pixel)
+    {
+        if (any(pixel >= frameDim)) return;
+        const float4 center = tempColor[pixel];
+        gColor[pixel] = float4(suppressIsolatedHighlight(pixel, center.xyz), center.w);
+    }
+
     void executeBilateral(const uint2 pixel)
     {
         if (any(pixel >= frameDim)) return;
@@ -229,4 +301,10 @@ void main(uint3 dispatchThreadId: SV_DispatchThreadID)
 void mainFXAA(uint3 dispatchThreadId: SV_DispatchThreadID)
 {
     gPostFilterPass.executeFXAA(dispatchThreadId.xy);
+}
+
+[numthreads(16, 16, 1)]
+void mainIsolatedHighlight(uint3 dispatchThreadId: SV_DispatchThreadID)
+{
+    gPostFilterPass.executeIsolatedHighlight(dispatchThreadId.xy);
 }

@@ -21,8 +21,8 @@ import NetworkParams;
 #define NUM_CLUSTERS NCR_NUM_CLUSTERS
 #endif
 
-#ifndef NCR_NORMALIZE_CLS_SCALE
-#error "NCRConfig.h must define NCR_NORMALIZE_CLS_SCALE (0 or 1)."
+#ifndef NORMALIZE_CLS_SCALE
+#define NORMALIZE_CLS_SCALE NCR_NORMALIZE_CLS_SCALE
 #endif
 
 /// Slots addressable by the 24 B packed layout below.
@@ -509,8 +509,8 @@ void releaseWeakClusters(inout ClusterSet cs, float weakWeight)
     Change detection for locked pixels
 
     A locked mixture is frozen, so a locked pixel needs its own evidence that the
-    cone now sees something else. Two signals, both kept in the u32 that travels
-    with the mixture (ClusterLockState), so detection costs no memory:
+    cone now sees something else. These signals occupy the lower 16 bits of the
+    u32 that travels with the mixture (ClusterLockState):
 
     outlier  EMA (rate beta) of "this frame's ray hit outside every mode". The gate
              here is lambda_d, deliberately separate from the assignment gate
@@ -528,7 +528,12 @@ void releaseWeakClusters(inout ClusterSet cs, float weakWeight)
              motion would otherwise leave a stale mixture locked indefinitely.
 
     outlier and drift are reset to 0 whenever the pixel is not locked, so they only
-    measure change since the mixture froze.
+    measure change since the mixture froze. The upper 16 bits hold a visibility
+    reference depth for the shared locked baseline (or the diagnostic legacy
+    probe). A reserved fp16 NaN marks a reset deferred to the next baseline.
+    Repeating the same direction separates actual geometry changes from
+    differences between independent random depth samples, including transitions
+    to a miss or another already-known mode. No extra history buffer is needed.
 
     While the camera moves relative to a pixel, ClusterReproject also caps its
     observation count (capClusterObservations), so the pixel cannot lock on a
@@ -541,9 +546,14 @@ struct ClusterLockState
 {
     float outlier;
     float drift;
+    // Upper 16 bits of the existing u32: reference depth for a repeated GGX
+    // visibility probe. 0 = uninitialized, 0xffff = miss, 0xfffe = pending reset, otherwise fp16 depth.
+    uint visibilityDepth;
 };
 
 /// Drift quantization: 8 bits in units of 1/64 cone radius (saturates at ~4).
+static const uint kVisibilityResetPending = 0xfffeu; // Reserved fp16 NaN: rebuild on next baseline.
+
 static const float kLockDriftScale = 64.f;
 
 ClusterLockState emptyClusterLockState()
@@ -551,6 +561,7 @@ ClusterLockState emptyClusterLockState()
     ClusterLockState s;
     s.outlier = 0.f;
     s.drift = 0.f;
+    s.visibilityDepth = 0;
     return s;
 }
 
@@ -559,6 +570,7 @@ ClusterLockState unpackClusterLockState(uint packed)
     ClusterLockState s;
     s.outlier = float(packed & 0xffu) * (1.f / 255.f);
     s.drift = float((packed >> 8) & 0xffu) * (1.f / kLockDriftScale);
+    s.visibilityDepth = packed >> 16;
     return s;
 }
 
@@ -569,7 +581,23 @@ uint packClusterLockState(ClusterLockState s, float u0, float u1)
 {
     const uint o = (uint)clamp(floor(saturate(s.outlier) * 255.f + u0), 0.f, 255.f);
     const uint d = (uint)clamp(floor(max(s.drift, 0.f) * kLockDriftScale + u1), 0.f, 255.f);
-    return o | (d << 8);
+    return o | (d << 8) | (s.visibilityDepth << 16);
+}
+
+uint packVisibilityDepth(bool hitValid, float t)
+{
+    return hitValid ? (f32tof16Rne(clamp(t, 6.103515625e-5f, 65504.f)) & 0xffffu) : 0xffffu;
+}
+
+bool visibilityDepthChanged(uint previous, bool hitValid, float t, float epsScene)
+{
+    if (previous == 0) return false;
+    if (previous == 0xffffu) return hitValid;
+    if (!hitValid) return true;
+    const float oldT = f16tof32(previous);
+    // Allow fp16 quantization and ray intersection round-off, independently of
+    // the cone width. A wide cone must not hide a moving reflected object.
+    return abs(t - oldT) > max(2.f * epsScene, 0.002f * oldT);
 }
 
 /** Fold one locked-pixel ray into the outlier EMA. A miss is not an outlier: an
@@ -677,11 +705,37 @@ bool integrateClusterSample(
 }
 
 
+/** A low-support, separated far mode in an otherwise near-dominated mixture.
+    Capped motion counts are not lifetime confidence, so this only requests fresh
+    evidence; it must not directly discard or clamp the candidate's probability.
+*/
+bool needsFarModeValidation(ClusterSet cs, float tanLobe, float epsScene)
+{
+    float nearT = FLT_MAX;
+    [unroll]
+    for (uint k = 0; k < kClusterCount; ++k)
+        if (isClusterActive(cs, k) && cs.w[k] > 0.1f) nearT = min(nearT, cs.t[k]);
+    if (nearT == FLT_MAX || nearT <= epsScene) return false;
+    float nearWeight = 0.f;
+    [unroll]
+    for (uint k = 0; k < kClusterCount; ++k)
+        if (isClusterActive(cs, k) && cs.t[k] < 2.f * nearT) nearWeight += cs.w[k];
+    if (nearWeight < 0.5f) return false;
+    [unroll]
+    for (uint k = 0; k < kClusterCount; ++k)
+    {
+        if (!isClusterActive(cs, k) || cs.n[k] > 2.f || cs.w[k] >= 0.25f) continue;
+        if (cs.t[k] > 3.f * nearT && cs.t[k] - nearT > 4.f * max(tanLobe * nearT, epsScene)) return true;
+    }
+    return false;
+}
+
 /** Pick the slot a neighbouring depth belongs to during the spatial gather.
 
     Prefers one of the pixel's own modes, then a slot already seeded by another
     neighbour at the same depth, then any completely unused slot. This keeps slot
     identity stable across the gather instead of re-sorting by depth.
+    Returns -1 when all slots are occupied and none meets the assignment gate.
 */
 int routeNeighborCluster(
     ClusterSet cs,
@@ -689,7 +743,8 @@ int routeNeighborCluster(
     float t,
     float tanLobe,
     float epsScene,
-    float assignThreshold)
+    float assignThreshold,
+    bool rejectUnmatched = true)
 {
     int best = -1;
     float bestDist = FLT_MAX;
@@ -730,7 +785,9 @@ int routeNeighborCluster(
         if (!isClusterActive(cs, k) && acc.sumW[k] <= 0.f) return (int)k;
     }
 
-    return best >= 0 ? best : 0;
+    // No capacity for a new mode: an out-of-gate sample is not a match.
+    // The legacy branch is only used by the explicit diagnostic comparison.
+    return rejectUnmatched ? -1 : (best >= 0 ? best : 0);
 }
 
 void accumulateNeighborCluster(inout ClusterAccum acc, int slot, float weight, float t, float sigma)
@@ -780,7 +837,7 @@ ClusterOutput evalClusterOutput(
     ClusterOutput o;
     o.clsPos = (pos + t * reflectDir - bboxMin) / (bboxMax - bboxMin);
     o.clsScale = (sigma + tanLobe * t) / 2;
-#if NCR_NORMALIZE_CLS_SCALE
+#if NORMALIZE_CLS_SCALE
     const float3 extent = bboxMax - bboxMin;
     o.clsScale /= max(max(extent.x, extent.y), max(extent.z, 1e-6f));
 #endif
@@ -860,7 +917,7 @@ ClusterSet sortClusterSetByDepth(ClusterSet cs)
 
 /** Write the per-pixel (non-cluster) part of the specular network input:
     the normalized shading position and the encoded reflected color
-    (sampleMirrorAlbedo: hit albedo, or the encoded environment color on a miss).
+    (sampleMirrorAlbedo: surface albedo, signed-log emission, or encoded environment).
 */
 void writeSpecPrimaryOutput(
     RWStructuredBuffer<SpecNetInput> buffer,

@@ -1,8 +1,9 @@
 #ifndef NCR_CONFIG_H
 #define NCR_CONFIG_H
 
-// Shared by Slang and CUDA. Shader names (N_LEVELS, NUM_CLUSTERS, ...) stay
-// overridable by getShaderDefines(); the numbers live only here.
+// Shared defaults for C++, CUDA and Slang. ncr.sh can override runtime/startup
+// options without rebuilding C++/CUDA; see docs/usage/ncr-configuration.md.
+// NUM_CLUSTERS, OUTPUT_DIM and USE_FP16 remain build-time layout contracts.
 
 // Sampling. Train/render ray counts are selected at runtime by the pass.
 #define NCR_NUM_SPEC_RAYS_TRAIN 32
@@ -19,14 +20,14 @@
 // property and the UI "Enable" box). 0 = per-frame K-Means cone trace.
 #define NCR_ENABLE_CLUSTER_REUSE 1
 
-// Primary hash grid.
+// Primary hash grid. Startup options; changing these creates a new model.
 #define NCR_N_LEVELS 6
 #define NCR_N_FEATURES_PER_LEVEL 2
 #define NCR_LOG2_HASHMAP_SIZE 18
 #define NCR_BASE_RESOLUTION 32
 #define NCR_PER_LEVEL_SCALE 2.0f
 
-// Cluster hash grid.
+// Cluster hash grid. Startup options; changing these creates a new model.
 #define NCR_N_LEVELS_SPEC 6
 #define NCR_N_FEATURES_PER_LEVEL_SPEC 4
 #define NCR_LOG2_HASHMAP_SIZE_SPEC 18
@@ -38,13 +39,18 @@
 // 0: legacy world-space radius (level choice then depends on the scene's size).
 #define NCR_NORMALIZE_CLS_SCALE 1
 
-// Fused MLP. Output width stays 16 so it matches the fully fused layout.
+// Fused MLP. Stored output is RGBA; the fused network pads internally to 16.
 #define NCR_DIFF_N_NEURONS 64
 #define NCR_DIFF_N_HIDDEN_LAYERS 3
 #define NCR_SPEC_N_NEURONS 64
 #define NCR_SPEC_N_HIDDEN_LAYERS 3
 #define NCR_OUTPUT_DIM 4
 #define NCR_USE_FP16 1
+
+// Model initialization (startup overrides; diagnostics run once, before training).
+#define NCR_INIT_SEED 1337u
+#define NCR_INIT_GRID_SCALE 1e-3f
+#define NCR_INIT_DIAGNOSTICS 1
 
 // Optimizer. With the training schedule on (NeuralRadiosity::updateTrainSchedule),
 // LR and EMA decay move between the hot values (start, scene change, camera motion)
@@ -53,5 +59,14 @@
 #define NCR_EMA_DECAY 0.95f        // hot (also the initial value)
 #define NCR_ADAM_LR_COLD 2.5e-3f   // steady state
 #define NCR_EMA_DECAY_COLD 0.99f   // steady state
+
+// Online training schedule defaults. All are exposed by ncr.sh.
+#define NCR_TRAIN_CAMERA_HEAT 0.3f
+#define NCR_TRAIN_LIGHT_MOTION_HEAT 0.5f
+#define NCR_TRAIN_OBJECT_MOTION_HEAT 0.1f
+#define NCR_TRAIN_SCENE_HEAT 1.0f
+#define NCR_TRAIN_INITIAL_HOT_FRAMES 600
+#define NCR_TRAIN_HOLD_FRAMES 30
+#define NCR_TRAIN_COOL_FRAMES 300.f
 
 #endif

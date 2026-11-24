@@ -292,9 +292,74 @@ public:
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
 
     /// Drop the render-path cluster history (same as the "Clear History" button). Scriptable.
-    void clearHistory() { clearRenderTemporalHistory(mpDevice->getRenderContext()); }
+    void clearHistory()
+    {
+        mDiagnosticHistoryFrozen = false;
+        clearRenderTemporalHistory(mpDevice->getRenderContext());
+    }
     /// Current training-schedule heat (0 = cold/settled, 1 = hot/adapting).
     float getTrainHeat() const { return mTrainHeat; }
+
+    /// Script controls for camera-motion experiments. Pausing preserves the model,
+    /// optimizer, EMA and schedule; scene update flags accumulate until resumed.
+    bool getTrainingPaused() const { return mTrainingPaused; }
+    void setTrainingPaused(bool paused)
+    {
+        if (!paused && mDiagnosticHistoryFrozen) clearHistory();
+        mTrainingPaused = paused;
+    }
+    void requestCameraTrainingHeat() { mPendingSceneUpdates |= IScene::UpdateFlags::CameraMoved; }
+    uint64_t getTrainingBatchCount() const { return mTrainingBatchCount; }
+    // Last submitted LHS batch; stale while training is paused.
+    uint32_t getTrainDiffuseCount() const { return mpTrainLHSBatch ? mpTrainLHSBatch->diffSize : 0; }
+    uint32_t getTrainSpecularCount() const { return mpTrainLHSBatch ? mpTrainLHSBatch->specSize : 0; }
+    void configureDiagnostics(uint32_t interval, uint32_t x, uint32_t y);
+    const std::string& getDiagnostics() const { return mLastDiagnostics; }
+
+    /// Explicit, synchronous readback of one glossy pixel; no work during normal rendering.
+    std::string inspectRenderPixel(uint32_t x, uint32_t y);
+    /// Frozen-model ablations. Changes render settings only; never recreates or trains the model.
+    void setDiagnosticRenderOptions(bool postFilter, bool temporalReuse, bool mirrorAlbedo, uint32_t rays, uint32_t kMeansIters);
+    void setDiagnosticSpatialReuse(bool enabled)
+    {
+        FALCOR_CHECK(mTrainingPaused, "Render ablations require a frozen network.");
+        mEnableClusterSpatialReuse = enabled;
+    }
+    /// Reproduce the pre-fix spatial policy for controlled comparisons only.
+    void setDiagnosticSpatialReuseLegacy(bool enabled)
+    {
+        FALCOR_CHECK(mTrainingPaused, "Render ablations require a frozen network.");
+        mDiagnosticSpatialReuseLegacy = enabled;
+    }
+    void setDiagnosticFarModeValidation(bool enabled)
+    {
+        FALCOR_CHECK(mTrainingPaused, "Render ablations require a frozen network.");
+        mEnableFarModeValidation = enabled;
+    }
+    /// Legacy tracing is available only for frozen-model comparisons.
+    void setDiagnosticClusterRayBudget(bool enabled)
+    {
+        FALCOR_CHECK(mTrainingPaused, "Render ablations require a frozen network.");
+        FALCOR_CHECK(!mDiagnosticHistoryFrozen, "Release the history pin before changing tracing.");
+        if (mEnableClusterRayBudget != enabled) clearHistory();
+        mEnableClusterRayBudget = enabled;
+    }
+    std::string getFarModeValidationStats();
+    /// Re-run only post processing on the last immutable resolve output for exact A/B tests.
+    void reapplyDiagnosticPostFilter(bool isolatedHighlight);
+    /// 0=off, 1=before bilateral, 2=after bilateral, 3=after FXAA (default).
+    void reapplyDiagnosticPostFilterPlacement(uint32_t placement, float minExcess = 0.1f, bool requireQuietRing = false);
+    ref<Texture> getDiagnosticPostFilterInput() const { return mpRenderTempColor; }
+    /// Pin the current cluster buffers for a fixed-camera spatial ablation.
+    /// Releasing the pin clears history because the repeated-ray epoch advanced.
+    void setDiagnosticHistoryFrozen(bool frozen)
+    {
+        FALCOR_CHECK(mTrainingPaused, "History ablations require a frozen network.");
+        FALCOR_CHECK(!frozen || mClusterHistoryValid, "No cluster history to freeze.");
+        if (mDiagnosticHistoryFrozen && !frozen) clearHistory();
+        mDiagnosticHistoryFrozen = frozen;
+    }
+
 
 private:
     void render(RenderContext* pRenderContext, const RenderData& renderData);
@@ -304,9 +369,13 @@ private:
     void compactPass(RenderContext* pRenderContext, const RenderData& renderData);
     void resolvePass(RenderContext* pRenderContext, const RenderData& renderData);
     void postFilterPass(RenderContext* pRenderContext, const RenderData& renderData);
+    void dispatchPostFilters(RenderContext* pRenderContext, bool isolatedHighlight, uint32_t placement = 3, float minExcess = 0.1f, bool requireQuietRing = false);
     // Ray-batch rendering passes
     void randomSmooth(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     void sampleRHS(RenderContext* pRenderContext);
+    void sampleRHSForBatch(RenderContext* pRenderContext, const std::shared_ptr<RayBatchBuffer>& lhs,
+        const std::shared_ptr<RayBatchBuffer>& rhs, uint32_t sampleFrame);
+    void runDiagnostics(RenderContext* pRenderContext, const RenderData& renderData);
     void resolveRHS(RenderContext* pRenderContext);
     void compactBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     // Batch counts stay on the GPU until the next full sync.
@@ -316,7 +385,7 @@ private:
     void resolveBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch);
     // Common rendering passes
     void coneTrace(RenderContext* pRenderContext, const RenderData& renderData, std::shared_ptr<RayBatchBuffer> pRayBatch);
-    void coneTraceBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, const RenderData& renderData);
+    void coneTraceBatch(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, const RenderData& renderData, uint32_t sampleFrame = UINT32_MAX);
     void specPrimaryPass(RenderContext* pRenderContext, std::shared_ptr<RayBatchBuffer> pRayBatch, const RenderData& renderData);
     /// What the OpenHarmony port replays on the phone (BakeExport.cpp). With the environment variable
     /// NCR_BAKE_DIR set, one frame is recorded as it executes: bakeBegin() starts the recording,
@@ -368,7 +437,13 @@ private:
     uint2 mFrameDim = {};
     /// Shader variables changed flag
     bool mVarsChanged = false;
-    /// Algorithm parameters. Counts come from NCRConfig.h; train vs render is chosen in setConeParameters.
+    /// Startup parameters default to NCRConfig.h and can be overridden by pass properties.
+    NRModelConfig mModelConfig;
+    uint32_t mNumSpecRaysTrain = NCR_NUM_SPEC_RAYS_TRAIN;
+    uint32_t mNumSpecRaysRender = NCR_NUM_SPEC_RAYS_RENDER;
+    uint32_t mNumKMeansItersTrain = NCR_NUM_KMEANS_ITERS_TRAIN;
+    uint32_t mNumKMeansItersRender = NCR_NUM_KMEANS_ITERS_RENDER;
+    bool mNormalizeClsScale = NCR_NORMALIZE_CLS_SCALE != 0;
     uint32_t mNumSpecRays = NCR_NUM_SPEC_RAYS_RENDER;
     uint32_t mNumKMeansIters = NCR_NUM_KMEANS_ITERS_RENDER;
     uint32_t mNumClusters = NCR_NUM_CLUSTERS;
@@ -384,55 +459,57 @@ private:
     bool mAdjustShadingNormals = true;
     /// Specular roughness threshold
     float mSpecularRoughnessThreshold = NCR_SPECULAR_ROUGHNESS_THRESHOLD;
-    /// Replace the specular environment color with the mirror-hit albedo.
+    /// Replace the specular environment color with mirror-hit albedo or signed-log emission.
     bool mEnableMirrorAlbedo = true;
     /// kEnvColorEncoding* in MirrorAlbedo.slang: how a mirror miss enters the shared
     /// env/albedo channels. 1 = signed log, which keeps 10-1000 sky radiance and [0, 1]
-    /// albedo in one bounded range and marks misses by their sign.
+    /// albedo on comparable scales. Emissive hits always use signed-log emission.
     uint32_t mEnvColorEncoding = 1;
 
     /// Online training schedule. "Heat" h in [0, 1] interpolates log(lr) and
     /// log(1 - emaDecay) between the cold (settled) and hot (adapting) settings.
-    /// h starts at 1, holds for mTrainWarmupFrames, then relaxes toward 0 with time
+    /// h starts at 1, holds for mTrainInitialHotFrames, then relaxes toward 0 with time
     /// constant mTrainCoolFrames. Camera motion pulls it up to mTrainCameraHeat and
-    /// scene changes to mTrainSceneHeat, held mTrainHoldFrames after the last event.
-    /// While the camera is fixed, scene changes are graded instead (local addition):
-    /// discrete edits mTrainSceneHeat, moving lights mTrainLightMotionHeat, moving
-    /// non-emissive geometry only mTrainObjectMotionHeat.
+    /// edits to mTrainSceneHeat; fixed-camera light/object motion has lower targets.
+    /// An increase in heat starts a hold of at least mTrainHoldFrames.
     ///
     /// Tuned on the 10 eval scenes (static 2400 frames, animation, stop 600 frames,
     /// vs ptdn 4096 spp): flicker between frames halves (static and after stopping);
     /// mean PSNR equal to the fixed hot setting. A cold LR of 1e-3 or a 300-frame
-    /// warmup stops the network while it is still improving (-0.3 to -0.5 dB static).
+    /// initial hot hold stops the network while it is still improving (-0.3 to -0.5 dB static).
     /// Camera heat 0 loses ~1 dB on camera-only paths (bathroom2).
-    /// That tuning used camera heat 0.5. Local change (2026-11-15, not in the Linux
-    /// snapshots): camera heat 0.3, and the fixed-camera levels below 0.5 and 0.1
-    /// (were 0.7 and 0.2), because lighting still flickered visibly. The eval scenes
-    /// have not been re-run with these levels.
+    /// Those measurements used camera heat 0.5. The lower NCRConfig event defaults
+    /// follow the client tuning; the full evaluation has not been repeated.
     bool mEnableTrainSchedule = true;
     float mTrainLrHot = NCR_ADAM_LR;
     float mTrainLrCold = NCR_ADAM_LR_COLD;
     float mTrainEmaHot = NCR_EMA_DECAY;
     float mTrainEmaCold = NCR_EMA_DECAY_COLD;
-    uint32_t mTrainWarmupFrames = 600;
-    uint32_t mTrainHoldFrames = 30;
-    float mTrainCoolFrames = 300.f;
-    float mTrainCameraHeat = 0.3f;
-    float mTrainSceneHeat = 1.f;
+    uint32_t mTrainInitialHotFrames = NCR_TRAIN_INITIAL_HOT_FRAMES;
+    uint32_t mTrainHoldFrames = NCR_TRAIN_HOLD_FRAMES;
+    float mTrainCoolFrames = NCR_TRAIN_COOL_FRAMES;
+    float mTrainCameraHeat = NCR_TRAIN_CAMERA_HEAT;
+    float mTrainSceneHeat = NCR_TRAIN_SCENE_HEAT;
+    // Fixed-camera motion targets. Scene edits still use mTrainSceneHeat.
+    float mTrainLightMotionHeat = NCR_TRAIN_LIGHT_MOTION_HEAT;
+    float mTrainObjectMotionHeat = NCR_TRAIN_OBJECT_MOTION_HEAT;
+    uint32_t mDiagnosticInterval = 0;
+    bool mDiagnosticHistoryFrozen = false;
+    bool mDiagnosticSpatialReuseLegacy = false;
+    bool mEnableFarModeValidation = true;
+    ref<Buffer> mpFarValidationStats;
+    uint2 mDiagnosticPixel = uint2(735, 650);
+    std::string mLastDiagnostics = "{}";
+    std::string mProbeMetadata = "{}";
+    std::shared_ptr<RayBatchBuffer> mpDiagnosticLHS, mpDiagnosticRHS;
+    bool mTrainingPaused = false;
+    uint64_t mTrainingBatchCount = 0;
     float mTrainHeat = 1.f;
-    uint32_t mTrainHoldLeft = 600;
+    uint32_t mTrainHoldLeft = NCR_TRAIN_INITIAL_HOT_FRAMES;
     IScene::UpdateFlags mPendingSceneUpdates = IScene::UpdateFlags::None;
     /// The event classes updateTrainSchedule() saw in its last call (kTrainEvent* bits); the bake's
     /// track records them per sample.
     uint32_t mLastTrainEvents = 0;
-    /// Fixed-camera targets (local addition, not in the Linux snapshots). Moving lights
-    /// (analytic, or emissive geometry) change radiance everywhere they reach, so they
-    /// stay warm enough to keep up (EMA half-life ~31 frames at 0.5). With only
-    /// non-emissive geometry moving, most of the image is unaffected and should settle;
-    /// the moving objects' own shading, shadows and reflections lag more (EMA half-life
-    /// ~59 frames at 0.1).
-    float mTrainLightMotionHeat = 0.5f;
-    float mTrainObjectMotionHeat = 0.1f;
     /// Schedule log (local addition, not in the Linux snapshots): every this many
     /// training frames, and on the frame an event raises the heat, print frame, heat,
     /// hold/cooling, LR, EMA decay and the events seen since the previous line. 0 = off.
@@ -459,6 +536,13 @@ private:
     bool mEnableRenderSpecTemporalReuse = NCR_ENABLE_CLUSTER_REUSE != 0;
     /// Enable the neighbourhood gather stage of the cluster reuse pipeline.
     bool mEnableClusterSpatialReuse = true;
+    /// Detect changed reflected geometry by sharing the baseline ray when locked.
+    bool mEnableClusterVisibilityCheck = true;
+    bool mEnableClusterRayBudget = true;
+    uint32_t mClusterVisibilityFrame = 0;
+    bool mClusterVisibilityFrameAdvanced = true;
+    bool mClusterGeometryMoved = false;
+    bool mClusterGeometryMovedPreviousFrame = false;
     /// Wipe all history whenever the scene reports moved geometry. Off by default:
     /// a playing animation raises that flag every frame, which would leave the
     /// render path permanently un-accumulated.
@@ -524,6 +608,7 @@ private:
     bool mEnablePostFilter = true;
     /// FXAA switch for post filter.
     bool mEnableFXAA = true;
+    bool mEnableIsolatedHighlightFilter = true;
     /// Force cull mode for all geometry, otherwise set it based on the scene.
     bool mForceCullMode = false;
     /// Cull mode to use for when mForceCullMode is true.
@@ -541,6 +626,7 @@ private:
     std::shared_ptr<RayBatchBuffer> mpBindDummyBatch;
     ref<Texture> mpRenderTempColor;
     ref<Texture> mpPostFilterTempColor;
+    ref<Texture> mpPostFilterOutputColor; // Alias of graph output, not another allocation.
     ref<Texture> mpPrefiltEnvCubemap;
     ref<Sampler> mpPrefiltEnvSampler;
     bool mPrefiltEnvDirty = true;
@@ -565,6 +651,7 @@ private:
     ref<ComputePass> mpCompactPass;
     ref<ComputePass> mpResolvePass;
     ref<ComputePass> mpPostFilterPass;
+    ref<ComputePass> mpIsolatedHighlightPass;
     ref<ComputePass> mpPostFXAAPass;
     ref<ComputePass> mpRandomSmooth;
     ref<ComputePass> mpSampleRHS;

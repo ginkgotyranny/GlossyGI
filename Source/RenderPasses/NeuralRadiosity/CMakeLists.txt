@@ -35,3 +35,9 @@ add_custom_target(NeuralRadiosityConfigCopy DEPENDS ${NCR_CONFIG_SHADER_COPY})
 add_dependencies(NeuralRadiosity NeuralRadiosityConfigCopy)
 
 target_source_group(NeuralRadiosity "RenderPasses")
+
+# Local test sources and outputs are kept outside the delivery tree.
+option(NCR_BUILD_DIAGNOSTIC_TESTS "Enable local NCR tests in media/logs" OFF)
+if(NCR_BUILD_DIAGNOSTIC_TESTS)
+    add_subdirectory("${PROJECT_SOURCE_DIR}/media/logs/ncr_tests" "${CMAKE_CURRENT_BINARY_DIR}/local-tests")
+endif()

@@ -53,15 +53,38 @@ struct ModelIOPtrs
 };
 
 inline constexpr uint32_t padUp(uint32_t x, uint32_t align) { return (x + align - 1) & ~(align - 1); }
-/// NRModel pads every batch to this many rows. The hash-grid encoders and the
-/// MLP read and write the padded rows, so I/O buffers must have room for them.
+/// NRModel aligns MLP batches to this many rows. Inference also encodes padding;
+/// training encodes/supervises valid rows only. I/O still needs aligned capacity.
 inline constexpr uint32_t kModelBatchAlign = 256;
 
+
+/// Startup-only configuration: changing it requires a new model and matching shader layouts.
+struct NRModelConfig
+{
+    uint32_t initSeed = NCR_INIT_SEED;
+    float initGridScale = NCR_INIT_GRID_SCALE;
+    bool initDiagnostics = NCR_INIT_DIAGNOSTICS != 0;
+    uint32_t nLevels = NCR_N_LEVELS;
+    uint32_t nFeaturesPerLevel = NCR_N_FEATURES_PER_LEVEL;
+    uint32_t log2HashmapSize = NCR_LOG2_HASHMAP_SIZE;
+    uint32_t baseResolution = NCR_BASE_RESOLUTION;
+    float perLevelScale = NCR_PER_LEVEL_SCALE;
+    uint32_t nLevelsSpec = NCR_N_LEVELS_SPEC;
+    uint32_t nFeaturesPerLevelSpec = NCR_N_FEATURES_PER_LEVEL_SPEC;
+    uint32_t log2HashmapSizeSpec = NCR_LOG2_HASHMAP_SIZE_SPEC;
+    uint32_t baseResolutionSpec = NCR_BASE_RESOLUTION_SPEC;
+    float perLevelScaleSpec = NCR_PER_LEVEL_SCALE_SPEC;
+    float interpRatio = NCR_INTERP_RATIO;
+    uint32_t diffNNeurons = NCR_DIFF_N_NEURONS;
+    uint32_t diffNHiddenLayers = NCR_DIFF_N_HIDDEN_LAYERS;
+    uint32_t specNNeurons = NCR_SPEC_N_NEURONS;
+    uint32_t specNHiddenLayers = NCR_SPEC_N_HIDDEN_LAYERS;
+};
 
 class NRModel
 {
 public:
-    NRModel();
+    explicit NRModel(const NRModelConfig& config = {});
     ~NRModel();
 
     void loadState(const std::string& path);
@@ -82,10 +105,20 @@ public:
 
     void inference(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
     void train(ModelIOPtrs diffPtrs, ModelIOPtrs specPtrs);
+    // Opt-in readbacks only; no optimizer step or mutation of model/batch inputs.
+    void setTrainingDiagnostics(bool enabled) { mTrainingDiagnostics = enabled; }
+    const std::string& trainingDiagnostics() const { return mLastTrainingDiagnostics; }
+    std::string probeDiagnostics(ModelIOPtrs specPtrs);
+
 
     cudaStream_t stream(bool isTraining) const { return isTraining ? mTrainStream : mInferenceStream; }
 
 private:
+    friend struct NRModelInitializationTest;
+    friend struct NRModelPaddingTest;
+    NRModelConfig mConfig;
+    bool mTrainingDiagnostics = false;
+    std::string mLastTrainingDiagnostics = "{}";
     void createOnlineModels();
     void createOfflineModelsIfNeeded();
     

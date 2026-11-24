@@ -796,7 +796,7 @@ void NeuralRadiosity::bakeExport(RenderContext* pRenderContext)
         baker.record("value train.lrCold {}", mTrainLrCold);
         baker.record("value train.emaHot {}", mTrainEmaHot);
         baker.record("value train.emaCold {}", mTrainEmaCold);
-        baker.record("value train.warmupFrames {}", mTrainWarmupFrames);
+        baker.record("value train.warmupFrames {}", mTrainInitialHotFrames);
         baker.record("value train.holdFrames {}", mTrainHoldFrames);
         baker.record("value train.coolFrames {}", mTrainCoolFrames);
         baker.record("value train.cameraHeat {}", mTrainCameraHeat);
