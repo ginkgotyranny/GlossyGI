@@ -628,7 +628,7 @@ not destroy the surface in these runs (Home keeps it), so that path has run only
 
 The phone runs the desktop's scenes: every folder of `media/scenes` with a scene file, as static
 (`scene-v4.pyscene`) and animated (`scene-animation.pyscene`) variant, the choice `run.bat` offers.
-Nine scenes, fourteen bakes of 250 to 430 MB, of which 80 to 260 MB go to the phone. The app has a
+Nine scenes, fourteen bakes of 250 to 430 MB, of which 80 to 260 MB go to the phone (ten and fifteen with sibenik, below). The app has a
 panel like the desktop's (scene, variant, camera path, animation playback; the NeuralRadiosity panel;
 the training schedule; frame times, see `ohos/app/README.md`) and moves the camera by touch.
 
@@ -671,6 +671,44 @@ previous runtime).
 `track_check.py` needs a bake of a later frame of the same scene with the clock at the track's rate
 (`NCR_SMOKE_FPS=30`, `NCR_BAKE_FRAME=<n>`); `replay_compare.py --reference <bake>` matches resources by
 the names they are bound with, since two bakes number them independently.
+
+### sibenik: a scene whose training samples differ between the two GPUs
+
+`media/scenes/sibenik` (2026-11-26; animated variant only: a camera path, nothing else moves) is the
+tenth scene and the first with normal maps. It needed nothing new: `bake_scene.py sibenik anim`,
+`push_scenes.py sibenik` (84 MB on the phone), and the app lists it. On the phone it runs at 240-270 ms
+a frame, and 31 frames of the replayer on the NPU against Falcor's frame 30 give the same schedule and
+clock and an image 42.6 dB from Falcor's (the PC replay: 49.9 dB).
+
+What is different here is how alike the training is. The weight updates of 31 frames against Falcor's:
+
+| | PC replay | Phone, MLPs on the NPU | Phone, MLPs on its CPU |
+|---|---|---|---|
+| Hash grids (cosine) | 0.997 | 0.90-0.92 | 0.91-0.92 |
+| DiffNet / SpecNet | 0.9994 / 0.9994 | 0.979 / 0.991 | 0.973 / 0.994 |
+
+(bathroom on the phone: 0.999 and 0.992-0.9995.) `train_compare.py`'s limit is 0.9, and the bake with
+the project's defaults falls just under it for one of the grids (0.899). The cause is not the NPU
+(the CPU column) and not `randomTrainDir` (off in the second and third column's bakes). It is the
+normal maps:
+
+| First frame, training samples (LHS / RHS) that land where Falcor's do (within 1e-3) | |
+|---|---|
+| PC replay | 99.95% / 99.83% |
+| Phone | 84.7% / 72.1% |
+| Phone, the scene without its normal maps (`scene-nobump.pyscene`) | 99.3% / 98.2% |
+
+RandomSmooth walks from the camera over several bounces before it keeps a point. The two GPUs filter
+textures a little differently (at the primary hits the albedo differs by more than 1e-3 in 44% of the
+pixels, by more than 1e-2 in 0.08%), a normal map turns that into a slightly different bounce
+direction, and the walk ends a little further along the same surface (median 0.055 in a scene 10
+across). Where a sample does land in the same place, its normal is the same. So the phone trains on
+samples drawn the same way from the same scene, not on the same samples; that the filtering's
+rounding is the difference between the drivers is the likely reading, not something a probe has shown.
+
+The G-buffer also differs in 0.28% of the pixels, all on the column capitals: there the model has
+triangles twice in the same place (433 exact duplicates, 0.3% of the scene's area, in and between
+`kamen_zid` and `stupovi`), and each GPU returns one of the two. The positions are equal.
 
 ### What the phone's driver does differently
 
