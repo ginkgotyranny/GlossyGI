@@ -66,6 +66,7 @@ struct ClusterSpatialReuse
 
     /// 0 disables the gather and writes the temporal result unchanged.
     uint enableSpatialReuse = 1;
+    float motionFarWeightStrength = 0.f;
     /// Explicit frozen-model diagnostic only; normal rendering uses the new policy.
     uint diagnosticLegacyReuse = 0;
     /// 0 keeps the environment color and skips the mirror ray.
@@ -113,6 +114,57 @@ struct ClusterSpatialReuse
         const float footprint = max(max(pixelFootprint(pos), pixelFootprint(tapPos)), epsScene);
         const float planeWeight = 1.f - smoothstep(1.f, 2.f, planeDistance / footprint);
         return widthWeight * normalWeight * planeWeight;
+    }
+
+    // At a moving contour one retained hit can carry most of a short history's
+    // weight. Transfer only the excess to nearer hits in the output mixture.
+    void limitIsolatedFarWeight(inout ClusterSet cs, uint2 pixel, float3 pos, float3 normal)
+    {
+        uint far = 0;
+        float nextDepth = 0.f;
+        float farDepth = 0.f;
+        [unroll]
+        for (uint k = 0; k < kClusterCount; ++k)
+        {
+            if (cs.w[k] <= 0.f) continue;
+            if (cs.t[k] > farDepth)
+            {
+                nextDepth = farDepth;
+                farDepth = cs.t[k];
+                far = k;
+            }
+            else nextDepth = max(nextDepth, cs.t[k]);
+        }
+        if (nextDepth <= epsScene || cs.n[far] != 1.f) return;
+        float hits = clusterCountSum(cs);
+        float total = clusterWeightSum(cs);
+        float nearWeight = total - cs.w[far];
+        if (hits < 3.f || nearWeight <= 0.f) return;
+
+        float observations = hits / max(total, 1e-3f);
+        float separation = smoothstep(2.f, 5.f, farDepth / nextDepth);
+        float shortHistory = 1.f - smoothstep(5.f, 9.f, observations);
+        // At full strength, cap an isolated singleton at a quarter of a fresh sample weight.
+        float excess = max(0.f, cs.w[far] - 0.25f / (observations + 1.f));
+        if (excess * separation * shortHistory <= 0.f) return;
+
+        float edge = 0.f;
+        float footprint = max(pixelFootprint(pos), epsScene);
+        const int2 offsets[4] = { int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1) };
+        [unroll]
+        for (uint i = 0; i < 4; ++i)
+        {
+            int2 q = clamp(int2(pixel) + offsets[i], int2(0), int2(frameDim) - 1);
+            float3 delta = gPos[q].xyz - pos;
+            float planeGap = abs(dot(delta, normal)) / footprint;
+            float normalGap = 1.f - dot(normal, gNormal[q].xyz);
+            edge = max(edge, max(smoothstep(2.f, 6.f, planeGap), smoothstep(0.12f, 0.4f, normalGap)));
+        }
+
+        float transfer = excess * separation * shortHistory * edge * motionFarWeightStrength;
+        [unroll]
+        for (uint k = 0; k < kClusterCount; ++k)
+            cs.w[k] += k == far ? -transfer : transfer * cs.w[k] / nearWeight;
     }
 
     void execute(const uint idx)
@@ -253,6 +305,8 @@ struct ClusterSpatialReuse
                 }
             }
         }
+
+        if (motionFarWeightStrength > 0.f) limitIsolatedFarWeight(merged, pixel, pos, normal);
 
         // Restore the training path's slot convention (slot 0 nearest) before the
         // mixture reaches the network. History keeps its own stable slot identity.

@@ -42,6 +42,7 @@ struct PostFilterPass
     float sigmaNormal;
     float sigmaAlbedo;
     float sigmaColor;
+    uint enableColorWeight = 1;
     uint enableFXAA = 1;
     float highlightMinExcess = 0.1f; // Linear HDR difference after bilateral/FXAA.
     uint highlightRequireQuietRing = 0; // Legacy diagnostic; FXAA can spread peaks into the ring.
@@ -263,7 +264,7 @@ struct PostFilterPass
                         gaussianWeight(spatialDist2, sigmaSpatial) *
                         gaussianWeight(normalDist2, sigmaNormal) *
                         gaussianWeight(albedoDist2, sigmaAlbedo) *
-                        gaussianWeight(colorDist2, sigmaColor);
+                        (enableColorWeight != 0 ? gaussianWeight(colorDist2, sigmaColor) : 1.f);
 
                     filteredColor += weight * sampleColor;
                     weightSum += weight;

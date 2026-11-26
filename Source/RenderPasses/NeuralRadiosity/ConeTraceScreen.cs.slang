@@ -49,6 +49,7 @@ RWStructuredBuffer<SpecClusterHistory> clusterHistory;
 RWStructuredBuffer<uint> clusterLockState;
 RWStructuredBuffer<uint> farValidationStats;
 RWStructuredBuffer<uint> frequencyCounts;
+RWStructuredBuffer<uint> vcdRecovery;
 
 
 struct ConeTraceScreen
@@ -60,6 +61,7 @@ struct ConeTraceScreen
 
     uint2 frameDim = {};
     uint frameCount = 0;
+    uint diagnosticSamplingPeriod = 0; // 0: production; 32: frozen-model cyclic RNG test.
     uint specSize = 0;
 
     /// Scene-scale epsilon, guards the residual denominators.
@@ -79,7 +81,7 @@ struct ConeTraceScreen
     /// beta: EMA rate of the change detector, i.e. ~2/beta frames of memory.
     float detectRate = 0.125f;
     /// Outlier share at which a locked pixel unlocks (new geometry in the cone).
-    float unlockOutlierRate = 0.2f;
+    float unlockOutlierRate = 0.05f;
     /// Anchor drift since lock, in cone radii, at which a locked pixel unlocks.
     float unlockDrift = 0.5f;
     /// Per-pixel adaptive loop limit; the global extra-ray cap also applies.
@@ -92,8 +94,15 @@ struct ConeTraceScreen
     // pseudo-counts; retain that policy until separately validated.
     uint conserveMergeCounts = 1;
     uint enableFastRebuild = 1;
+    uint enableVCDRecovery = 1;
+    uint diagnosticVCDImmediateUnlock = 0; // Frozen-model comparison with the previous implementation.
+    float recoveryThreshold = 0.1f;
+    float recoveryUnlockRate = 0.1f;
+    uint recoveryFrames = 64;
+    uint visibilityResetSamples = 0; // Independent fresh batch after a confirmed VCD reset.
     uint checkFrequency = 0;
     uint gradualFrequencyUpdate = 1;
+    uint diagnosticEagerFrequencySurvey = 0; // Reproduce the old biased survey only in frozen-model comparisons.
     static const uint kSurveyUpdating = 0xfffbu;
     static const uint kAdapting = 0xfffau;
     uint frequencySurveyFrame = 0;
@@ -102,6 +111,11 @@ struct ConeTraceScreen
     static const uint kFrequencyRebuild = 0xfffdu;
     uint visibilityFrame = 0;
     uint visibilityFrameAdvanced = 1;
+
+    float recoveryAmount(uint pixelIndex)
+    {
+        return saturate(float(vcdRecovery[pixelIndex]) / float(max(recoveryFrames, 1u)));
+    }
 
     /** Trace one GGX importance sampled reflection ray, return its hit distance. */
     bool traceDepthSample(const ShadingData sd, const IMaterialInstance mi, inout SampleGenerator sg, out float rayT, inout uint tracedRays)
@@ -167,15 +181,15 @@ struct ConeTraceScreen
         Rebuild mode counts from the batch weights, since streaming slot merges
         otherwise lose the sample count used by the historical estimator.
     */
-    ClusterSet validateFarModes(const ShadingData sd, const IMaterialInstance mi, uint2 pixel, float tanLobe, inout uint tracedRays)
+    ClusterSet sampleFreshModes(const ShadingData sd, const IMaterialInstance mi, inout SampleGenerator batchSg,
+        float tanLobe, uint sampleCount, inout uint tracedRays)
     {
         ClusterSet fresh = emptyClusterSet();
-        SampleGenerator validationSg = SampleGenerator(pixel, frameCount ^ 0xa511e9b3u);
         [loop]
-        for (uint r = 0; r < 32u; ++r)
+        for (uint r = 0; r < sampleCount; ++r)
         {
             float t = 0.f;
-            const bool hitValid = traceDepthSample(sd, mi, validationSg, t, tracedRays);
+            const bool hitValid = traceDepthSample(sd, mi, batchSg, t, tracedRays);
             int slot = -1;
             if (hitValid)
             {
@@ -194,6 +208,47 @@ struct ConeTraceScreen
                 if (isClusterActive(fresh, k)) fresh.n[k] = max(1.f, fresh.w[k] * float(r + 1u));
         }
         return fresh;
+    }
+
+    ClusterSet validateFarModes(const ShadingData sd, const IMaterialInstance mi, uint2 pixel, float tanLobe, inout uint tracedRays)
+    {
+        const uint validationSeed = diagnosticSamplingPeriod != 0u
+            ? frameCount % diagnosticSamplingPeriod + diagnosticSamplingPeriod
+            : frameCount ^ 0xa511e9b3u;
+        SampleGenerator validationSg = SampleGenerator(pixel, validationSeed);
+        return sampleFreshModes(sd, mi, validationSg, tanLobe, 32u, tracedRays);
+    }
+
+    // A separate pool prevents reset batches from taking regular rebuild or
+    // mirror-validation reservations. At most floor(specSize/2) extra attempts.
+    // Counters 10..14: batch pixels, reserved rays, denied batches, ticket cursor,
+    // actual batch traceRay calls; counter 15 counts successful deferred batches.
+    // Every request in this pool has the same size.
+    bool rebuildVisibilityBatch(inout ClusterSet cs, const ShadingData sd, const IMaterialInstance mi,
+        inout SampleGenerator sg, float tanLobe, inout uint tracedRays)
+    {
+        if (visibilityResetSamples == 0u || cameraMoved()) return false;
+        const uint waveCount = WaveActiveSum(1u);
+        const uint offset = WavePrefixSum(1u);
+        uint start = 0u;
+        if (WaveIsFirstLane()) InterlockedAdd(farValidationStats[13], waveCount, start);
+        start = WaveReadLaneFirst(start);
+        const bool accepted = start + offset < (specSize / 2u) / visibilityResetSamples;
+        const uint approved = WaveActiveSum(accepted ? 1u : 0u);
+        if (WaveIsFirstLane())
+        {
+            InterlockedAdd(farValidationStats[10], approved);
+            InterlockedAdd(farValidationStats[11], approved * visibilityResetSamples);
+            InterlockedAdd(farValidationStats[12], waveCount - approved);
+        }
+        if (!accepted) return false;
+        const uint before = tracedRays;
+        // The detector draw selected this event: never count it in the estimate.
+        // A fixed batch counts leading misses too, and does not stop at an inlier.
+        cs = sampleFreshModes(sd, mi, sg, tanLobe, visibilityResetSamples, tracedRays);
+        const uint waveTraces = WaveActiveSum(tracedRays - before);
+        if (WaveIsFirstLane()) InterlockedAdd(farValidationStats[14], waveTraces);
+        return true;
     }
 
     /** Counter layout: validated pixels, regular/validation reservations,
@@ -290,6 +345,9 @@ struct ConeTraceScreen
         uint2 pixel, float tanLobe, uint rayBudget, inout uint tracedRays)
     {
         const uint pixelIndex = pixel.y * frameDim.x + pixel.x;
+        const float recovery = recoveryAmount(pixelIndex);
+        float activeGate = lerp(detectThreshold, recoveryThreshold, recovery);
+        float activeUnlockRate = lerp(unlockOutlierRate, recoveryUnlockRate, recovery);
         if (state.visibilityDepth == kAdapting)
         {
             // Keep the old probabilities and anchors. Shorten their effective
@@ -314,7 +372,12 @@ struct ConeTraceScreen
             float t;
             bool hit = traceDepthSample(sd, mi, sg, t, tracedRays);
             evidence = 0.8f * evidence + frequencyResidual(cs, hit, t, tanLobe);
-            adaptFrequencySample(cs, hit, t, tanLobe);
+            // A survey measures evidence against the frozen mixture. Updating
+            // here silently exceeds N_lock even in unchanged pixels. Eventually
+            // a newborn mode receives 1/(N_obs+1) < weakWeight, is discarded,
+            // and real hit probability leaks into the environment component.
+            // Only the confirmed kAdapting path may shorten counts and update.
+            if (diagnosticEagerFrequencySurvey != 0) adaptFrequencySample(cs, hit, t, tanLobe);
             state = emptyClusterLockState();
             if (any(abs(evidence) > float2(1.8f, 1.2f)))
             {
@@ -353,6 +416,12 @@ struct ConeTraceScreen
             frequencyCounts[pixelIndex] = 0u;
         if (state.visibilityDepth == kVisibilityResetPending)
         {
+            if (rebuildVisibilityBatch(cs, sd, mi, sg, tanLobe, tracedRays))
+            {
+                InterlockedAdd(farValidationStats[15], 1u);
+                state = emptyClusterLockState();
+                return;
+            }
             cs = emptyClusterSet();
             state = emptyClusterLockState();
         }
@@ -406,10 +475,25 @@ struct ConeTraceScreen
                 hitValid = traceDepthSample(sd, mi, sg, t, tracedRays);
             }
             ++numRays;
+            if (changed)
+            {
+                InterlockedAdd(farValidationStats[6], 1u);
+                if (enableVCDRecovery != 0)
+                {
+                    // VCD only changes detector sensitivity. Preserve counts, the
+                    // mixture, detector EMA and depth reference until a real unlock.
+                    vcdRecovery[pixelIndex] = recoveryFrames + 1u;
+                    if (diagnosticVCDImmediateUnlock == 0)
+                    {
+                        activeGate = recoveryThreshold;
+                        activeUnlockRate = recoveryUnlockRate;
+                    }
+                }
+            }
             // Do not count the same repeated outlier as eight independent votes.
             if (newDirection && !survey)
-                updateClusterLockOutlier(state, cs, hitValid, t, tanLobe, epsScene, detectThreshold, detectRate);
-            const bool unlock = state.outlier >= unlockOutlierRate || state.drift >= unlockDrift;
+                updateClusterLockOutlier(state, cs, hitValid, t, tanLobe, epsScene, activeGate, detectRate);
+            const bool unlock = state.outlier >= activeUnlockRate || state.drift >= unlockDrift;
             bool frequencyMismatch = false;
             if (!changed && !unlock && sharedDetector && newDirection && checkFrequency != 0)
                 frequencyMismatch = frequencyChanged(pixelIndex, cs, hitValid, t, tanLobe);
@@ -421,24 +505,47 @@ struct ConeTraceScreen
                 if (gradualFrequencyUpdate != 0u) frequencyCounts[pixelIndex] = 20u;
                 return;
             }
-            if (changed || unlock)
+            const bool forcedVCD = changed && (enableVCDRecovery == 0 || diagnosticVCDImmediateUnlock != 0);
+            if (forcedVCD || unlock)
             {
                 rebuilding = allowFastRebuild;
-                if (changed) InterlockedAdd(farValidationStats[6], 1u);
                 if (sharedDetector)
                 {
-                    // Repeated detector samples are never accumulation samples.
-                    // Reserve a fresh draw before clearing, to avoid a black frame.
-                    if (!reserveExtraRays(1u, false))
+                    if (changed && enableVCDRecovery != 0)
                     {
-                        if (changed) state.visibilityDepth = kVisibilityResetPending;
-                        InterlockedAdd(farValidationStats[7], 1u);
-                        return;
+                        // Reached only after detector/drift unlock, unless explicitly
+                        // reproducing the previous immediate-unlock experiment.
+                        vcdRecovery[pixelIndex] = recoveryFrames + 1u;
+                        unlockClusterSet(cs);
+                        state = emptyClusterLockState();
+                        if (!reserveExtraRays(1u, false)) return;
+                        needsFreshSample = accumulateRay(cs, sd, mi, sg, tanLobe, numRays, numOutliers, tracedRays);
                     }
-                    if (changed) cs = emptyClusterSet();
-                    else unlockClusterSet(cs);
-                    state = emptyClusterLockState();
-                    needsFreshSample = accumulateRay(cs, sd, mi, sg, tanLobe, numRays, numOutliers, tracedRays);
+                    else
+                    {
+                        // Keep the side-effecting batch call inside an explicit
+                        // branch: shader logical operators need not short-circuit.
+                        if (changed)
+                        {
+                            if (rebuildVisibilityBatch(cs, sd, mi, sg, tanLobe, tracedRays))
+                            {
+                                state = emptyClusterLockState();
+                                return;
+                            }
+                        }
+                        // Repeated detector samples are never accumulation samples.
+                        // Reserve a fresh draw before clearing, to avoid a black frame.
+                        if (!reserveExtraRays(1u, false))
+                        {
+                            if (changed) state.visibilityDepth = kVisibilityResetPending;
+                            InterlockedAdd(farValidationStats[7], 1u);
+                            return;
+                        }
+                        if (changed) cs = emptyClusterSet();
+                        else unlockClusterSet(cs);
+                        state = emptyClusterLockState();
+                        needsFreshSample = accumulateRay(cs, sd, mi, sg, tanLobe, numRays, numOutliers, tracedRays);
+                    }
                 }
                 else
                 {
@@ -502,10 +609,17 @@ struct ConeTraceScreen
         evalConeLobe(roughness, tanLobe, cosLobe);
 
         ClusterSet cs = unpackClusterSet(clusterHistory[pixIdx]);
+        uint remaining = vcdRecovery[pixIdx];
+        if (enableVCDRecovery == 0 || enableVisibilityCheck == 0 || cameraMoved()) remaining = 0u;
+        vcdRecovery[pixIdx] = remaining > 0u ? remaining - 1u : 0u;
+        const float recovery = recoveryAmount(pixIdx);
+        float activeGate = lerp(detectThreshold, recoveryThreshold, recovery);
+        float activeUnlockRate = lerp(unlockOutlierRate, recoveryUnlockRate, recovery);
 
         // Independent accumulation RNG. The shared locked detector uses its
         // own window seed and never contributes repeated draws to the mixture.
-        SampleGenerator sg = SampleGenerator(pixel, frameCount);
+        const uint sampleSeed = diagnosticSamplingPeriod != 0u ? frameCount % diagnosticSamplingPeriod : frameCount;
+        SampleGenerator sg = SampleGenerator(pixel, sampleSeed);
 
         uint tracedRays = 0;
         const uint rayBudget = clamp(maxRays, 1u, kMaxRayBudget);
@@ -541,11 +655,25 @@ struct ConeTraceScreen
                     (!newProbe && visibilityDepthChanged(lockState.visibilityDepth, probeHit, probeT, epsScene));
                 if (visibilityChanged)
                 {
-                    // The old cone distribution is no longer trustworthy, even if
-                    // the new hit happens to match another old mode (or is a miss).
-                    // Reset only this pixel; unaffected static pixels remain locked.
-                    cs = emptyClusterSet();
-                    lockState = emptyClusterLockState();
+                    if (enableVCDRecovery != 0)
+                    {
+                        vcdRecovery[pixIdx] = recoveryFrames + 1u;
+                        if (diagnosticVCDImmediateUnlock != 0)
+                        {
+                            unlockClusterSet(cs);
+                            lockState = emptyClusterLockState();
+                        }
+                        else
+                        {
+                            activeGate = recoveryThreshold;
+                            activeUnlockRate = recoveryUnlockRate;
+                        }
+                    }
+                    else
+                    {
+                        cs = emptyClusterSet();
+                        lockState = emptyClusterLockState();
+                    }
                 }
                 if (newProbe || lockState.visibilityDepth == 0u)
                     lockState.visibilityDepth = packVisibilityDepth(probeHit, probeT);
@@ -562,10 +690,10 @@ struct ConeTraceScreen
                 ++numRays;
 
                 updateClusterLockOutlier(
-                    lockState, cs, hitValid, hitValid ? rayT : 0.f, tanLobe, epsScene, detectThreshold, detectRate
+                    lockState, cs, hitValid, hitValid ? rayT : 0.f, tanLobe, epsScene, activeGate, detectRate
                 );
 
-                if (lockState.outlier >= unlockOutlierRate || lockState.drift >= unlockDrift)
+                if (lockState.outlier >= activeUnlockRate || lockState.drift >= unlockDrift)
                 {
                     unlockClusterSet(cs);
 

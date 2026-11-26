@@ -64,6 +64,8 @@ RWStructuredBuffer<SpecClusterHistory> clusterHistoryOut;
 // screen pixel cannot inherit the previous occupant's detector evidence.
 StructuredBuffer<uint> clusterLockStateIn;
 RWStructuredBuffer<uint> clusterLockStateOut;
+StructuredBuffer<uint> vcdRecoveryIn;
+RWStructuredBuffer<uint> vcdRecoveryOut;
 
 /// Weight that must leave through the cone test before a locked pixel unlocks.
 static const float kConeDropUnlockWeight = 0.1f;
@@ -142,6 +144,7 @@ struct ClusterReproject
 
         ClusterSet cs = emptyClusterSet();
         uint lockStateOut = 0;
+        uint recovery = 0;
         bool anyKept = false;
         float droppedWeight = 0.f;
         float driftSum = 0.f;
@@ -225,6 +228,11 @@ struct ClusterReproject
                                 dot(reflectPrev, reflectCur) < 0.99999f ||
                                 abs(roughnessPrev - roughnessCur) > 1e-5f)
                                 if (lockState.visibilityDepth != kVisibilityResetPending) lockState.visibilityDepth = 0;
+                            // The recovery timer belongs only to this stationary primary surface.
+                            if (!cameraMoved() && all(prevPixel == pixel) &&
+                                length(posPrev - posCur) <= epsScene && dot(normalPrev, normalCur) >= 0.99999f &&
+                                dot(reflectPrev, reflectCur) >= 0.99999f && abs(roughnessPrev - roughnessCur) <= 1e-5f)
+                                recovery = vcdRecoveryIn[prevIdx];
                             const float frameDrift = keptWeight > 0.f ? driftSum / keptWeight : 0.f;
                             lockState.drift += frameDrift;
                             if (cameraMoved() || frameDrift > motionDrift) capClusterObservations(cs, motionMemory);
@@ -239,6 +247,7 @@ struct ClusterReproject
 
         clusterHistoryOut[pixIdx] = packClusterSet(cs);
         clusterLockStateOut[pixIdx] = lockStateOut;
+        vcdRecoveryOut[pixIdx] = recovery;
     }
 }
 

@@ -95,6 +95,11 @@ namespace
     const char kEnableClusterVisibilityCheck[] = "enableClusterVisibilityCheck";
     const char kUseReferenceConeTrace[] = "useReferenceConeTrace";
     const char kClusterMaxRays[] = "clusterMaxRays";
+    const char kVCDRecovery[] = "clusterVCDRecovery";
+    const char kVCDRecoveryThreshold[] = "clusterVCDRecoveryThreshold";
+    const char kVCDRecoveryUnlockRate[] = "clusterVCDRecoveryUnlockRate";
+    const char kVCDRecoveryFrames[] = "clusterVCDRecoveryFrames";
+    const char kClusterVisibilityResetSamples[] = "clusterVisibilityResetSamples";
     const char kClusterSigmaPriorScale[] = "clusterSigmaPriorScale";
     const char kClusterAssignThreshold[] = "clusterAssignThreshold";
     const char kClusterAlphaWeight[] = "clusterAlphaWeight";
@@ -106,6 +111,9 @@ namespace
     const char kClusterMotionMemory[] = "clusterMotionMemory";
     const char kClusterUnlockOutlierRate[] = "clusterUnlockOutlierRate";
     const char kEnablePostFilter[] = "enablePostFilter";
+    const char kPostFilterColorWeight[] = "postFilterColorWeight";
+    const char kPostFilterRadius[] = "postFilterRadius";
+    const char kPostFilterStrength[] = "postFilterStrength";
     const char kEnableIsolatedHighlightFilter[] = "enableIsolatedHighlightFilter";
     const char kEnableFXAA[] = "enableFXAA";
     const char kEnableMirrorAlbedo[] = "enableMirrorAlbedo";
@@ -215,6 +223,10 @@ namespace
 static void regNeuralRadiosity(pybind11::module& m)
 {
     pybind11::class_<NeuralRadiosity, RenderPass, ref<NeuralRadiosity>> pass(m, "NeuralRadiosity");
+    pass.def("setDiagnosticEagerFrequencySurvey", &NeuralRadiosity::setDiagnosticEagerFrequencySurvey);
+    pass.def("setDiagnosticVCDImmediateUnlock", &NeuralRadiosity::setDiagnosticVCDImmediateUnlock);
+    pass.def("setVCDRecovery", &NeuralRadiosity::setVCDRecovery);
+    pass.def("getDiagnosticVCDRecovery", &NeuralRadiosity::getDiagnosticVCDRecovery);
     pass.def("clearHistory", &NeuralRadiosity::clearHistory);
     pass.def_property_readonly("trainHeat", &NeuralRadiosity::getTrainHeat);
     pass.def("configureDiagnostics", &NeuralRadiosity::configureDiagnostics);
@@ -226,8 +238,11 @@ static void regNeuralRadiosity(pybind11::module& m)
     pass.def("getDiagnosticClusterHistory", &NeuralRadiosity::getDiagnosticClusterHistory);
     pass.def("inferDiagnosticSpecInputs", &NeuralRadiosity::inferDiagnosticSpecInputs);
     pass.def("setDiagnosticRenderOptions", &NeuralRadiosity::setDiagnosticRenderOptions);
+    pass.def("setDiagnosticMotionFarWeights", &NeuralRadiosity::setDiagnosticMotionFarWeights);
     pass.def("setDiagnosticSpatialReuse", &NeuralRadiosity::setDiagnosticSpatialReuse);
     pass.def("setDiagnosticSpatialReuseLegacy", &NeuralRadiosity::setDiagnosticSpatialReuseLegacy);
+    pass.def("setDiagnosticSamplingPeriod", &NeuralRadiosity::setDiagnosticSamplingPeriod);
+    pass.def_property("visibilityResetSamples", &NeuralRadiosity::getVisibilityResetSamples, &NeuralRadiosity::setVisibilityResetSamples);
     pass.def("setDiagnosticFarModeValidation", &NeuralRadiosity::setDiagnosticFarModeValidation);
     pass.def("setDiagnosticClusterRayBudget", &NeuralRadiosity::setDiagnosticClusterRayBudget);
     pass.def("setDiagnosticGradualFrequencyUpdate", &NeuralRadiosity::setDiagnosticGradualFrequencyUpdate);
@@ -236,6 +251,9 @@ static void regNeuralRadiosity(pybind11::module& m)
     pass.def("setDiagnosticMergeCountConservation", &NeuralRadiosity::setDiagnosticMergeCountConservation);
     pass.def("reapplyDiagnosticPostFilterPlacement", &NeuralRadiosity::reapplyDiagnosticPostFilterPlacement,
         pybind11::arg("placement"), pybind11::arg("minExcess") = 0.1f, pybind11::arg("requireQuietRing") = false);
+    pass.def_property("postFilterColorWeight", &NeuralRadiosity::getPostFilterColorWeight, &NeuralRadiosity::setPostFilterColorWeight);
+    pass.def_property("postFilterRadius", &NeuralRadiosity::getPostFilterRadius, &NeuralRadiosity::setPostFilterRadius);
+    pass.def_property("postFilterStrength", &NeuralRadiosity::getPostFilterStrength, &NeuralRadiosity::setPostFilterStrength);
     pass.def("reapplyDiagnosticPostFilter", &NeuralRadiosity::reapplyDiagnosticPostFilter);
     pass.def("getDiagnosticPostFilterInput", &NeuralRadiosity::getDiagnosticPostFilterInput);
     pass.def("getFarModeValidationStats", &NeuralRadiosity::getFarModeValidationStats);
@@ -368,6 +386,27 @@ NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) :
             mEnableClusterSpatialReuse = value;
         else if (key == kUseReferenceConeTrace)
             mUseReferenceConeTrace = value;
+        else if (key == kClusterVisibilityResetSamples)
+            setVisibilityResetSamples(value);
+        else if (key == kVCDRecovery) mEnableVCDRecovery = value;
+        else if (key == kVCDRecoveryThreshold)
+        {
+            float v = value;
+            FALCOR_CHECK(v >= 0.05f && v <= 8.f, "Invalid VCD recovery threshold.");
+            mVCDRecoveryThreshold = v;
+        }
+        else if (key == kVCDRecoveryUnlockRate)
+        {
+            float v = value;
+            FALCOR_CHECK(v >= 0.01f && v <= 1.f, "Invalid VCD recovery unlock rate.");
+            mVCDRecoveryUnlockRate = v;
+        }
+        else if (key == kVCDRecoveryFrames)
+        {
+            uint32_t v = value;
+            FALCOR_CHECK(v >= 1u && v <= 1024u, "Invalid VCD recovery frames.");
+            mVCDRecoveryFrames = v;
+        }
         else if (key == kClusterMaxRays)
             mClusterMaxRays = value;
         else if (key == kClusterSigmaPriorScale)
@@ -392,6 +431,12 @@ NeuralRadiosity::NeuralRadiosity(ref<Device> pDevice, const Properties& props) :
             mClusterUnlockOutlierRate = value;
         else if (key == "trainWarmupFrames")
             FALCOR_THROW("trainWarmupFrames was renamed to trainInitialHotFrames (learning-rate heat hold).");
+        else if (key == kPostFilterColorWeight)
+            mPostFilterColorWeight = value;
+        else if (key == kPostFilterRadius)
+            setPostFilterRadius(value);
+        else if (key == kPostFilterStrength)
+            setPostFilterStrength(value);
         else if (key == kEnablePostFilter)
             mEnablePostFilter = value;
         else if (key == kRenderMode)
@@ -468,7 +513,12 @@ Properties NeuralRadiosity::getProperties() const
     props[kEnableClusterVisibilityCheck] = mEnableClusterVisibilityCheck;
     props[kUseReferenceConeTrace] = mUseReferenceConeTrace;
     props[kClusterMaxRays] = mClusterMaxRays;
+    props[kClusterVisibilityResetSamples] = mClusterVisibilityResetSamples;
     props[kClusterSigmaPriorScale] = mClusterSigmaPriorScale;
+    props[kVCDRecovery] = mEnableVCDRecovery;
+    props[kVCDRecoveryThreshold] = mVCDRecoveryThreshold;
+    props[kVCDRecoveryUnlockRate] = mVCDRecoveryUnlockRate;
+    props[kVCDRecoveryFrames] = mVCDRecoveryFrames;
     props[kClusterAssignThreshold] = mClusterAssignThreshold;
     props[kClusterAlphaWeight] = mClusterAlphaWeight;
     props[kClusterLockCount] = mClusterLockCount;
@@ -479,6 +529,9 @@ Properties NeuralRadiosity::getProperties() const
     props[kClusterMotionMemory] = mClusterMotionMemory;
     props[kClusterUnlockOutlierRate] = mClusterUnlockOutlierRate;
     props[kEnablePostFilter] = mEnablePostFilter;
+    props[kPostFilterStrength] = mPostFilterStrength;
+    props[kPostFilterRadius] = mPostFilterRadius;
+    props[kPostFilterColorWeight] = mPostFilterColorWeight;
     props[kEnableIsolatedHighlightFilter] = mEnableIsolatedHighlightFilter;
     props[kEnableFXAA] = mEnableFXAA;
     props[kEnableMirrorAlbedo] = mEnableMirrorAlbedo;
@@ -569,6 +622,9 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
     const auto& camera = mpScene->getCamera()->getData();
     const bool viewChanged = std::memcmp(&camera.viewProjMatNoJitter, &camera.prevViewProjMatNoJitter,
                                          sizeof(camera.viewProjMatNoJitter)) != 0;
+    // A short history can still carry the same isolated hit on the first still frame.
+    if (viewChanged) mMotionFarWeightFrames = kMotionFarWeightFadeFrames + 1;
+    else if (mMotionFarWeightFrames) --mMotionFarWeightFrames;
     if (!mClusterHistoryValid || viewChanged) mClusterFrequencyFrames = 0;
     else if (mClusterGeometryMoved) mClusterFrequencyFrames = 200;
     else if (mClusterFrequencyFrames) --mClusterFrequencyFrames;
@@ -650,99 +706,106 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
         }
     }
 
-    if (widget.button("Resume training from ckpt"))
+    if (auto training = widget.group("Training", false))
     {
-        mVarsChanged = true;
-        std::filesystem::path path;
-        if (mpNRModel && openFileDialog(kModelStateFilters, path))
+        if (training.button("Resume training from ckpt"))
         {
-            uint32_t frameCountFromFile = 0;
-            try
+            mVarsChanged = true;
+            std::filesystem::path path;
+            if (mpNRModel && openFileDialog(kModelStateFilters, path))
             {
-                frameCountFromFile = std::stoi(path.stem().string());
-                mFrameCount = frameCountFromFile;
-                mRenderMode = RenderMode::Train;
-                setConeParameters(true);
-            }
-            catch(const std::exception& e)
-            {
-                logError(e.what());
-            }
+                uint32_t frameCountFromFile = 0;
+                try
+                {
+                    frameCountFromFile = std::stoi(path.stem().string());
+                    mFrameCount = frameCountFromFile;
+                    mRenderMode = RenderMode::Train;
+                    setConeParameters(true);
+                }
+                catch(const std::exception& e)
+                {
+                    logError(e.what());
+                }
 
-            mpNRModel->loadState(path.string());
+                mpNRModel->loadState(path.string());
+            }
         }
-    }
 
-    if (widget.button("Load train cameras"))
-    {
-        std::filesystem::path path;
-        if (openFileDialog(kCameraJsonFilters, path))
+        if (training.button("Load train cameras"))
         {
-            loadTrainCamerasFromFile(path);
+            std::filesystem::path path;
+            if (openFileDialog(kCameraJsonFilters, path))
+            {
+                loadTrainCamerasFromFile(path);
+                mVarsChanged = true;
+            }
+        }
+
+        training.text(fmt::format("Train batchsize: {}, RHS samples: {}", mBatchSize, mNumRHS));
+        training.text(fmt::format("Num spec rays: {}, clusters: {}, KMeans iters: {}", mNumSpecRays, mNumClusters, mNumKMeansIters));
+        training.text(fmt::format("Train cameras: {}", mTrainCameras.size()));
+        training.text(mTrainCameraPath.empty() ? "Camera file: N/A" : fmt::format("Camera file: {}", mTrainCameraPath.filename().string()));
+
+        if (!mTrainCameraPath.empty())
+        {
+            training.tooltip(mTrainCameraPath.string());
+        }
+
+        if (training.checkbox("Use NEE", mUseNEE))
+        {
             mVarsChanged = true;
         }
-    }
-
-    widget.text(fmt::format("Train batchsize: {}, RHS samples: {}", mBatchSize, mNumRHS));
-    widget.text(fmt::format("Num spec rays: {}, clusters: {}, KMeans iters: {}", mNumSpecRays, mNumClusters, mNumKMeansIters));
-    widget.text(fmt::format("Train cameras: {}", mTrainCameras.size()));
-    widget.text(mTrainCameraPath.empty() ? "Camera file: N/A" : fmt::format("Camera file: {}", mTrainCameraPath.filename().string()));
-
-    if (!mTrainCameraPath.empty())
-    {
-        widget.tooltip(mTrainCameraPath.string());
-    }
-
-    if (widget.checkbox("Use NEE", mUseNEE))
-    {
-        mVarsChanged = true;
-    }
-    widget.var("RHS Glossy Bounces", mRhsGlossyBounces, 0u, 8u);
-    widget.tooltip(
-        "Glossy RHS hits continue along a BSDF sample (with NEE) this many times\n"
-        "before the diffuse network is queried. 0 queries it at glossy hits, which\n"
-        "lets the diffuse network drift dark in glossy, high-albedo rooms."
-    );
-    widget.checkbox("Diffuse Trains On Glossy", mDiffTrainOnGlossy);
-    widget.tooltip("Also train the diffuse network on glossy samples. Only useful with 0 glossy bounces.");
-    widget.checkbox("Mirror Albedo", mEnableMirrorAlbedo);
-    widget.tooltip("Trace one mirror ray: ordinary surfaces use albedo; emissive surfaces use -log(1 + emission).");
-    {
-        static const Gui::DropdownList kEnvEncodings = {{0, "Linear"}, {1, "Signed log"}, {2, "Log"}};
-        widget.dropdown("Env Color Encoding", kEnvEncodings, mEnvColorEncoding);
-        widget.tooltip(
-            "How a mirror-ray miss enters the shared env/albedo input channels.\n"
-            "Signed log: -log(1 + env). Ordinary surfaces keep albedo; emissive surfaces always use -log(1 + emission)."
+        training.var("RHS Glossy Bounces", mRhsGlossyBounces, 0u, 8u);
+        training.tooltip(
+            "Glossy RHS hits continue along a BSDF sample (with NEE) this many times\n"
+            "before the diffuse network is queried. 0 queries it at glossy hits, which\n"
+            "lets the diffuse network drift dark in glossy, high-albedo rooms."
         );
+        training.checkbox("Diffuse Trains On Glossy", mDiffTrainOnGlossy);
+        training.tooltip("Also train the diffuse network on glossy samples. Only useful with 0 glossy bounces.");
+
+        if (auto group = training.group("Training Schedule", false))
+        {
+            group.checkbox("Enable", mEnableTrainSchedule);
+            group.tooltip("Off: always train with the hot learning rate and EMA decay.");
+            group.text(fmt::format("Heat {:.2f}  hold {}", mTrainHeat, mTrainHoldLeft));
+            group.var("Log every N frames", mTrainHeatLogInterval, 0u, 10000u);
+            group.tooltip("Print heat, hold/cooling, LR, EMA decay and the events seen to the log every N training frames,\n"
+                          "and at once when a camera or scene event raises the heat. 0 = off.");
+            group.var("LR hot", mTrainLrHot, 1e-5f, 1e-1f, 1e-4f, false, "%.5f");
+            group.var("LR cold", mTrainLrCold, 1e-5f, 1e-1f, 1e-4f, false, "%.5f");
+            group.var("EMA hot", mTrainEmaHot, 0.f, 0.9999f, 0.001f, false, "%.4f");
+            group.var("EMA cold", mTrainEmaCold, 0.f, 0.9999f, 0.001f, false, "%.4f");
+            group.var("Initial hot frames", mTrainInitialHotFrames, 0u, 10000u);
+            group.tooltip("Frames held fully hot after the scene loads or the schedule is reset.");
+            group.var("Hold frames", mTrainHoldFrames, 0u, 10000u);
+            group.tooltip("Minimum frames held after an event raises the heat.");
+            group.var("Cool frames", mTrainCoolFrames, 1.f, 10000.f, 1.f);
+            group.tooltip("Time constant of the decay toward cold once nothing changes.");
+            group.var("Camera heat", mTrainCameraHeat, 0.f, 1.f, 0.05f);
+            group.tooltip("Heat while the camera moves. The network is world-space, so this only speeds up newly seen regions.");
+            group.var("Scene heat", mTrainSceneHeat, 0.f, 1.f, 0.05f);
+            group.tooltip("Heat for scene edits, or scene changes while the camera moves.");
+            group.var("Light motion heat", mTrainLightMotionHeat, 0.f, 1.f, 0.05f);
+            group.tooltip("Fixed camera: moving analytic lights or emissive geometry.");
+            group.var("Object motion heat", mTrainObjectMotionHeat, 0.f, 1.f, 0.05f);
+            group.tooltip("Fixed camera: moving non-emissive geometry only.");
+            if (group.button("Reset schedule")) resetTrainSchedule();
+        }
     }
 
-    if (auto group = widget.group("Training Schedule", false))
+    if (auto inputs = widget.group("Model Inputs (Advanced)", false))
     {
-        group.checkbox("Enable", mEnableTrainSchedule);
-        group.tooltip("Off: always train with the hot learning rate and EMA decay.");
-        group.text(fmt::format("Heat {:.2f}  hold {}", mTrainHeat, mTrainHoldLeft));
-        group.var("Log every N frames", mTrainHeatLogInterval, 0u, 10000u);
-        group.tooltip("Print heat, hold/cooling, LR, EMA decay and the events seen to the log every N training frames,\n"
-                      "and at once when a camera or scene event raises the heat. 0 = off.");
-        group.var("LR hot", mTrainLrHot, 1e-5f, 1e-1f, 1e-4f, false, "%.5f");
-        group.var("LR cold", mTrainLrCold, 1e-5f, 1e-1f, 1e-4f, false, "%.5f");
-        group.var("EMA hot", mTrainEmaHot, 0.f, 0.9999f, 0.001f, false, "%.4f");
-        group.var("EMA cold", mTrainEmaCold, 0.f, 0.9999f, 0.001f, false, "%.4f");
-        group.var("Initial hot frames", mTrainInitialHotFrames, 0u, 10000u);
-        group.tooltip("Frames held fully hot after the scene loads or the schedule is reset.");
-        group.var("Hold frames", mTrainHoldFrames, 0u, 10000u);
-        group.tooltip("Minimum frames held after an event raises the heat.");
-        group.var("Cool frames", mTrainCoolFrames, 1.f, 10000.f, 1.f);
-        group.tooltip("Time constant of the decay toward cold once nothing changes.");
-        group.var("Camera heat", mTrainCameraHeat, 0.f, 1.f, 0.05f);
-        group.tooltip("Heat while the camera moves. The network is world-space, so this only speeds up newly seen regions.");
-        group.var("Scene heat", mTrainSceneHeat, 0.f, 1.f, 0.05f);
-        group.tooltip("Heat for scene edits, or scene changes while the camera moves.");
-        group.var("Light motion heat", mTrainLightMotionHeat, 0.f, 1.f, 0.05f);
-        group.tooltip("Fixed camera: moving analytic lights or emissive geometry.");
-        group.var("Object motion heat", mTrainObjectMotionHeat, 0.f, 1.f, 0.05f);
-        group.tooltip("Fixed camera: moving non-emissive geometry only.");
-        if (group.button("Reset schedule")) resetTrainSchedule();
+        inputs.checkbox("Mirror Albedo", mEnableMirrorAlbedo);
+        inputs.tooltip("Trace one mirror ray: ordinary surfaces use albedo; emissive surfaces use -log(1 + emission).");
+        {
+            static const Gui::DropdownList kEnvEncodings = {{0, "Linear"}, {1, "Signed log"}, {2, "Log"}};
+            inputs.dropdown("Env Color Encoding", kEnvEncodings, mEnvColorEncoding);
+            inputs.tooltip(
+                "How a mirror-ray miss enters the shared env/albedo input channels.\n"
+                "Signed log: -log(1 + env). Ordinary surfaces keep albedo; emissive surfaces always use -log(1 + emission)."
+            );
+        }
     }
 
     if (auto group = widget.group("Spatiotemporal Cluster Reuse", true))
@@ -760,95 +823,97 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
             "Off: original per-frame group-wide K-Means cone trace."
         );
 
-        if (group.button("Clear History")) clearHistory();
-
-        if (!mEnableRenderSpecTemporalReuse)
+        if (mEnableRenderSpecTemporalReuse)
         {
-            if (group.checkbox("Reference T=128", mUseReferenceConeTrace))
+            if (group.checkbox("Visibility Change Detection", mEnableClusterVisibilityCheck)) clearHistory();
+            group.tooltip("Use repeated ray directions to detect visibility changes. Threshold recovery changes sensitivity; it does not force an unlock.");
+
+            const bool recoveryActive = mEnableClusterVisibilityCheck && mEnableVCDRecovery;
+            if (recoveryActive) group.text("1: normal   2: after VCD   (2 returns to 1)");
+            group.var("lambda_d1", mClusterDetectThreshold, 0.1f, 8.f, 0.05f);
+            group.tooltip("Normal detector distance threshold. Smaller values classify more hits as outliers. This does not change cluster assignment.");
+            if (recoveryActive)
             {
-                setConeParameters(mRenderMode == RenderMode::Train);
+                group.var("lambda_d2", mVCDRecoveryThreshold, 0.05f, 8.f, 0.01f);
+                group.tooltip("Detector distance threshold immediately after VCD. Gradually returns to lambda_d1; VCD itself keeps counts and the mixture intact.");
             }
-            group.tooltip(
-                "Run the render path at the training ray count so its (t_k, sigma_k, w_k)\n"
-                "can be compared per pixel against the T=128 reference. Very slow."
-            );
+            group.var("Unlock Rate 1", mClusterUnlockOutlierRate, 0.05f, 1.f, 0.01f);
+            group.tooltip("Normal outlier-score threshold for unlocking. Lower = easier to unlock. This is not the detector EMA update rate.");
+            if (recoveryActive)
+            {
+                group.var("Unlock Rate 2", mVCDRecoveryUnlockRate, 0.01f, 1.f, 0.01f);
+                group.tooltip("Outlier-score threshold after VCD. Gradually returns to Unlock Rate 1. Equal values disable this part of adaptation.");
+                group.var("Recovery Frames (2 -> 1)", mVCDRecoveryFrames, 1u, 1024u);
+                group.tooltip("Linear recovery of both thresholds from 2 to 1. Repeated VCD changes restart the countdown; beta is unchanged.");
+            }
+            else if (mEnableClusterVisibilityCheck)
+                group.text("VCD uses hard reset; threshold 2 is inactive.");
+
+            group.var("Lock Count (N_lock)", mClusterLockCount, 1.f, 255.f, 1.f);
+            group.tooltip("Effective observations required before the cluster mixture freezes. This is not a frame count or samples per cluster.");
+            if (group.button("Clear History")) clearHistory();
+
+            if (auto advanced = group.group("Advanced", false))
+            {
+                advanced.var("Assign Threshold (lambda)", mClusterAssignThreshold, 0.05f, 8.f, 0.01f);
+                advanced.tooltip("Depth-mode assignment threshold, separate from lambda_d1/d2. Smaller values split modes more finely. Clear History to compare a new partition from scratch.");
+                advanced.var("Detect Rate (beta)", mClusterDetectRate, 0.02f, 0.5f, 0.005f);
+                advanced.tooltip("EMA update rate of the outlier score per eligible detector observation, not per frame. It does not blend image colors.");
+                advanced.var("Max Rays / Pixel", mClusterMaxRays, 1u, 4u);
+                advanced.tooltip("Regular sampling loop limit. The global budget may limit extra rays.");
+                advanced.var("Max Count (N_max)", mClusterMaxCount, 1.f, 255.f, 1.f);
+                advanced.tooltip("Per-mode mean/variance count cap while accumulating; distinct from Lock Count.");
+                advanced.var("Release Weight", mClusterWeakWeight, 0.f, 0.5f, 0.005f);
+                advanced.var("Sigma Prior Scale", mClusterSigmaPriorScale, 0.f, 2.f, 0.01f);
+                advanced.tooltip("Initial spread of a new mode. 0 matches the training path's single-sample scale.");
+
+                if (auto motion = advanced.group("Motion and Reprojection", false))
+                {
+                    motion.var("Motion Memory", mClusterMotionMemory, 1.f, 32.f, 1.f);
+                    motion.tooltip("Effective history cap while moving. Shorter history follows motion faster but is noisier.");
+                    motion.var("Motion Drift", mClusterMotionDrift, 0.f, 1.f, 0.001f);
+                    motion.tooltip("Per-frame anchor drift in cone radii above which a pixel uses the moving-history cap.");
+                    motion.var("Unlock Drift", mClusterUnlockDrift, 0.05f, 4.f, 0.05f);
+                    motion.tooltip("Accumulated anchor drift in cone radii that unlocks a frozen mixture.");
+                    motion.var("Normal Threshold", mClusterNormalThreshold, 0.f, 1.f, 0.005f);
+                    motion.var("Roughness Threshold", mClusterRoughnessThreshold, 0.f, 1.f, 0.005f);
+                    motion.var("Position Tolerance", mClusterPosThresholdRel, 0.f, 0.5f, 0.001f);
+                }
+                if (auto spatial = advanced.group("Spatial Reuse", false))
+                {
+                    spatial.checkbox("Enable", mEnableClusterSpatialReuse);
+                    if (mEnableClusterSpatialReuse)
+                    {
+                        spatial.var("Taps", mClusterNumTaps, 0u, 16u);
+                        spatial.var("Radius Scale", mClusterGatherRadiusScale, 0.f, 8.f, 0.05f);
+                        spatial.var("Max Radius (px)", mClusterMaxGatherRadius, 1.f, 32.f, 0.5f);
+                        spatial.var("Gamma Max", mClusterGammaMax, 0.f, 1.f, 0.01f);
+                        spatial.var("Gamma Min", mClusterGammaMin, 0.f, 1.f, 0.01f);
+                        spatial.var("Confidence Count", mClusterConfidenceCount, 1.f, 255.f, 1.f);
+                    }
+                }
+                if (auto diagnostics = advanced.group("Diagnostics", false))
+                {
+                    if (mEnableClusterVisibilityCheck)
+                    {
+                        if (diagnostics.checkbox("VCD Threshold Recovery", mEnableVCDRecovery)) clearHistory();
+                        diagnostics.tooltip("On: VCD only switches thresholds. Off: restore the old hard-reset behavior.");
+                        if (!mEnableVCDRecovery)
+                        {
+                            diagnostics.var("Visibility Reset Samples", mClusterVisibilityResetSamples, 0u, 32u);
+                            diagnostics.tooltip("Extra fresh samples after a hard VCD reset. 0 disables; the extra-ray budget still applies.");
+                        }
+                    }
+                    diagnostics.checkbox("Clear On Geometry Moved", mClearHistoryOnGeometryMoved);
+                    diagnostics.tooltip("A playing animation may clear history every frame. Normally leave off and use local detection instead.");
+                }
+            }
         }
-
-        group.checkbox("Spatial Reuse", mEnableClusterSpatialReuse);
-        if (group.checkbox("Visibility Change Detection", mEnableClusterVisibilityCheck)) clearHistory();
-        group.tooltip("Detect reflected geometry changes with a repeated ray (plus an old-direction check every 8 frames). Unchanged pixels stay locked.");
-
-        group.checkbox("Clear On Geometry Moved", mClearHistoryOnGeometryMoved);
-        group.tooltip(
-            "Off by default. A scene with a playing animation raises GeometryMoved\n"
-            "every frame, and clearing on it would keep the history permanently empty\n"
-            "(1 unfiltered ray per pixel). Local visibility changes are handled by\n"
-            "the visibility probe, cone test and outlier path instead."
-        );
-
-        group.var("Max Rays / Pixel", mClusterMaxRays, 1u, 4u);
-        group.tooltip("Accumulation/outlier ray budget. Visibility detection adds 1 ray, or 2 on a probe-window change.");
-
-        group.var("Assign Threshold (lambda)", mClusterAssignThreshold, 0.05f, 8.f, 0.01f);
-        group.tooltip(
-            "How finely the cone is partitioned into depth modes.\n"
-            "Lower = more, narrower modes = closer to the K-Means reference."
-        );
-        group.var("Lock Count (N_lock)", mClusterLockCount, 1.f, 255.f, 1.f);
-        group.tooltip(
-            "Accumulate random GGX samples with alpha = 1/(n+1) until this many\n"
-            "observations, then freeze the mixture. Matches the old T=32 one-shot."
-        );
-        group.var("Detect Gate (lambda_d)", mClusterDetectThreshold, 0.1f, 8.f, 0.05f);
-        group.tooltip(
-            "Residual gate of the locked-pixel change detector. Separate from lambda,\n"
-            "which is too tight to tell a static pixel from a changed one."
-        );
-        group.var("Detect Rate (beta)", mClusterDetectRate, 0.02f, 0.5f, 0.005f);
-        group.tooltip("EMA rate of the observed ray shares. Lower = steadier, slower to react.");
-        group.var("Unlock Outlier Rate", mClusterUnlockOutlierRate, 0.05f, 1.f, 0.01f);
-        group.tooltip(
-            "When this share of hits lands outside every mode, the pixel unlocks\n"
-            "to grow new modes. Losing real weight through the cone test unlocks directly."
-        );
-        group.var("Motion Drift", mClusterMotionDrift, 0.f, 1.f, 0.001f);
-        group.tooltip("Per-frame drift (cone radii) above which the pixel counts as moving with the camera.");
-        group.var("Motion Memory", mClusterMotionMemory, 1.f, 32.f, 1.f);
-        group.tooltip(
-            "Observation cap while moving: the mixture tracks ~this many recent samples\n"
-            "and only locks once the camera holds still, so no motion trail is frozen."
-        );
-        group.var("Unlock Drift", mClusterUnlockDrift, 0.05f, 4.f, 0.05f);
-        group.tooltip(
-            "Unlock once the cone has slid this many cone radii across the frozen\n"
-            "anchors since the pixel locked (smooth camera motion)."
-        );
-        group.var("Weight EMA (alpha_w)", mClusterAlphaWeight, 0.01f, 1.f, 0.005f);
-        group.tooltip("Unused: weights use 1/(n+1) until lock. Kept for property compatibility.");
-        group.var("Max Count (N_max)", mClusterMaxCount, 1.f, 255.f, 1.f);
-        group.tooltip("Per-mode (mu, sigma) count cap during the accumulation window.");
-        group.var("Release Weight", mClusterWeakWeight, 0.f, 0.5f, 0.005f);
-        group.var("Sigma Prior Scale", mClusterSigmaPriorScale, 0.f, 2.f, 0.01f);
-        group.tooltip(
-            "Newborn sigma = scale * tanLobe * t. 0 reproduces the training path's\n"
-            "singleton clsScale exactly; Welford grows sigma from later hits."
-        );
-
-        if (auto reproj = group.group("Reprojection"))
+        else if (auto diagnostics = group.group("Diagnostics", false))
         {
-            reproj.var("Normal Threshold", mClusterNormalThreshold, 0.f, 1.f, 0.005f);
-            reproj.var("Roughness Threshold", mClusterRoughnessThreshold, 0.f, 1.f, 0.005f);
-            reproj.var("Position Tolerance", mClusterPosThresholdRel, 0.f, 0.5f, 0.001f);
-        }
-
-        if (auto spatial = group.group("Spatial Gather"))
-        {
-            spatial.var("Taps", mClusterNumTaps, 0u, 16u);
-            spatial.var("Radius Scale", mClusterGatherRadiusScale, 0.f, 8.f, 0.05f);
-            spatial.var("Max Radius (px)", mClusterMaxGatherRadius, 1.f, 32.f, 0.5f);
-            spatial.var("Gamma Max", mClusterGammaMax, 0.f, 1.f, 0.01f);
-            spatial.var("Gamma Min", mClusterGammaMin, 0.f, 1.f, 0.01f);
-            spatial.var("Confidence Count", mClusterConfidenceCount, 1.f, 255.f, 1.f);
+            if (diagnostics.checkbox("Use Training Ray Count", mUseReferenceConeTrace))
+                setConeParameters(mRenderMode == RenderMode::Train);
+            diagnostics.tooltip(fmt::format("Use the configured training ray count ({}) for the reference cone trace.", mNumSpecRaysTrain));
         }
     }
 
@@ -856,10 +921,19 @@ void NeuralRadiosity::renderUI(Gui::Widgets& widget)
     {
         mVarsChanged = true;
     }
-    if (mEnablePostFilter) widget.checkbox("Isolated Highlight Filter", mEnableIsolatedHighlightFilter);
-    if (mEnablePostFilter && widget.checkbox("FXAA", mEnableFXAA))
+    if (mEnablePostFilter)
     {
-        mVarsChanged = true;
+        widget.var("Post Filter Radius", mPostFilterRadius, 1u, 7u);
+        widget.tooltip("Kernel width is 2*radius+1. Radius 3/4/5 uses 49/81/121 taps. Larger kernels cost more and can soften detail.");
+        widget.var("Post Filter Strength", mPostFilterStrength, 1.f, 16.f, 0.1f);
+        widget.tooltip("1 preserves the original filter. Higher values relax albedo/color weights without more taps; fine textures and reflections may soften.");
+        if (auto advanced = widget.group("Post Filter Advanced", false))
+        {
+            advanced.checkbox("Color Weight", mPostFilterColorWeight);
+            advanced.tooltip("Use HDR radiance similarity; albedo, normal and spatial weights remain active when disabled.");
+            advanced.checkbox("Isolated Highlight Filter", mEnableIsolatedHighlightFilter);
+            if (advanced.checkbox("FXAA", mEnableFXAA)) mVarsChanged = true;
+        }
     }
 }
 
@@ -869,9 +943,13 @@ void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& 
     mDiagnosticHistoryFrozen = false;
     mDiagnosticSpatialReuseLegacy = false;
     mEnableFarModeValidation = true;
+    mDiagnosticSamplingPeriod = 0;
+    mDiagnosticVCDImmediateUnlock = false;
+    mDiagnosticEagerFrequencySurvey = false;
     mConserveClusterMergeCounts = true;
     mEnableClusterFastRebuild = true;
     mEnableClusterRayBudget = true;
+    mMotionFarWeightFrames = 0;
     mClusterVisibilityFrame = 0;
     mClusterVisibilityFrameAdvanced = true;
     mClusterGeometryMoved = false;
@@ -1230,11 +1308,11 @@ void NeuralRadiosity::postFilterPass(RenderContext* pRenderContext, const Render
     {
         ShaderVar var = mpPostFilterPass->getRootVar();
         bindScreenData(var, renderData, name);
-        var[name]["kernelRadius"] = 3;
+        var[name]["kernelRadius"] = int32_t(mPostFilterRadius);
         var[name]["sigmaSpatial"] = 4.0f;
         var[name]["sigmaNormal"] = 0.05f;
-        var[name]["sigmaAlbedo"] = 0.02f;
-        var[name]["sigmaColor"] = 2.0f;
+        var[name]["sigmaAlbedo"] = 0.02f * mPostFilterStrength;
+        var[name]["sigmaColor"] = 2.0f * mPostFilterStrength;
         var["diffActive"] = mpRenderBatch->diffActive;
         var["diffIndex"] = mpRenderBatch->diffIndex;
         var["specActive"] = mpRenderBatch->specActive;
@@ -1257,6 +1335,10 @@ void NeuralRadiosity::dispatchPostFilters(RenderContext* pRenderContext, bool is
     const auto bilateral = [&](const ref<Texture>& input, const ref<Texture>& output)
     {
         auto var = mpPostFilterPass->getRootVar();
+        var["gPostFilterPass"]["kernelRadius"] = int32_t(mPostFilterRadius);
+        var["gPostFilterPass"]["sigmaAlbedo"] = 0.02f * mPostFilterStrength;
+        var["gPostFilterPass"]["sigmaColor"] = 2.0f * mPostFilterStrength;
+        var["gPostFilterPass"]["enableColorWeight"] = mPostFilterColorWeight ? 1u : 0u;
         var["tempColor"] = input;
         var["gFilteredColor"] = output;
         executePass(pRenderContext, mpPostFilterPass, "PostFilterPass", uint3(mFrameDim, 1));
@@ -1611,10 +1693,12 @@ void NeuralRadiosity::clusterReuse(RenderContext* pRenderContext, const RenderDa
         clusterReprojectPass(pRenderContext, renderData);
         pRenderContext->uavBarrier(mpClusterHistory[mClusterHistoryWriteIdx].get());
         pRenderContext->uavBarrier(mpClusterLockState[mClusterHistoryWriteIdx].get());
+        pRenderContext->uavBarrier(mpVCDRecovery[mClusterHistoryWriteIdx].get());
 
         coneTraceScreenPass(pRenderContext, renderData);
         pRenderContext->uavBarrier(mpClusterHistory[mClusterHistoryWriteIdx].get());
         pRenderContext->uavBarrier(mpClusterLockState[mClusterHistoryWriteIdx].get());
+        pRenderContext->uavBarrier(mpVCDRecovery[mClusterHistoryWriteIdx].get());
     }
 
     clusterSpatialReusePass(pRenderContext, renderData);
@@ -1657,6 +1741,8 @@ void NeuralRadiosity::clusterReprojectPass(RenderContext* pRenderContext, const 
     var["specActive"] = mpRenderBatch->specActive;
     var["clusterHistoryIn"] = mpClusterHistory[1 - mClusterHistoryWriteIdx];
     var["clusterHistoryOut"] = mpClusterHistory[mClusterHistoryWriteIdx];
+    var["vcdRecoveryIn"] = mpVCDRecovery[1 - mClusterHistoryWriteIdx];
+    var["vcdRecoveryOut"] = mpVCDRecovery[mClusterHistoryWriteIdx];
     var["clusterLockStateIn"] = mpClusterLockState[1 - mClusterHistoryWriteIdx];
     var["clusterLockStateOut"] = mpClusterLockState[mClusterHistoryWriteIdx];
 
@@ -1673,7 +1759,7 @@ void NeuralRadiosity::coneTraceScreenPass(RenderContext* pRenderContext, const R
     const float epsScene = clusterSceneEpsilon(aabb);
 
     if (!mpFarValidationStats)
-        mpFarValidationStats = mpDevice->createStructuredBuffer(sizeof(uint32_t), 10,
+        mpFarValidationStats = mpDevice->createStructuredBuffer(sizeof(uint32_t), 16,
             ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal, nullptr, false);
     pRenderContext->clearUAV(mpFarValidationStats->getUAV().get(), uint4(0));
 
@@ -1696,12 +1782,20 @@ void NeuralRadiosity::coneTraceScreenPass(RenderContext* pRenderContext, const R
     var[name]["maxRays"] = mClusterMaxRays;
     var[name]["enableVisibilityCheck"] = mEnableClusterVisibilityCheck ? 1u : 0u;
 
+    var[name]["diagnosticVCDImmediateUnlock"] = mDiagnosticVCDImmediateUnlock ? 1u : 0u;
+    var[name]["enableVCDRecovery"] = mEnableVCDRecovery ? 1u : 0u;
+    var[name]["recoveryThreshold"] = mVCDRecoveryThreshold;
+    var[name]["recoveryUnlockRate"] = mVCDRecoveryUnlockRate;
+    var[name]["recoveryFrames"] = mVCDRecoveryFrames;
+    var["vcdRecovery"] = mpVCDRecovery[mClusterHistoryWriteIdx];
     var[name]["visibilityFrame"] = mClusterVisibilityFrame;
     var[name]["visibilityFrameAdvanced"] = mClusterVisibilityFrameAdvanced ? 1u : 0u;
     var[name]["enableRayBudget"] = mEnableClusterRayBudget ? 1u : 0u;
     var[name]["conserveMergeCounts"] = mConserveClusterMergeCounts ? 1u : 0u;
     var[name]["enableFastRebuild"] = mEnableClusterFastRebuild ? 1u : 0u;
+    var[name]["visibilityResetSamples"] = mClusterVisibilityResetSamples;
     var[name]["enableFarModeValidation"] = mEnableFarModeValidation ? 1u : 0u;
+    var[name]["diagnosticSamplingPeriod"] = mDiagnosticSamplingPeriod;
     const uint32_t pixelCount = mFrameDim.x * mFrameDim.y;
     if (!mpClusterFrequencyCounts || mpClusterFrequencyCounts->getElementCount() != pixelCount)
     {
@@ -1710,6 +1804,7 @@ void NeuralRadiosity::coneTraceScreenPass(RenderContext* pRenderContext, const R
         pRenderContext->clearUAV(mpClusterFrequencyCounts->getUAV().get(), uint4(0));
     }
     var["frequencyCounts"] = mpClusterFrequencyCounts;
+    var[name]["diagnosticEagerFrequencySurvey"] = mDiagnosticEagerFrequencySurvey ? 1u : 0u;
     var[name]["gradualFrequencyUpdate"] = mGradualFrequencyUpdate ? 1u : 0u;
     var[name]["checkFrequency"] = mCheckClusterFrequency && mClusterFrequencyFrames > 0 ? 1u : 0u;
     var[name]["frequencySurveyFrame"] = mCheckClusterFrequency && mClusterFrequencyFrames >= 188 &&
@@ -1753,6 +1848,9 @@ void NeuralRadiosity::clusterSpatialReusePass(RenderContext* pRenderContext, con
     var[name]["epsScene"] = epsScene;
     var[name]["assignThreshold"] = mClusterAssignThreshold;
     var[name]["lockCount"] = mClusterLockCount;
+    var[name]["motionFarWeightStrength"] = mLimitMotionFarWeight
+        ? float(std::min(mMotionFarWeightFrames, kMotionFarWeightFadeFrames)) / float(kMotionFarWeightFadeFrames)
+        : 0.f;
     var[name]["enableSpatialReuse"] = mEnableClusterSpatialReuse ? 1u : 0u;
     var[name]["diagnosticLegacyReuse"] = mDiagnosticSpatialReuseLegacy ? 1u : 0u;
     var[name]["enableMirrorAlbedo"] = mEnableMirrorAlbedo ? 1u : 0u;
@@ -2171,6 +2269,7 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
         {
             mpClusterHistory[i] = nullptr;
             mpClusterLockState[i] = nullptr;
+            mpVCDRecovery[i] = nullptr;
         }
         mpPrevSpecActive = nullptr;
         mpPrevPos = nullptr;
@@ -2185,7 +2284,8 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
 
         const bool historyResized =
             !mpClusterHistory[0] || mpClusterHistory[0]->getElementCount() != pixelCount ||
-            !mpClusterLockState[0] || mpClusterLockState[0]->getElementCount() != pixelCount;
+            !mpClusterLockState[0] || mpClusterLockState[0]->getElementCount() != pixelCount ||
+            !mpVCDRecovery[0] || mpVCDRecovery[0]->getElementCount() != pixelCount;
 
         if (pixelCount > 0 && historyResized)
         {
@@ -2210,6 +2310,9 @@ void NeuralRadiosity::prepareResources(RenderContext* pRenderContext, const Rend
                     nullptr,
                     false
                 );
+                mpVCDRecovery[i] = mpDevice->createStructuredBuffer(sizeof(uint32_t), pixelCount,
+                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal, nullptr, false);
+                mpVCDRecovery[i]->setName(fmt::format("NeuralRadiosity.VCDRecovery{}", i));
                 mpClusterLockState[i]->setName(fmt::format("NeuralRadiosity.ClusterLockState{}", i));
             }
 
@@ -2288,10 +2391,12 @@ void NeuralRadiosity::clearRenderTemporalHistory(RenderContext* pRenderContext)
     {
         if (mpClusterHistory[i]) pRenderContext->clearUAV(mpClusterHistory[i]->getUAV().get(), uint4(0));
         if (mpClusterLockState[i]) pRenderContext->clearUAV(mpClusterLockState[i]->getUAV().get(), uint4(0));
+        if (mpVCDRecovery[i]) pRenderContext->clearUAV(mpVCDRecovery[i]->getUAV().get(), uint4(0));
     }
 
     if (mpPrevSpecActive) pRenderContext->clearUAV(mpPrevSpecActive->getUAV().get(), uint4(0));
 
+    mMotionFarWeightFrames = 0;
     mClusterHistoryValid = false;
 }
 
@@ -2668,15 +2773,20 @@ void NeuralRadiosity::configureDiagnostics(uint32_t interval, uint32_t x, uint32
 
 std::string NeuralRadiosity::getFarModeValidationStats()
 {
-    uint32_t counts[10] = {};
+    uint32_t counts[16] = {};
     if (mpFarValidationStats) mpDevice->getRenderContext()->readBuffer(mpFarValidationStats.get(), counts, 0, sizeof(counts));
     const uint32_t n = mpRenderBatch ? mpRenderBatch->specSize : 0u;
     return nlohmann::json({{"validated_pixels", counts[0]}, {"extra_samples", 32ull * counts[0]},
         {"specular_pixels", n}, {"budget_enabled", mEnableClusterRayBudget},
         {"regular_reserved", counts[1]}, {"validation_reserved", counts[2]},
-        {"traced_rays", counts[3]}, {"ray_limit", uint64_t(n) + n / 2u},
+        {"traced_rays", counts[3]}, {"ray_limit", uint64_t(n) + n / 2u + (mClusterVisibilityResetSamples ? n / 2u : 0u)},
         {"regular_denied", counts[4]}, {"validation_denied", counts[5]},
-        {"visibility_resets", counts[6]}, {"deferred_resets", counts[7]}}).dump();
+        {"visibility_resets", counts[6]}, {"deferred_resets", counts[7]},
+        {"visibility_batch_pixels", counts[10]}, {"visibility_batch_reserved", counts[11]},
+        {"visibility_batch_denied", counts[12]}, {"visibility_batch_rays", counts[14]},
+        {"visibility_batch_limit", mClusterVisibilityResetSamples ? n / 2u : 0u},
+        {"visibility_batch_pending_pixels", counts[15]},
+        {"visibility_reset_samples", mClusterVisibilityResetSamples}}).dump();
 }
 
 void NeuralRadiosity::setDiagnosticRenderOptions(bool postFilter, bool temporalReuse, bool mirrorAlbedo, uint32_t rays, uint32_t kMeansIters)

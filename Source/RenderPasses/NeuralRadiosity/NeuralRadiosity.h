@@ -324,6 +324,8 @@ public:
     ref<Buffer> getDiagnosticSpecActive() const { return mpRenderBatch ? mpRenderBatch->specActive : nullptr; }
     ref<Buffer> getDiagnosticClusterHistory() const { return mClusterHistoryValid ? mpClusterHistory[mClusterHistoryWriteIdx] : nullptr; }
     std::vector<float> inferDiagnosticSpecInputs(const std::vector<uint8_t>& inputs);
+    /// Render-only weight correction toggle for paired camera-motion diagnostics.
+    void setDiagnosticMotionFarWeights(bool enabled) { mLimitMotionFarWeight = enabled; }
     /// Frozen-model ablations. Changes render settings only; never recreates or trains the model.
     void setDiagnosticRenderOptions(bool postFilter, bool temporalReuse, bool mirrorAlbedo, uint32_t rays, uint32_t kMeansIters);
     void setDiagnosticSpatialReuse(bool enabled)
@@ -336,6 +338,27 @@ public:
     {
         FALCOR_CHECK(mTrainingPaused, "Render ablations require a frozen network.");
         mDiagnosticSpatialReuseLegacy = enabled;
+    }
+    /// Frozen-model RNG ablation. Zero preserves the production random streams.
+    /// Reset the render clocks/history so paired runs start at the same phase.
+    void setDiagnosticSamplingPeriod(uint32_t period, uint32_t firstFrame)
+    {
+        FALCOR_CHECK(mTrainingPaused, "Sampling ablations require a frozen network.");
+        FALCOR_CHECK(!mDiagnosticHistoryFrozen, "Release the history pin first.");
+        FALCOR_CHECK(period == 0u || period == 32u, "Supported diagnostic periods: 0 and 32.");
+        clearHistory();
+        mDiagnosticSamplingPeriod = period;
+        mFrameCount = firstFrame;
+        mClusterVisibilityFrame = firstFrame;
+        mClusterFrequencyFrames = 0;
+        mClusterGeometryMoved = false;
+        mClusterGeometryMovedPreviousFrame = false;
+    }
+    uint32_t getVisibilityResetSamples() const { return mClusterVisibilityResetSamples; }
+    void setVisibilityResetSamples(uint32_t samples)
+    {
+        FALCOR_CHECK(samples <= 32, "Visibility reset samples must be 0..32 (0 disables the extra batch).");
+        mClusterVisibilityResetSamples = samples;
     }
     void setDiagnosticFarModeValidation(bool enabled)
     {
@@ -370,6 +393,46 @@ public:
     std::string getFarModeValidationStats();
     /// Re-run only post processing on the last immutable resolve output for exact A/B tests.
     void reapplyDiagnosticPostFilter(bool isolatedHighlight);
+    void setDiagnosticEagerFrequencySurvey(bool enabled)
+    {
+        FALCOR_CHECK(mTrainingPaused, "Frequency-survey comparisons require a frozen network.");
+        FALCOR_CHECK(!mDiagnosticHistoryFrozen, "Release the history pin before changing the survey.");
+        if (mDiagnosticEagerFrequencySurvey != enabled) clearHistory();
+        mDiagnosticEagerFrequencySurvey = enabled;
+    }
+    void setDiagnosticVCDImmediateUnlock(bool enabled)
+    {
+        FALCOR_CHECK(mTrainingPaused, "VCD comparisons require a frozen network.");
+        FALCOR_CHECK(!mDiagnosticHistoryFrozen, "Release the history pin before changing VCD.");
+        if (mDiagnosticVCDImmediateUnlock != enabled) clearHistory();
+        mDiagnosticVCDImmediateUnlock = enabled;
+    }
+    void setVCDRecovery(bool enabled, float threshold, float unlockRate, uint32_t frames)
+    {
+        FALCOR_CHECK(threshold >= 0.05f && threshold <= 8.f, "VCD recovery gate must be 0.05..8.");
+        FALCOR_CHECK(unlockRate >= 0.01f && unlockRate <= 1.f, "VCD recovery unlock rate must be 0.01..1.");
+        FALCOR_CHECK(frames >= 1u && frames <= 1024u, "VCD recovery frames must be 1..1024.");
+        mEnableVCDRecovery = enabled;
+        mVCDRecoveryThreshold = threshold;
+        mVCDRecoveryUnlockRate = unlockRate;
+        mVCDRecoveryFrames = frames;
+        clearHistory();
+    }
+    ref<Buffer> getDiagnosticVCDRecovery() const { return mpVCDRecovery[mClusterHistoryWriteIdx]; }
+    uint32_t getPostFilterRadius() const { return mPostFilterRadius; }
+    void setPostFilterRadius(uint32_t radius)
+    {
+        FALCOR_CHECK(radius >= 1u && radius <= 7u, "Post filter radius must be 1..7.");
+        mPostFilterRadius = radius;
+    }
+    bool getPostFilterColorWeight() const { return mPostFilterColorWeight; }
+    void setPostFilterColorWeight(bool enabled) { mPostFilterColorWeight = enabled; }
+    float getPostFilterStrength() const { return mPostFilterStrength; }
+    void setPostFilterStrength(float strength)
+    {
+        FALCOR_CHECK(strength >= 1.f && strength <= 16.f, "Post filter strength must be 1..16.");
+        mPostFilterStrength = strength;
+    }
     /// 0=off, 1=before bilateral, 2=after bilateral, 3=after FXAA (default).
     void reapplyDiagnosticPostFilterPlacement(uint32_t placement, float minExcess = 0.1f, bool requireQuietRing = false);
     ref<Texture> getDiagnosticPostFilterInput() const { return mpRenderTempColor; }
@@ -519,9 +582,13 @@ private:
     uint32_t mDiagnosticInterval = 0;
     bool mDiagnosticHistoryFrozen = false;
     bool mDiagnosticSpatialReuseLegacy = false;
+    static constexpr uint32_t kMotionFarWeightFadeFrames = 4;
+    uint32_t mMotionFarWeightFrames = 0;
+    bool mLimitMotionFarWeight = true;
     bool mEnableClusterFastRebuild = true;
     bool mConserveClusterMergeCounts = true;
     bool mEnableFarModeValidation = true;
+    uint32_t mDiagnosticSamplingPeriod = 0;
     ref<Buffer> mpFarValidationStats;
     ref<Buffer> mpClusterFrequencyCounts;
     uint2 mDiagnosticPixel = uint2(735, 650);
@@ -564,11 +631,19 @@ private:
     bool mEnableClusterSpatialReuse = true;
     /// Detect changed reflected geometry by sharing the baseline ray when locked.
     bool mEnableClusterVisibilityCheck = true;
+    bool mEnableVCDRecovery = true;
+    bool mDiagnosticVCDImmediateUnlock = false;
+    float mVCDRecoveryThreshold = 0.1f;
+    float mVCDRecoveryUnlockRate = 0.1f;
+    uint32_t mVCDRecoveryFrames = 64;
+    // Stationary-primary recovery countdown, reprojected only onto the same surface.
+    ref<Buffer> mpVCDRecovery[2];
     bool mEnableClusterRayBudget = true;
     uint32_t mClusterVisibilityFrame = 0;
     bool mClusterVisibilityFrameAdvanced = true;
     bool mCheckClusterFrequency = true;
     bool mGradualFrequencyUpdate = true;
+    bool mDiagnosticEagerFrequencySurvey = false;
     uint32_t mClusterFrequencyFrames = 0;
     bool mClusterGeometryMoved = false;
     bool mClusterGeometryMovedPreviousFrame = false;
@@ -601,7 +676,7 @@ private:
     /// beta: EMA rate of the detector shares (~2/beta frames of memory).
     float mClusterDetectRate = 0.125f;
     /// Outlier share at which a locked pixel unlocks to grow new modes.
-    float mClusterUnlockOutlierRate = 0.2f;
+    float mClusterUnlockOutlierRate = 0.05f;
     /// Lateral drift of the frozen anchors since lock, in cone radii, at which a locked
     /// pixel unlocks. Catches smooth camera motion, which the per-frame cone test misses.
     float mClusterUnlockDrift = 0.5f;
@@ -622,6 +697,7 @@ private:
     float mClusterSigmaPriorScale = 0.0f;
     /// Ray budget per glossy pixel per frame. 1 baseline, more only on outliers.
     uint32_t mClusterMaxRays = 4;
+    uint32_t mClusterVisibilityResetSamples = 0;
     /// Reprojection rejection thresholds.
     float mClusterNormalThreshold = 0.9f;
     float mClusterRoughnessThreshold = 0.05f;
@@ -635,6 +711,9 @@ private:
     float mClusterConfidenceCount = 32.0f;
     /// Post filter switch
     bool mEnablePostFilter = true;
+    float mPostFilterStrength = 1.f;
+    uint32_t mPostFilterRadius = 3;
+    bool mPostFilterColorWeight = true;
     /// FXAA switch for post filter.
     bool mEnableFXAA = true;
     bool mEnableIsolatedHighlightFilter = false;
