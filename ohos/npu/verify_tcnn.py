@@ -57,17 +57,30 @@ def mlp_forward(rows, kernels):
 
 
 def training_gradients(spec, rows, target, kernels):
-    """Float64 gradients of the training graph (exact ReLU derivative) for a whole batch."""
+    """Float64 gradients of the training graph (exact ReLU derivative) for the valid samples of a batch:
+    the loss is normalised by their count, as in Falcor since the stage 4 snapshots (Model/TrainingBatch.h)."""
     model = graphs.Training(spec, rows.shape[0], mask="sign").double()
     padded_target = np.zeros((rows.shape[0], ref.OUTPUT_PAD), dtype=np.float64)
     padded_target[:, :ref.OUTPUT_DIM] = target
-    padded_target[:, graphs.MASK_CHANNEL] = 1.0   # every row of the batch counts, as in tiny-cuda-nn
+    padded_target[:, graphs.MASK_CHANNEL] = 1.0   # every one of these rows is a sample
     inputs = [torch.from_numpy(k.astype(np.float64)) for k in kernels]
     inputs += [torch.from_numpy(ref.rows_to_planar(rows.astype(np.float64))), torch.from_numpy(ref.rows_to_planar(padded_target))]
     with torch.no_grad():
         outputs = model(inputs)
     weight_gradients = np.concatenate([g.numpy().reshape(-1) for g in outputs[:-1]])
     return weight_gradients, ref.planar_to_rows(outputs[-1].numpy())
+
+
+def finite_rows(rows, outputs, label):
+    """The rows whose inputs are all finite, and their outputs. tiny-cuda-nn's ReLU turns a NaN into 0,
+    so a row with a non-finite input comes out of the CUDA MLP as SquarePlus(0) = 0.1 in every channel,
+    while the reference carries the NaN through: such rows are left out of the comparison. (living-room-2
+    has primary hits with a NaN normal, about 0.6% of its specular render rows.)"""
+    keep = np.isfinite(rows).all(axis=1)
+    if not keep.all():
+        print(f"  note {label}: {int((~keep).sum())} of {len(rows)} rows have non-finite inputs and are left out; "
+              f"CUDA's output for them: {np.unique(outputs[~keep].astype(np.float32)).tolist()[:4]}")
+    return rows[keep], outputs[keep]
 
 
 def main():
@@ -83,18 +96,18 @@ def main():
 
     # ---- Render inference: EMA weights, as stored in the checkpoint written after the step.
     print("render inference (EMA weights)")
-    rows = dump["infer_diff_input"].astype(np.float32)
+    rows, outputs = finite_rows(dump["infer_diff_input"].astype(np.float32), dump["infer_diff_output"], "DiffNet")
     check("DiffNet: primary encoding", ref.prim_encode(after["prim_grid_ema"], rows[:, ref.DIFF_POS:ref.DIFF_POS + 3]),
           rows[:, :ref.PRIM_ENC_DIM], 2e-3, absolute=True)
     check("DiffNet: output", mlp_forward(rows, ref.split_layers(after["diff_ema"], ref.DIFF_LAYERS))[:, :ref.OUTPUT_DIM],
-          dump["infer_diff_output"], 2e-2)
-    rows = dump["infer_spec_input"].astype(np.float32)
+          outputs, 2e-2)
+    rows, outputs = finite_rows(dump["infer_spec_input"].astype(np.float32), dump["infer_spec_output"], "SpecNet")
     check("SpecNet: primary encoding", ref.prim_encode(after["prim_grid_ema"], rows[:, ref.SPEC_POS:ref.SPEC_POS + 3]),
           rows[:, :ref.PRIM_ENC_DIM], 2e-3, absolute=True)
     check("SpecNet: cluster encoding", ref.cls_encode(after["cls_grid_ema"], *ref.spec_clusters(rows)),
           rows[:, ref.SPEC_CLS_ENC:ref.SPEC_CLS_ENC + ref.CLS_ENC_DIM], 2e-3, absolute=True)
     check("SpecNet: output", mlp_forward(rows, ref.split_layers(after["spec_ema"], ref.SPEC_LAYERS))[:, :ref.OUTPUT_DIM],
-          dump["infer_spec_output"], 2e-2)
+          outputs, 2e-2)
 
     # ---- Training step: fp16 training copies of the weights.
     print("training step: forward and gradients (fp16 training weights)")
@@ -103,27 +116,33 @@ def main():
     nets = [("diff", graphs.DIFF, ref.DIFF_LAYERS, ref.DIFF_POS), ("spec", graphs.SPEC, ref.SPEC_LAYERS, ref.SPEC_POS)]
     for name, spec, layers, pos_offset in nets:
         label = "DiffNet" if name == "diff" else "SpecNet"
-        rows = dump[f"train_{name}_input"].astype(np.float32)
-        target = dump[f"train_{name}_target"]
+        # The dump holds the batch padded to 256 rows; the samples are the first `size`. Since the stage 4
+        # snapshots the padding is cleared and takes no part: no encodings, no loss, no gradients.
+        size = int(dump.scalars[f"{name}_size"])
+        padded = dump[f"train_{name}_input"].astype(np.float32)
+        rows = padded[:size]
+        target = dump[f"train_{name}_target"][:size]
         kernels = ref.split_layers(dump[f"before_{name}_params_half"], layers)
         pos = rows[:, pos_offset:pos_offset + 3]
+        if size < padded.shape[0]:
+            check(f"{label}: padded rows {size}-{padded.shape[0] - 1} cleared", padded[size:], np.zeros_like(padded[size:]), 0, absolute=True)
         check(f"{label}: primary encoding", ref.prim_encode(prim_half, pos), rows[:, :ref.PRIM_ENC_DIM], 2e-3, absolute=True)
         if name == "spec":
             check(f"{label}: cluster encoding", ref.cls_encode(cls_half, *ref.spec_clusters(rows)),
                   rows[:, ref.SPEC_CLS_ENC:ref.SPEC_CLS_ENC + ref.CLS_ENC_DIM], 2e-3, absolute=True)
         output = dump[f"train_{name}_output"].astype(np.float64)
-        check(f"{label}: output (16 channels)", mlp_forward(rows, kernels), output, 2e-2)
+        check(f"{label}: output (16 channels)", mlp_forward(padded, kernels), output, 2e-2)
 
-        # Loss gradient from the CUDA output itself.
-        luminance = 0.299 * output[:, 0] + 0.587 * output[:, 1] + 0.114 * output[:, 2]
+        # Loss gradient from the CUDA output itself: the samples only, normalised by their count.
+        luminance = 0.299 * output[:size, 0] + 0.587 * output[:size, 1] + 0.114 * output[:size, 2]
         g = np.zeros_like(output)
-        g[:, :ref.OUTPUT_DIM] = (2.0 * loss_scale / (rows.shape[0] * ref.OUTPUT_DIM)) * (output[:, :ref.OUTPUT_DIM] - target) \
+        g[:size, :ref.OUTPUT_DIM] = (2.0 * loss_scale / (size * ref.OUTPUT_DIM)) * (output[:size, :ref.OUTPUT_DIM] - target) \
             / (luminance * luminance + graphs.LOSS_EPS)[:, None]
         check(f"{label}: loss gradient dL/dy", g, dump[f"train_{name}_dL_doutput"], 2e-2)
 
         weight_gradients, input_gradient = training_gradients(spec, rows, target, kernels)
         check(f"{label}: weight gradients", weight_gradients, dump[f"train_{name}_params_grad"], 5e-2)
-        cuda_input_gradient = dump[f"train_{name}_dL_dinput"]
+        cuda_input_gradient = dump[f"train_{name}_dL_dinput"][:size]
         enc_dim = spec.encoding_dim
         check(f"{label}: dL/d(encoding)", input_gradient[:, :enc_dim], cuda_input_gradient[:, :enc_dim], 5e-2)
 

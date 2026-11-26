@@ -567,8 +567,15 @@ void saveResults(Runtime& runtime, const Display& display, bool bgra, const std:
     {
         runtime.saveCheckpoint(dir + "/trained.ckpt");
         const TrainSchedule& schedule = runtime.schedule();
-        const std::string text = format("frames %u\nheat %.9g\nholdLeft %u\nlearningRate %.9g\nemaDecay %.9g\n", runtime.framesDone(), schedule.heat,
-                                        schedule.holdLeft, schedule.learningRate, schedule.emaDecay);
+        std::string text = format("frames %u\nheat %.9g\nholdLeft %u\nlearningRate %.9g\nemaDecay %.9g\n", runtime.framesDone(), schedule.heat,
+                                  schedule.holdLeft, schedule.learningRate, schedule.emaDecay);
+        if (runtime.clusterReuse())
+        {
+            // The cluster passes' CPU-side counters, which train_compare.py checks against Falcor's.
+            const replay::ClusterClock& k = runtime.clusterClock();
+            text += format("visibilityFrame %u\ngeometryMovedPrevious %u\nfrequencyFrames %u\nmotionFarWeightFrames %u\n", k.visibilityFrame,
+                           k.geometryMovedPrevious ? 1u : 0u, k.frequencyFrames, k.motionFarWeightFrames);
+        }
         writeFile(dir + "/schedule.txt", text.data(), text.size());
     }
     if (everything) runtime.writeResults(dir);

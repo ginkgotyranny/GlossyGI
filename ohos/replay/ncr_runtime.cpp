@@ -14,7 +14,9 @@
 // The cluster-reuse render path (NeuralRadiosity::clusterReuse) adds two host steps to the program:
 //   readcounts  the host waits for the GPU and reads the specular count the next passes are sized by
 //   saveprev    this frame's G-buffer and specular mask become the next frame's "previous" copies
+//   clearstats  the ray budget's counters are cleared before ConeTraceScreen
 // and the calls of its three passes alternate between the two history buffers from frame to frame.
+// What the pass counts on the CPU for them (ClusterClock) is counted here and set in their uniforms.
 #include "ncr_runtime.h"
 
 #include "replay_bake.h"
@@ -55,10 +57,12 @@ void TrainSchedule::advance(uint32_t events)
         if ((events & kEventLight) != 0) target = std::max(target, lightMotionHeat);
         if ((events & kEventObject) != 0) target = std::max(target, objectMotionHeat);
     }
-    if (target >= heat && target > 0.0f)
+    // Only a target above the heat raises it and sets the hold, so a hold counts down while the
+    // same events repeat.
+    if (target > heat)
     {
         heat = target;
-        holdLeft = std::max(holdLeft > 0 ? holdLeft - 1 : 0u, holdFrames);
+        holdLeft = std::max(holdLeft, holdFrames);
     }
     else if (holdLeft > 0)
     {
@@ -78,7 +82,31 @@ void TrainSchedule::advance(uint32_t events)
 void TrainSchedule::reset()
 {
     heat = 1.0f;
-    holdLeft = warmupFrames;
+    holdLeft = initialHotFrames;
+}
+
+void ClusterClock::advance(bool geometryMoved, bool viewChanged, bool historyValid)
+{
+    // A sudden geometry edit is checked with the previous direction before its reference is replaced;
+    // continuous motion still advances the windows.
+    visibilityFrameAdvanced = !geometryMoved || geometryMovedPrevious;
+    if (visibilityFrameAdvanced) ++visibilityFrame;
+    if (viewChanged) motionFarWeightFrames = motionFarWeightFadeFrames + 1;
+    else if (motionFarWeightFrames) --motionFarWeightFrames;
+    if (!historyValid || viewChanged) frequencyFrames = 0;
+    else if (geometryMoved) frequencyFrames = 200;
+    else if (frequencyFrames) --frequencyFrames;
+    geometryMovedPrevious = geometryMoved;
+}
+
+uint32_t ClusterClock::frequencySurveyFrame() const
+{
+    return checkFrequency && frequencyFrames >= 188 && frequencyFrames < 200 ? 200u - frequencyFrames : 0u;
+}
+
+float ClusterClock::motionFarWeightStrength() const
+{
+    return limitMotionFarWeight ? (float)std::min(motionFarWeightFrames, motionFarWeightFadeFrames) / (float)motionFarWeightFadeFrames : 0.0f;
 }
 
 namespace
@@ -97,6 +125,19 @@ uint32_t prefixSum(uint32_t* data, uint32_t count)
     }
     std::memcpy(data, local.data(), (size_t)count * sizeof(uint32_t));
     return sum;
+}
+
+/// The weight of every sample of a training batch in the target tiles. The training graph divides the
+/// loss by the samples of a tile (the caller rescales to the batch), so a batch much smaller than a
+/// tile would get gradients smaller than tiny-cuda-nn's by up to the tile size, down where the NPU's
+/// fp16 loses them. Such a batch's samples weigh the largest power of two up to tile / samples
+/// instead (exact in fp16), which brings the graph's gradients to within a factor of two of
+/// tiny-cuda-nn's; 1 for a batch of half a tile or more.
+float sampleWeight(uint32_t samples, uint32_t tile)
+{
+    float weight = 1.0f;
+    while (samples > 0 && 2.0 * weight * samples <= tile) weight *= 2.0f;
+    return weight;
 }
 
 uint32_t log2Exact(uint32_t value)
@@ -123,7 +164,7 @@ uint32_t specDispatchItems(uint32_t previousSpecCount, uint32_t batchSize)
 // Push constants of the runtime's own passes (ohos/replay/shaders).
 struct EncodePush { uint32_t count, rowBase, tileShift; };
 struct DecodePush { uint32_t count, rowBase; };
-struct TargetPush { uint32_t count, rowBase, tileShift, slots; };
+struct TargetPush { uint32_t count, rowBase, tileShift, slots; float weight; };
 struct ScatterPush { uint32_t count, tileShift; float gradScale; };
 struct OptimizerPush { uint32_t count; float learningRate, gradToFloat, emaDecay, emaDebiasOld, emaDebiasNew; };
 struct PrefixPush { uint32_t count, stage, countIndex; };
@@ -230,6 +271,10 @@ struct Runtime::State
     bool clearClusterHistory = false;  // Runtime::clearHistory: before the next frame
     Bake::CameraHistory lastCamera;    // the camera of the last frame: the next frame's "previous" matrices
     bool haveLastCamera = false;
+    ClusterClock clusterClock;         // what the pass counts on the CPU for its passes
+    bool geometryMoved = false;        // the animation moved geometry for this frame (IScene::UpdateFlags::GeometryMoved)
+    bool objectsMovedPrevious = false; // the track moved objects in the last frame
+    bool hasRecovery = false, hasStats = false;   // the bake has the recovery countdown pair / the ray budget's counters
 
     // Calls are recorded into one command buffer until a host step needs their results.
     VkCommandBuffer cb = VK_NULL_HANDLE;
@@ -308,6 +353,20 @@ struct Runtime::State
         setUpSettings();
         clusterReuse = bake.hasBuffer("cluster.history0");
         if (clusterReuse) std::printf("render path: cluster reuse (per-pixel cluster history, carried from frame to frame)\n");
+        hasRecovery = bake.hasBuffer("cluster.vcdRecovery0") && bake.hasBuffer("cluster.vcdRecovery1");
+        hasStats = bake.hasBuffer("cluster.farValidationStats");
+        if (clusterReuse)
+        {
+            ClusterClock& k = clusterClock;
+            k.visibilityFrame = (uint32_t)bake.value("cluster.visibilityFrame", 0);
+            k.geometryMovedPrevious = bake.value("cluster.geometryMovedPrevious", 0) != 0;
+            k.frequencyFrames = (uint32_t)bake.value("cluster.frequencyFrames", 0);
+            k.checkFrequency = bake.value("cluster.checkFrequency", 1) != 0;
+            k.motionFarWeightFrames = (uint32_t)bake.value("cluster.motionFarWeightFrames", 0);
+            k.motionFarWeightFadeFrames = std::max(1u, (uint32_t)bake.value("cluster.motionFarWeightFadeFrames", 4));
+            k.limitMotionFarWeight = bake.value("cluster.limitMotionFarWeight", 1) != 0;
+            objectsMovedPrevious = k.geometryMovedPrevious;
+        }
 
         ownPool = makeOwnPool(dev, 64, 320);
         sharedTiles = networks == "npu" && !options.copyTiles && dev.sharedMemory;
@@ -464,6 +523,13 @@ struct Runtime::State
                 moved = true;
             }
         }
+        // The frame after an animation stops, Falcor still reports moved geometry once: its animation
+        // controller updates the previous-frame matrices then (Scene::update, "mTime != mPrevTime").
+        const bool objectsMoved = (events & TrainSchedule::kEventObject) != 0;
+        if (!objectsMoved && objectsMovedPrevious) events |= TrainSchedule::kEventObject;
+        objectsMovedPrevious = objectsMoved;
+        // Geometry that moved since the last frame, as the cluster passes' clock sees it.
+        geometryMoved = (events & TrainSchedule::kEventObject) != 0;
         const bool followsTrack = track.samples > 0 && settings.cameraAnimated;
         if (!followsTrack)
         {
@@ -525,7 +591,8 @@ struct Runtime::State
         schedule.lrCold = (float)bake.value("train.lrCold");
         schedule.emaHot = (float)bake.value("train.emaHot");
         schedule.emaCold = (float)bake.value("train.emaCold");
-        schedule.warmupFrames = (uint32_t)bake.value("train.warmupFrames", 600);
+        // Bakes made before the stage 4 snapshots call it train.warmupFrames.
+        schedule.initialHotFrames = (uint32_t)bake.value("train.initialHotFrames", bake.value("train.warmupFrames", 600));
         schedule.holdFrames = (uint32_t)bake.value("train.holdFrames");
         schedule.coolFrames = (float)bake.value("train.coolFrames");
         schedule.cameraHeat = (float)bake.value("train.cameraHeat");
@@ -697,6 +764,10 @@ struct Runtime::State
         VkCommandBuffer c = record("clear cluster history");
         for (const char* role : {"cluster.history0", "cluster.history1", "cluster.lockState0", "cluster.lockState1", "cluster.prevSpecActive"})
             vkCmdFillBuffer(c, bake.buffer(role).buffer, 0, VK_WHOLE_SIZE, 0);
+        // The recovery countdown goes with the history; the frequency counters stay, as in Falcor.
+        if (hasRecovery)
+            for (const char* role : {"cluster.vcdRecovery0", "cluster.vcdRecovery1"}) vkCmdFillBuffer(c, bake.buffer(role).buffer, 0, VK_WHOLE_SIZE, 0);
+        clusterClock.motionFarWeightFrames = 0;
         VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
@@ -755,19 +826,22 @@ struct Runtime::State
         struct Job
         {
             bool spec;
-            uint32_t size, tiles, rows;   // samples, tiles of the training graph, rows the loss is normalised by
+            uint32_t size, tiles, rows;   // samples, tiles of the training graph, samples the loss is normalised by
+            float weight;                 // of every sample in the target tiles (sampleWeight)
             TrainNet* net;
             Mlp* mlp;
             uint32_t inputBase, targetBase;
         };
         std::vector<Job> jobs;
-        // tiny-cuda-nn runs on the batch padded to 256 rows and divides the loss by that number. Here
-        // the rows beyond the batch have weight zero instead of whatever an earlier frame left there.
+        // Falcor (Model/TrainingBatch.h) pads the batch to 256 rows for the MLP, but the padding has
+        // no weight and the loss is divided by the samples of the batch. Here the slots of the last
+        // tile beyond the batch have weight zero.
         if (b.needSpec && b.specSize > 0)
-            jobs.push_back({true, b.specSize, (b.specSize + trainTile - 1) / trainTile, padUp(b.specSize, cfg::kBatchAlign), &t.spec, &specNet, 0, 0});
+            jobs.push_back({true, b.specSize, (b.specSize + trainTile - 1) / trainTile, b.specSize, sampleWeight(b.specSize, trainTile), &t.spec,
+                            &specNet, 0, 0});
         if (b.needDiff && b.diffSize > 0)
-            jobs.push_back({false, b.diffSize, (b.diffSize + trainTile - 1) / trainTile, padUp(b.diffSize, cfg::kBatchAlign), &t.diff, &diffNet,
-                            b.diffInputOffset() * cfg::kDiffInputDim, b.diffOutputOffset()});
+            jobs.push_back({false, b.diffSize, (b.diffSize + trainTile - 1) / trainTile, b.diffSize, sampleWeight(b.diffSize, trainTile), &t.diff,
+                            &diffNet, b.diffInputOffset() * cfg::kDiffInputDim, b.diffOutputOffset()});
         if (jobs.empty()) return;
         const bool dump = !options.dumpTrainDir.empty() && trainSteps == 0;
 
@@ -775,7 +849,7 @@ struct Runtime::State
         for (const Job& j : jobs)
         {
             j.net->encode.dispatch(c, EncodePush{j.size, j.inputBase, trainShift}, j.size);
-            j.net->targets.dispatch(c, TargetPush{j.size, j.targetBase, trainShift, j.tiles * trainTile}, j.tiles * trainTile);
+            j.net->targets.dispatch(c, TargetPush{j.size, j.targetBase, trainShift, j.tiles * trainTile, j.weight}, j.tiles * trainTile);
         }
         flush();
 
@@ -796,8 +870,9 @@ struct Runtime::State
         {
             std::fill(j.net->weightGradient.begin(), j.net->weightGradient.end(), 0.0f);
             backend->train(j.spec, trainTile, j.tiles, tiles(j.net->x), tiles(j.net->target), j.net->weightGradient.data(), tiles(j.net->gradient));
-            // Every tile normalised its loss by its own size: bring the sum to the batch.
-            const float toBatch = (float)trainTile / (float)j.rows;
+            // Every tile normalised its loss by its own size and the samples carry their weight: bring
+            // the sum to the batch.
+            const float toBatch = (float)trainTile / ((float)j.rows * j.weight);
             for (float& g : j.net->weightGradient) g *= toBatch;
             tileNote += (tileNote.empty() ? "" : " + ") + std::to_string(j.tiles);
         }
@@ -807,7 +882,7 @@ struct Runtime::State
         bool anySpec = false;
         for (const Job& j : jobs)
         {
-            j.net->scatter.dispatch(c, ScatterPush{j.size, trainShift, adam::kGridGradientScale * (float)trainTile / (float)j.rows}, j.size);
+            j.net->scatter.dispatch(c, ScatterPush{j.size, trainShift, adam::kGridGradientScale * (float)trainTile / ((float)j.rows * j.weight)}, j.size);
             anySpec = anySpec || j.spec;
         }
         if (dump)
@@ -835,7 +910,8 @@ struct Runtime::State
             for (int i = 0; i < 4; i++) f.write(reinterpret_cast<const char*>(working[i]), (std::streamsize)header.counts[i] * 2);
             std::ofstream info(dir + "/train.txt");
             info << "tile " << trainTile << "\nlearning_rate " << learningRate << "\nema_decay " << emaDecay << "\n";
-            for (const Job& j : jobs) info << (j.spec ? "spec" : "diff") << " " << j.size << " " << j.tiles << " " << j.rows << "\n";
+            for (const Job& j : jobs)
+                info << (j.spec ? "spec" : "diff") << " " << j.size << " " << j.tiles << " " << j.rows << " " << j.weight << "\n";
         }
         auto optimize = [&](Grid& g, const char* name) {
             g.steps++;
@@ -903,6 +979,16 @@ struct Runtime::State
         }
         // Whether there is a history to reproject from (the baked frame keeps what Falcor had).
         if (call.pass == "ClusterReproject" && frame > 0) set("historyValid", clusterHistoryValid ? 1u : 0u);
+        // What the pass counts on the CPU (NeuralRadiosity::coneTraceScreenPass, clusterSpatialReusePass).
+        if (call.pass == "ConeTraceScreen" && frame > 0)
+        {
+            const ClusterClock& k = clusterClock;
+            set("visibilityFrame", k.visibilityFrame);
+            set("visibilityFrameAdvanced", k.visibilityFrameAdvanced ? 1u : 0u);
+            set("checkFrequency", k.checkFrequency && k.frequencyFrames > 0 ? 1u : 0u);
+            set("frequencySurveyFrame", k.frequencySurveyFrame());
+        }
+        if (call.pass == "ClusterSpatialReuse" && frame > 0) setMember(call, "motionFarWeightStrength", clusterClock.motionFarWeightStrength());
         if (frame == 0) return;
         auto it = batches.find(call.batch);
         if (it == batches.end()) return;
@@ -935,6 +1021,8 @@ struct Runtime::State
         // the scene got its camera for this frame (the bake, a track sample, the caller).
         if (frame > 0 && haveLastCamera) bake.setCameraHistory(lastCamera);
         if (clearClusterHistory && clusterReuse) clearHistoryNow();
+        // The pass's CPU-side counters for this frame; the baked frame ran with Falcor's.
+        if (clusterReuse && frame > 0) clusterClock.advance(geometryMoved, bake.viewChanged(), clusterHistoryValid);
         const RenderMode mode = settings.mode;
         const bool trainPart = mode == RenderMode::Train || mode == RenderMode::OnlineTrain;
         const bool renderPart = mode == RenderMode::Render || mode == RenderMode::OnlineTrain;
@@ -952,7 +1040,8 @@ struct Runtime::State
             if (step.isCall)
             {
                 Call& call = bake.calls.at(step.step);
-                if (!settings.postFilter && (call.pass == "PostFilterPass" || call.pass == "PostFXAAPass")) continue;
+                if (!settings.postFilter && (call.pass == "PostFilterPass" || call.pass == "PostFXAAPass" || call.pass == "IsolatedHighlightPass"))
+                    continue;
                 uint32_t dims[3] = {call.dims[0], call.dims[1], call.dims[2]};
                 prepare(call, dims);
                 if (call.pass == "ConeTrace")
@@ -1027,6 +1116,19 @@ struct Runtime::State
             {
                 savePreviousFrame();
             }
+            else if (what == "clearstats")
+            {
+                // NeuralRadiosity::coneTraceScreenPass clears the ray budget's counters before every dispatch.
+                if (hasStats)
+                {
+                    VkCommandBuffer c = record("clear ray-budget counters");
+                    vkCmdFillBuffer(c, bake.buffer("cluster.farValidationStats").buffer, 0, VK_WHOLE_SIZE, 0);
+                    VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+                    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                    vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+                }
+            }
             else
             {
                 fail("unknown host step " + what);
@@ -1068,6 +1170,7 @@ bool Runtime::hasLights() const { return s->hasLights; }
 bool Runtime::hasRenderPath() const { return s->hasRenderPath; }
 bool Runtime::clusterReuse() const { return s->clusterReuse; }
 void Runtime::clearHistory() { s->clearClusterHistory = true; }
+const ClusterClock& Runtime::clusterClock() const { return s->clusterClock; }
 bool Runtime::animated() const { return s->bake.track.samples > 0; }
 double Runtime::animationLength() const { return s->bake.track.loopSeconds; }
 double Runtime::animationTime() const { return s->animationTime; }
@@ -1143,7 +1246,7 @@ const Named kNamed[] = {
     NCR_SETTING("trainLrCold", t.lrCold, float),
     NCR_SETTING("trainEmaHot", t.emaHot, float),
     NCR_SETTING("trainEmaCold", t.emaCold, float),
-    NCR_SETTING("trainWarmupFrames", t.warmupFrames, uint32_t),
+    NCR_SETTING("trainInitialHotFrames", t.initialHotFrames, uint32_t),
     NCR_SETTING("trainHoldFrames", t.holdFrames, uint32_t),
     NCR_SETTING("trainCoolFrames", t.coolFrames, float),
     NCR_SETTING("trainCameraHeat", t.cameraHeat, float),

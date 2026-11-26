@@ -701,7 +701,7 @@ struct Index {
       this.Stepper('LR cold', 'trainLrCold', 0.0005, 0.00001, 0.1, 5)
       this.Stepper('EMA hot', 'trainEmaHot', 0.005, 0, 0.9999, 4)
       this.Stepper('EMA cold', 'trainEmaCold', 0.005, 0, 0.9999, 4)
-      this.Stepper('Warmup frames', 'trainWarmupFrames', 50, 0, 10000, 0)
+      this.Stepper('Initial hot frames', 'trainInitialHotFrames', 50, 0, 10000, 0)
       this.Stepper('Hold frames', 'trainHoldFrames', 5, 0, 10000, 0)
       this.Stepper('Cool frames', 'trainCoolFrames', 25, 1, 10000, 0)
       this.Stepper('Camera heat', 'trainCameraHeat', 0.05, 0, 1, 2)

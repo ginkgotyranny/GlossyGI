@@ -1762,6 +1762,7 @@ void NeuralRadiosity::coneTraceScreenPass(RenderContext* pRenderContext, const R
         mpFarValidationStats = mpDevice->createStructuredBuffer(sizeof(uint32_t), 16,
             ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal, nullptr, false);
     pRenderContext->clearUAV(mpFarValidationStats->getUAV().get(), uint4(0));
+    bakeHost("clearstats");
 
     ShaderVar var = mpConeTraceScreen->getRootVar();
     const auto name = "gConeTraceScreen";

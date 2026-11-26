@@ -80,6 +80,10 @@ def main():
         ours = {line.split()[0]: float(line.split()[1]) for line in open(schedule_file)}
         theirs = {"heat": last["values"]["train.heat"], "holdLeft": last["values"]["train.holdLeft"],
                   "learningRate": last["values"]["train.learningRate"], "emaDecay": last["values"]["train.emaDecay"]}
+        # The cluster-reuse passes' CPU-side counters (NeuralRadiosity::execute), when both sides have them.
+        for key in ("visibilityFrame", "geometryMovedPrevious", "frequencyFrames", "motionFarWeightFrames"):
+            if "cluster." + key in last["values"] and key in ours:
+                theirs[key] = last["values"]["cluster." + key]
         same = all(np.float32(ours[k]) == np.float32(v) for k, v in theirs.items())
         failures += 0 if same else 1
         print(f"schedule after the last frame: {'ok  ' if same else 'FAIL'} here "

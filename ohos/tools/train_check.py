@@ -100,14 +100,15 @@ def main():
     for name, (spec, layers, pos_offset) in nets.items():
         if name not in info:
             continue
-        size, tiles, rows_total = (int(v) for v in info[name])
+        size, tiles, rows_total = (int(v) for v in info[name][:3])
+        weight = info[name][3] if len(info[name]) > 3 else 1.0   # of every sample (ncr_runtime.cpp sampleWeight)
         prefix = os.path.join(args.out, f"train_{name}")
         rows, x_tiles = tiles_to_rows(prefix + "_x.bin", spec.input_dim, tile, size)
         _, target_tiles = tiles_to_rows(prefix + "_target.bin", graphs.OUTPUT_PAD, tile, size)
         gx_rows, _ = tiles_to_rows(prefix + "_gx.bin", spec.input_dim, tile, size)
         gw = np.fromfile(prefix + "_gw.bin", dtype=np.float32)
-        to_batch = tile / rows_total
-        print(f"{name}: {size} samples in {tiles} tiles, loss normalised by {rows_total} rows")
+        to_batch = tile / (rows_total * weight)
+        print(f"{name}: {size} samples in {tiles} tiles, loss normalised by {rows_total} samples, sample weight {weight:g}")
 
         # 1. Encodings.
         pos = rows[:, pos_offset:pos_offset + 3]
@@ -118,7 +119,7 @@ def main():
             check("cluster encoding in the input tiles",
                   relative_l2(rows[:, ref.SPEC_CLS_ENC:ref.SPEC_CLS_ENC + ref.CLS_ENC_DIM], expected), 2e-3)
         mask = target_tiles[:, graphs.MASK_CHANNEL, :].reshape(-1)
-        check("sample weights in the target tiles", float(np.abs(mask - (np.arange(mask.size) < size)).max()), 0)
+        check("sample weights in the target tiles", float(np.abs(mask - weight * (np.arange(mask.size) < size)).max()), 0)
 
         # 2. The training graph, tile by tile, in float64 with autograd.
         kernels = [torch.from_numpy(k.astype(np.float64)) for k in ref.split_layers(half[name], layers)]

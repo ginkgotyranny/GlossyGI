@@ -3,7 +3,8 @@
 //
 // ResolveRHS leaves one row of four floats per sample (NetworkOutput) in the batch's color buffer.
 // The training graph takes (1, 16, TILE, 1) fp16, channel-planar like its input: the radiance in
-// channels 0-3 and in channel 15 a weight, 1 for a sample and 0 for the slots of the last tile that
+// channels 0-3 and in channel 15 a weight, the caller's for a sample (1, or a power of two for a
+// batch smaller than a tile, ncr_runtime.cpp sampleWeight) and 0 for the slots of the last tile that
 // lie beyond the batch (ohos/npu/ncr_npu_graphs.py, MASK_CHANNEL). Channels 4-14 are never written
 // and stay zero.
 static const uint kChannels = 16;
@@ -16,6 +17,7 @@ struct Params
     uint rowBase;    // first row in gRows
     uint tileShift;  // log2 of the samples per tile
     uint slots;      // tiles * samples per tile: every slot gets its weight
+    float weight;    // of every sample
 };
 [[vk::push_constant]] ConstantBuffer<Params> gParams;
 
@@ -42,5 +44,5 @@ void main(uint3 tid : SV_DispatchThreadID)
     gTiles[base + tile] = float16_t(target.y);
     gTiles[base + 2 * tile] = float16_t(target.z);
     gTiles[base + 3 * tile] = float16_t(target.w);
-    gTiles[base + kMaskChannel * tile] = float16_t(sample ? 1.0f : 0.0f);
+    gTiles[base + kMaskChannel * tile] = float16_t(sample ? gParams.weight : 0.0f);
 }

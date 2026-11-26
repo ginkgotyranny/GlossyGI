@@ -441,8 +441,9 @@ public:
 
     /// The gradients of one training step on tiles, as the NPU's training graph computes them
     /// (ncr_npu_graphs.Training; float32 here, with the exact ReLU derivative). Outputs as
-    /// NetworkBackend::train; either may be null. Returns the sum over the samples and the four
-    /// outputs of the relative squared error: the loss before its normalisation.
+    /// NetworkBackend::train; either may be null. Each sample's gradient carries the weight in its
+    /// target's last channel, as in the graph. Returns the sum over the samples and the four outputs of
+    /// the relative squared error, unweighted: the loss before its normalisation.
     double trainTiles(bool specular, uint32_t tile, uint32_t tiles, const uint16_t* x, const uint16_t* target, float* weightGradient,
                       uint16_t* inputGradient) const
     {
@@ -465,7 +466,8 @@ public:
                 float a[cfg::kMaxHiddenLayers + 1][64], d[64], e[64];
                 for (uint32_t n = begin; n < end; n++)
                 {
-                    if (halfToFloat(want[(size_t)(cfg::kOutputChannels - 1) * tile + n]) == 0.0f) continue;   // a slot beyond the batch
+                    const float weight = halfToFloat(want[(size_t)(cfg::kOutputChannels - 1) * tile + n]);
+                    if (weight == 0.0f) continue;   // a slot beyond the batch
                     // Forward, keeping the input of every layer.
                     for (uint32_t c = 0; c < channels; c++) a[0][c] = halfToFloat(in[(size_t)c * tile + n]);
                     const float* w = weights;
@@ -498,7 +500,7 @@ public:
                     {
                         const float difference = y[j] - halfToFloat(want[(size_t)j * tile + n]);
                         sum[paramCount] += (double)difference * difference / denominator;
-                        g[j] = difference * scale / denominator * slope[j];
+                        g[j] = difference * scale / denominator * slope[j] * weight;
                     }
                     // Backward: the output layer, then the hidden layers down to the input.
                     size_t offset = paramCount - (size_t)cfg::kOutputChannels * 64;

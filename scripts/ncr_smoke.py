@@ -9,6 +9,9 @@ Environment variables (all optional):
     NCR_SMOKE_MODE     render mode property passed to the pass, if supported
     NCR_SMOKE_PROPS    extra pass properties as Python dict literal, e.g. "{'enableTemporalSpecReuse': True}"
     NCR_SMOKE_RES      WxH (default: 640x360)
+    NCR_SMOKE_CAMERA_ANIM  0: the cameras do not follow their path (the scene's objects still move)
+    NCR_SMOKE_FREEZE_AT    N: the clock stops at frame N, so from then on nothing in the scene moves
+                       (captures are then named smoke_f<frame>, since Mogwai names them by the clock)
     NCR_SMOKE_FPS      frames per second of the stepped clock (default: 60), which sets how far an
                        animated scene moves from one frame to the next
     NCR_BAKE_TRACK_RATE  with NCR_BAKE_DIR (ohos/tools/bake_scene.py): samples per second of the animation
@@ -69,13 +72,19 @@ try:
     os.makedirs(out_dir, exist_ok=True)
     m.frameCapture.outputDir = out_dir
     m.frameCapture.baseFilename = "smoke"
+    if os.environ.get("NCR_SMOKE_CAMERA_ANIM") == "0" and m.scene:
+        for camera in m.scene.cameras:
+            camera.animated = False
+    freeze_at = int(os.environ.get("NCR_SMOKE_FREEZE_AT", "0"))
 
     frame = 0
     for capture_frame in sorted(frames):
         while frame < capture_frame:
             frame += 1
-            m.clock.frame = frame
+            m.clock.frame = min(frame, freeze_at) if freeze_at > 0 else frame
             m.renderFrame()
+        if freeze_at > 0:
+            m.frameCapture.baseFilename = f"smoke_f{frame}"
         m.frameCapture.capture()
         print(f"[ncr_smoke] captured frame {frame}")
     print("[ncr_smoke] done")

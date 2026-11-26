@@ -15,7 +15,10 @@
 // ConeTraceScreen and ClusterSpatialReuse instead of the per-frame K-Means cone trace) has state that
 // lives across frames, which the runtime keeps as the pass does: the per-pixel cluster history and
 // lock state in ping-pong pairs, swapped every frame, the previous frame's G-buffer and specular mask
-// (copied at the end of the render part) and the previous frame's camera matrices.
+// (copied at the end of the render part) and the previous frame's camera matrices. Since the desktop's
+// stage 4 snapshots (ver2-ver4) the path also has what NeuralRadiosity::execute counts on the CPU
+// (ClusterClock) and three more buffers: the visibility check's recovery countdown (a third ping-pong
+// pair), the frequency check's counters and the ray budget's counters, cleared every frame.
 //
 // Shared by the command-line replayer (ncr_replay.cpp, Windows and the phone's shell) and the
 // HarmonyOS app (ohos/app). Errors are thrown as std::runtime_error.
@@ -74,8 +77,8 @@ struct Settings
 
 /// Falcor's online training schedule (NeuralRadiosity::updateTrainSchedule): a heat between 0 and 1
 /// that sets the learning rate and the EMA decay. It holds after the events that raised it (the
-/// warmup after loading, camera motion, scene changes), then relaxes toward the level of the current
-/// events. The bake holds the settings and the state after the baked frame.
+/// initial hot frames after loading, camera motion, scene changes), then relaxes toward the level of
+/// the current events. The bake holds the settings and the state after the baked frame.
 struct TrainSchedule
 {
     static constexpr uint32_t kEventCamera = 1u << 0, kEventEdit = 1u << 1, kEventLight = 1u << 2, kEventObject = 1u << 3;
@@ -84,15 +87,33 @@ struct TrainSchedule
     float heat = 1.0f;
     uint32_t holdLeft = 0;
     float lrHot = 5e-3f, lrCold = 2.5e-3f, emaHot = 0.95f, emaCold = 0.99f;
-    uint32_t warmupFrames = 600, holdFrames = 30;
+    uint32_t initialHotFrames = 600, holdFrames = 30;
     float coolFrames = 300.0f;
     float cameraHeat = 0.3f, sceneHeat = 1.0f, lightMotionHeat = 0.5f, objectMotionHeat = 0.1f;
     float learningRate = 5e-3f, emaDecay = 0.95f;   // the values of the current frame
 
     /// One frame's update, before its training step. `events`: kEvent* bits seen since the last frame.
     void advance(uint32_t events);
-    /// NeuralRadiosity::resetTrainSchedule ("Reset schedule"): fully hot for the warmup.
+    /// NeuralRadiosity::resetTrainSchedule ("Reset schedule"): fully hot for the initial hot frames.
     void reset();
+};
+
+/// What NeuralRadiosity::execute counts from frame to frame for the cluster-reuse passes, whatever the
+/// render mode: the bake holds the values after the baked frame, the runtime counts on.
+struct ClusterClock
+{
+    uint32_t visibilityFrame = 0;          // the visibility check's window clock; held for the first frame of a geometry move
+    bool visibilityFrameAdvanced = true;   // it advanced in this frame
+    bool geometryMovedPrevious = false;    // geometry moved in the last frame
+    uint32_t frequencyFrames = 0;          // the post-edit frequency check's countdown: 200 after geometry moved under a still camera
+    uint32_t motionFarWeightFrames = 0;    // the far-weight limit at moving contours: full on a camera-motion frame, fading after
+    uint32_t motionFarWeightFadeFrames = 4;
+    bool checkFrequency = true, limitMotionFarWeight = true;   // the pass's switches for the two
+
+    /// One frame's update, before its passes (NeuralRadiosity::execute, line by line).
+    void advance(bool geometryMoved, bool viewChanged, bool historyValid);
+    uint32_t frequencySurveyFrame() const;     // 1-12 while the survey after an edit runs, else 0
+    float motionFarWeightStrength() const;
 };
 
 class Runtime
@@ -133,6 +154,8 @@ public:
     bool clusterReuse() const;
     /// The pass's "Clear History": the next frame starts the cluster history empty.
     void clearHistory();
+    /// The CPU-side counters of the cluster-reuse passes, as of the last frame.
+    const ClusterClock& clusterClock() const;
     /// A setting or a training-schedule setting by name, as a number (booleans 0 or 1): what the
     /// command line and the app's panel go through. settingNames() lists them; set() is false for an
     /// unknown name, get() fails for one.

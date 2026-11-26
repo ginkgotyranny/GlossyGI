@@ -48,6 +48,7 @@ ohos/tools/spirv_info.py       capabilities and bindings of a SPIR-V module (and
 ohos/tools/bake_check.py       resolves every SPIR-V binding of a bake to the resource the bake recorded for it
 ohos/tools/bake_pack.py        joins bake and SPIR-V into the index the replayer reads; repairs the SPIR-V (spirv_fix.py)
 ohos/tools/replay_compare.py   a replay's images and buffers against Falcor's from the baked frame
+ohos/tools/cluster_compare.py  the cluster-reuse state of a replay against Falcor's, per pixel, with a second replay as noise floor
 ohos/tools/train_check.py      one training step of the replayer against the reference model, stage by stage, and against Falcor
 ohos/tools/train_compare.py    N frames of training in the replayer against N frames of training in Falcor
 ohos/tools/display_check.py    the image the runtime shows (tone mapped, 8-bit) against Falcor's ToneMapper output
@@ -181,8 +182,10 @@ What the comparison established about the model, beyond what its source suggests
 - **Small grid gradients matter**, since Adam moves an entry by about the learning rate whatever the
   magnitude of its gradient. The GPU sums gradients as integers in units of 2^-24 (the smallest fp16
   value); a coarser unit would drop 7-15% of the entries a step touches.
-- **A batch is padded to a multiple of 256 rows and the padding takes part**: the loss is normalised by
-  the padded count.
+- **A batch is padded to a multiple of 256 rows for the MLP.** Until the stage 4 snapshots the padding
+  took part and the loss was normalised by the padded count; since then (`Model/TrainingBatch.h`) the
+  padded rows are cleared, have no gradient, and the loss is normalised by the samples of the batch.
+  The runtime does the same (2026-11-26).
 - **SquarePlus needs care in fp16**: `(10 z)^2` overflows from z = 25.6 on. The graphs take the root as
   `64 * sqrt((q / 64)^2 + 4 / 64^2)`, good up to z = 1638.
 
@@ -364,6 +367,48 @@ another number of layers than its checkpoint), as is a saved model of another si
 Not exercised: a baked frame without any specular pixel (the two passes are then recorded with zero
 items and skipped until a frame has some); none of the nine scenes has such a first frame.
 
+#### Since the stage 4 snapshots (ver2, ver3, ver4): what the path gained, and what follows it here
+
+The desktop synced three snapshots between 2026-11-20 and 2026-11-26 (`CLAUDE.md` lists what each
+changed). The shaders reach the phone through the bake as before. What the pass does on the host for
+them is new, and the runtime does the same since 2026-11-26:
+
+| What | In Falcor | In the runtime |
+|---|---|---|
+| The visibility check's recovery countdown, per pixel | a third ping-pong pair, `mpVCDRecovery` | named by the bake (`cluster.vcdRecovery0/1`), swapped with the other pairs, cleared with the history |
+| The frequency check's counters, per pixel | `mpClusterFrequencyCounts`, kept across frames, not cleared by *Clear History* | `cluster.frequencyCounts`: starts empty, never cleared |
+| The ray budget's counters | `mpFarValidationStats`, cleared before every ConeTraceScreen | host step `clearstats` |
+| The visibility window clock, the frequency countdown (200 frames after geometry moved under a still camera, the first 12 a survey), the far-weight limit's fade | counted in `execute()`, given to ConeTraceScreen and ClusterSpatialReuse as uniforms | `ClusterClock` (`ncr_runtime.h`), a line-by-line port; the bake records the values after its frame, the runtime counts on. Geometry motion comes from the track's events, camera motion from comparing the camera's matrix with the previous frame's, as in Falcor |
+| The frame after an animation stops | Falcor's animation controller still reports moved geometry once (it updates the previous-frame matrices) | the same one extra frame, for the clock and for the training schedule |
+| Loss normalisation | by the samples of the batch (`Model/TrainingBatch.h`) | the same |
+| Training schedule | only a target above the heat raises it and sets the hold; `trainWarmupFrames` is `trainInitialHotFrames` | the same (setting `trainInitialHotFrames`, panel *Initial hot frames*; `train.initialHotFrames` in the bake) |
+
+**The history is no longer reproducible to the byte, on any GPU.** ConeTraceScreen hands its rays out
+from a per-frame budget (at most N + N/2 for N specular pixels) with atomic counters, so which pixel
+gets a ray when the budget is short depends on the order the GPU's threads arrive in. Two replays of
+one frame on the same GPU differ in about 1% of the history's bytes, and two runs of 31 frames in
+20-30% of the pixels' entries; Falcor against Falcor would do the same. The comparison is therefore
+statistical (`cluster_compare.py`): a replay should differ from Falcor about as much as from a second
+replay, and what does not depend on the budget's order must still be equal.
+
+Checked on the PC (the GPU Falcor ran on, MLPs on the CPU), bathroom at 640x360, online training from a
+fresh model, `randomTrainDir` off, 2026-11-26; each replay run twice:
+
+| | Static, 31 frames against Falcor's frame 30 | Animated on the camera path, 61 frames against frame 60 | Animated, camera fixed, the animation stopped at frame 20 (`--set-at 20 animate=0`; Falcor: `NCR_SMOKE_FREEZE_AT=20`), 41 frames against frame 40 |
+|---|---|---|---|
+| Training schedule and the clock (visibility frame, frequency countdown, far-weight frames, moved-last-frame) | equal | equal (60, 0, 5, 1) | equal (40, 180, 0, 0) |
+| Weight updates against Falcor's (cosine) | 0.992-0.9999 | 0.997-0.9999 | 0.9995-0.9998 |
+| Final image against Falcor's | 45.7 dB | 47.3 dB | 44.3 dB |
+| History entries differing from Falcor / between the two replays | 23.4% / 31.4% | 25.4% / 25.3% | 21.2% / 21.1% |
+| Lock state, the same | 0.3-0.5% / 0.5-0.7% | 0.03% / 0.03-0.04% | 1.6% / 1.6% |
+| Frequency counters, the same | all zero | all zero | 7.7% / 7.7% |
+| Previous specular mask | equal | equal | equal |
+
+Frame 0 alone: G-buffer, masks, counts and lock state equal to Falcor's, 1.3% of the history's bytes
+differ (0.9% between two replays). `verify_tcnn.py` on a CUDA dump of the current desktop build
+(bathroom, step 50): all checks pass with the loss normalised by the samples. Not exercised by these
+runs: a visibility change that starts a recovery countdown (the pair stayed zero on both sides).
+
 ### After a change of `NCRConfig.h`
 
 The desktop keeps alternative presets next to the header (`NCRConfig-stage3.h` is the one before
@@ -386,13 +431,13 @@ runtime a checkpoint of another size than the bake's.
 
 A frame baked in a training mode contains the training step (`host <k> train lhs`), and the bake holds
 the model before and after the frame (`before.ckpt`, `after.ckpt`), the fp16 copies the step computes
-with (`before_working.bin`: a checkpoint does not hold them, and a fresh model's are zero, not its
-masters rounded), and the training schedule: its settings and its state after the frame. With
+with (`before_working.bin`: a checkpoint does not hold them), and the training schedule: its
+settings and its state after the frame. With
 `--networks tiles` or `npu` the runtime executes the step:
 
 | Step | Where | What |
 |---|---|---|
-| Inputs and targets | GPU: `EncodeInputs` with the training grids, `EncodeTargets` | tiles of the training graph's size (4,096 samples by default); the target tile carries a weight per slot, 0 beyond the batch |
+| Inputs and targets | GPU: `EncodeInputs` with the training grids, `EncodeTargets` | tiles of the training graph's size (4,096 samples by default); the target tile carries a weight per slot, 0 beyond the batch (and a power of two above 1 for a batch smaller than half a tile, so that its gradients stay within fp16's range; the rescale to the batch divides it out) |
 | Gradients of the MLP | NPU: `ncr_<net>_train_<N>_fp16.om`, one run per tile | dL/dw, summed over the tiles on the CPU, and dL/d(input) per sample |
 | Gradients of the grids | GPU: `ScatterGradients` | the encoding channels of dL/d(input) added to the grid entries the lookup read, in 2^-24 fixed point (integer atomics) |
 | Grid optimizers | GPU: `GridOptimizer`, once per grid | Adam on the float32 masters where the gradient is not zero, per-entry step counts; EMA over all entries; fp16 copies rounded to nearest even |
@@ -402,7 +447,7 @@ masters rounded), and the training schedule: its settings and its state after th
 advances and the uniforms that depend on the sample counts are set as `NeuralRadiosity.cpp` sets them;
 camera and scene stay as baked. The learning rate and EMA decay follow Falcor's online training schedule
 (`NeuralRadiosity::updateTrainSchedule`, ported as `TrainSchedule`): continued from its state after the
-baked frame, with no events, so it holds through the warmup and then cools (`--lr`, `--ema` fix them
+baked frame, with no events, so it holds through the initial hot frames and then cools (`--lr`, `--ema` fix them
 instead). The weights after the last frame are written as `trained.ckpt`, a checkpoint Falcor loads,
 and the schedule's state as `schedule.txt`.
 
@@ -475,7 +520,7 @@ of the desktop defaults.
 
 #### Sample counts
 
-The pass properties `trainBatchSize` (training samples per frame) and `numRHS` (RHS paths per sample)
+The pass properties `batchSize` (training samples per frame; `trainBatchSize` until the stage 4 snapshots) and `numRHS` (RHS paths per sample)
 set what `NCRConfig.h` fixes on the desktop (32,768 and 8). Baked and replayed on the phone, bathroom,
 30 frames of online training each, the K-Means cone trace with 32 rays per specular pixel, 2026-11-13:
 
@@ -500,7 +545,10 @@ the GPU work of the next frame, as only the NPU is exclusive.
 
 #### What the comparison showed about the desktop pipeline
 
-Two properties of the pipeline as it runs on the desktop, found because the replay did not agree at first:
+Two properties of the pipeline as it ran on the desktop then, found because the replay did not agree at
+first. The first is gone since the stage 4 snapshots: a fresh model's fp16 copies are written before
+the first step (`[NCR Init]` in Falcor's log), the bake records them as before, and the first step
+trains.
 
 1. **The first training step after a random initialisation changes nothing.** The fp16 copies of the
    weights that training reads are first written by the optimizers; before that they are zero, the
@@ -644,4 +692,6 @@ triangle, was suspected first and is fine (test `load16`).
    the fingers.
    The desktop's "stage 4" preset (2026-11-18): SpecNet with three hidden layers, and the cluster-reuse
    render path with its state kept across frames by the runtime (above).
+   The stage 4 snapshots ver2-ver4 (2026-11-26): the runtime follows the pass's new host-side state,
+   loss normalisation and schedule rule; checked on the PC against Falcor (above).
    Next, when frame rate matters again: sample counts for the phone, training across frames.

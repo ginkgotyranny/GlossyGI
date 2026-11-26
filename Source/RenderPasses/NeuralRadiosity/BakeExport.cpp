@@ -31,6 +31,8 @@
 //                                                     (the cluster-reuse passes are dispatched for the specular count)
 //       host <k> saveprev                             cluster reuse: this frame's G-buffer and specular mask are copied
 //                                                     to the "previous frame" copies the next frame reprojects from
+//       host <k> clearstats                           cluster reuse: the ray budget's counters (farValidationStats) are
+//                                                     cleared before ConeTraceScreen hands out this frame's rays
 //     resources:
 //       buffer <id> <bytes> <structSize> <elementCount>                    contents in data/buffer<id>.bin
 //       texture <id> <type> <format> <width> <height> <depth> <mips> <layers>
@@ -43,6 +45,11 @@
 //                                                (the frame after the baked one swaps them), prevSpecActive and the
 //                                                textures prevPos, prevDir, prevNormal, prevRoughness the copies
 //                                                "saveprev" writes. Their baked contents are the state after the frame.
+//                                                vcdRecovery0/1 is a third ping-pong pair (the visibility check's
+//                                                recovery countdown), frequencyCounts the frequency check's counters
+//                                                (kept across frames), farValidationStats the ray budget's counters.
+//                                                The values cluster.* are what execute() counts on the CPU (visibility
+//                                                window clock, frequency countdown, far-weight fade), after the frame.
 //       value <name> <number>                    sizes and switches at the baked frame
 //       geometry <globalInstanceID> <tlasInstance> <geometryIndex> <meshID> <materialID> <vbOffset>
 //                <ibOffset> <vertexCount> <indexCount> <index16> <frontFaceCW> <opaque> <12 floats: 3x4 transform>
@@ -782,6 +789,22 @@ void NeuralRadiosity::bakeExport(RenderContext* pRenderContext)
         baker.named("cluster.prevDir", mpPrevDir);
         baker.named("cluster.prevNormal", mpPrevNormal);
         baker.named("cluster.prevRoughness", mpPrevRoughness);
+        // The visibility check's recovery countdown is a third ping-pong pair; the frequency check's
+        // counters live across frames in one buffer; the ray budget's counters are cleared before
+        // every ConeTraceScreen (host step clearstats).
+        baker.named("cluster.vcdRecovery0", mpVCDRecovery[0]);
+        baker.named("cluster.vcdRecovery1", mpVCDRecovery[1]);
+        baker.named("cluster.frequencyCounts", mpClusterFrequencyCounts);
+        baker.named("cluster.farValidationStats", mpFarValidationStats);
+        // What execute() counts on the CPU from frame to frame and hands to ConeTraceScreen and
+        // ClusterSpatialReuse as uniforms: the state after this frame, and the switches it depends on.
+        baker.record("value cluster.visibilityFrame {}", mClusterVisibilityFrame);
+        baker.record("value cluster.geometryMovedPrevious {}", mClusterGeometryMovedPreviousFrame ? 1 : 0);
+        baker.record("value cluster.frequencyFrames {}", mClusterFrequencyFrames);
+        baker.record("value cluster.checkFrequency {}", mCheckClusterFrequency ? 1 : 0);
+        baker.record("value cluster.motionFarWeightFrames {}", mMotionFarWeightFrames);
+        baker.record("value cluster.motionFarWeightFadeFrames {}", kMotionFarWeightFadeFrames);
+        baker.record("value cluster.limitMotionFarWeight {}", mLimitMotionFarWeight ? 1 : 0);
     }
     if (mpNRModel)
     {
@@ -796,7 +819,7 @@ void NeuralRadiosity::bakeExport(RenderContext* pRenderContext)
         baker.record("value train.lrCold {}", mTrainLrCold);
         baker.record("value train.emaHot {}", mTrainEmaHot);
         baker.record("value train.emaCold {}", mTrainEmaCold);
-        baker.record("value train.warmupFrames {}", mTrainInitialHotFrames);
+        baker.record("value train.initialHotFrames {}", mTrainInitialHotFrames);
         baker.record("value train.holdFrames {}", mTrainHoldFrames);
         baker.record("value train.coolFrames {}", mTrainCoolFrames);
         baker.record("value train.cameraHeat {}", mTrainCameraHeat);

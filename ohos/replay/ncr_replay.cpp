@@ -34,6 +34,8 @@
 //                     the samplers are seeded with it (to replay a later frame of an animated run)
 //   --set name=value  a setting of the pass's panel or of the training schedule, as a number
 //                     (--list-settings prints the names and the baked values)
+//   --set-at F name=value   the same, set before frame F (counted from 0) instead of at the start, e.g.
+//                     --set-at 20 animate=0 stops an animated scene where Falcor's clock stopped
 //   --train-tile N    samples per tile of the training graph (default 4096; the NPU needs
 //                     ncr_<net>_train_<N>_fp16.om)
 //   --lr X, --ema X   fixed learning rate and EMA decay instead of the training schedule
@@ -77,6 +79,7 @@ int run(int argc, char** argv)
     int startSample = -1;
     bool listSettings = false;
     std::vector<std::pair<std::string, double>> settings;
+    std::vector<std::pair<uint32_t, std::pair<std::string, double>>> settingsAt;   // frame, setting
     std::vector<float> cameraValues;
     for (int i = 4; i < argc; i++)
     {
@@ -87,6 +90,14 @@ int run(int argc, char** argv)
         else if (arg == "--dt" && hasValue) dt = std::stod(argv[++i]);
         else if (arg == "--frame-count" && hasValue) options.frameCount = std::stoll(argv[++i]);
         else if (arg == "--sample" && hasValue) startSample = std::stoi(argv[++i]);
+        else if (arg == "--set-at" && i + 2 < argc)
+        {
+            const uint32_t at = (uint32_t)std::stoul(argv[++i]);
+            const std::string pair = argv[++i];
+            const size_t equals = pair.find('=');
+            if (equals == std::string::npos) fail("--set-at takes a frame and name=value");
+            settingsAt.push_back({at, {pair.substr(0, equals), std::stod(pair.substr(equals + 1))}});
+        }
         else if (arg == "--set" && hasValue)
         {
             const std::string pair = argv[++i];
@@ -143,6 +154,8 @@ int run(int argc, char** argv)
     uint32_t events = 0;
     for (uint32_t frame = 0; frame < frames; frame++)
     {
+        for (const auto& [at, setting] : settingsAt)
+            if (at == frame && !runtime.set(setting.first, setting.second)) fail("no setting named " + setting.first + " (--list-settings)");
         runtime.frame(frame == 0 ? 0.0 : dt);
         frameMs.push_back(runtime.lastFrameMs());
         events |= runtime.lastEvents();
@@ -172,8 +185,15 @@ int run(int argc, char** argv)
         std::printf("training: weights written to %s/trained.ckpt\n", outDir.c_str());
         // The training schedule's state after the last frame (ohos/tools/train_compare.py).
         const TrainSchedule& schedule = runtime.schedule();
-        const std::string text = format("frames %u\nheat %.9g\nholdLeft %u\nlearningRate %.9g\nemaDecay %.9g\n", runtime.framesDone(), schedule.heat,
-                                        schedule.holdLeft, schedule.learningRate, schedule.emaDecay);
+        std::string text = format("frames %u\nheat %.9g\nholdLeft %u\nlearningRate %.9g\nemaDecay %.9g\n", runtime.framesDone(), schedule.heat,
+                                  schedule.holdLeft, schedule.learningRate, schedule.emaDecay);
+        if (runtime.clusterReuse())
+        {
+            // The cluster passes' CPU-side counters, which train_compare.py checks against Falcor's.
+            const replay::ClusterClock& k = runtime.clusterClock();
+            text += format("visibilityFrame %u\ngeometryMovedPrevious %u\nfrequencyFrames %u\nmotionFarWeightFrames %u\n", k.visibilityFrame,
+                           k.geometryMovedPrevious ? 1u : 0u, k.frequencyFrames, k.motionFarWeightFrames);
+        }
         writeFile(outDir + "/schedule.txt", text.data(), text.size());
     }
     vkDeviceWaitIdle(dev.device);

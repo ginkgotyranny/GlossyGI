@@ -157,7 +157,7 @@ public:
     void load()
     {
         parseIndex();
-        for (const char* pair : {"cluster.history", "cluster.lockState"})
+        for (const char* pair : {"cluster.history", "cluster.lockState", "cluster.vcdRecovery"})
         {
             const std::string a = std::string(pair) + "0", b = std::string(pair) + "1";
             if (named.count(a) == 0 || named.count(b) == 0) continue;
@@ -322,6 +322,10 @@ public:
         std::memcpy(cameraMember("prevViewProjMatNoJitter", 64), h.viewProjNoJitter, 64);
         std::memcpy(cameraMember("prevPosW", 12), h.position, 12);
     }
+
+    /// The camera differs from the previous frame's (NeuralRadiosity::execute compares the same two
+    /// matrices of the camera's shader data).
+    bool viewChanged() { return std::memcmp(cameraMember("viewProjMatNoJitter", 64), cameraMember("prevViewProjMatNoJitter", 64), 64) != 0; }
 
     bool hasBuffer(const std::string& role) const { return named.count(role) != 0; }
 
