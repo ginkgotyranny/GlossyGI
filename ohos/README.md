@@ -406,8 +406,28 @@ fresh model, `randomTrainDir` off, 2026-11-26; each replay run twice:
 
 Frame 0 alone: G-buffer, masks, counts and lock state equal to Falcor's, 1.3% of the history's bytes
 differ (0.9% between two replays). `verify_tcnn.py` on a CUDA dump of the current desktop build
-(bathroom, step 50): all checks pass with the loss normalised by the samples. Not exercised by these
-runs: a visibility change that starts a recovery countdown (the pair stayed zero on both sides).
+(bathroom, step 50): all checks pass with the loss normalised by the samples.
+
+The recovery countdown needs a visibility change under locked pixels, which those runs do not have. A
+longer one does: the same fixed-camera scene with the animation stopped at frame 100, 111 frames
+against Falcor's frame 110. Schedule and clock equal (visibility frame 110, frequency countdown 190);
+407-412 pixels are counting down in Falcor's two recovery buffers and 407-411 in the replay's, with
+the same largest value (56 and 55 of 64); 0.001% of the pixels differ, against Falcor and between two
+replays alike; history entries 17.0% / 16.6%, frequency counters 15.0% / 14.7%; image 45.9 dB.
+
+On the phone (Maleoon 955, MLPs on the NPU), the same day:
+
+| | |
+|---|---|
+| Pipelines | all 15 passes of the new bake are created (15.1 s the first time; ConeTraceScreen has grown), including the ray budget's subgroup operations and atomics |
+| Static, 31 frames against Falcor's frame 30 | schedule and clock equal; weight updates 0.992-0.9995; image 42.4 dB; lock state 1.1-1.6% of the pixels differ, the recovery pair, frequency counters and previous mask equal |
+| History entries differing from Falcor / between two runs on the phone | 52.9% / 3.2%. The phone repeats itself far better than the PC (its threads arrive in a steadier order); against Falcor the PC's own spread and the two GPUs' last-place differences in hit distances add up, as they did before the ray budget |
+| Frame, bathroom static, desktop sample counts | 297-320 ms in the replayer over 31 frames; in the app 288 ms, of it the three cluster passes with the counter clear 17 ms once the pixels are locked (8 ms in the animated scene) |
+| The app (new HAP, the fourteen scenes baked again and pushed, 2,124 MB), bathroom static, frame 60, against `ncr_replay --networks npu --frames 60` on the phone | `schedule.txt` identical (clock included); weights alike (cosine 1.0000 for all four); `display.bin` 56.7 dB, 95.8% of its bytes identical. Identity to the byte, the check until now, is gone with the history's |
+| The app, bathroom animated on its camera path, 90 frames | no error in the log, 270-290 ms a frame, the picture as Falcor's |
+
+The bright speckles on bathroom's floor in the first hundred-odd frames are in Falcor's own captures of
+those frames as well.
 
 ### After a change of `NCRConfig.h`
 
@@ -693,5 +713,5 @@ triangle, was suspected first and is fine (test `load16`).
    The desktop's "stage 4" preset (2026-11-18): SpecNet with three hidden layers, and the cluster-reuse
    render path with its state kept across frames by the runtime (above).
    The stage 4 snapshots ver2-ver4 (2026-11-26): the runtime follows the pass's new host-side state,
-   loss normalisation and schedule rule; checked on the PC against Falcor (above).
+   loss normalisation and schedule rule; checked on the PC and on the phone against Falcor (above).
    Next, when frame rate matters again: sample counts for the phone, training across frames.
