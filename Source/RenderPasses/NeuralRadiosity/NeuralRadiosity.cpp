@@ -220,11 +220,20 @@ static void regNeuralRadiosity(pybind11::module& m)
     pass.def("configureDiagnostics", &NeuralRadiosity::configureDiagnostics);
     pass.def_property_readonly("diagnostics", &NeuralRadiosity::getDiagnostics);
     pass.def("inspectRenderPixel", &NeuralRadiosity::inspectRenderPixel);
+    pass.def("getDiagnosticSpecInput", &NeuralRadiosity::getDiagnosticSpecInput);
+    pass.def("getDiagnosticSpecIndex", &NeuralRadiosity::getDiagnosticSpecIndex);
+    pass.def("getDiagnosticSpecActive", &NeuralRadiosity::getDiagnosticSpecActive);
+    pass.def("getDiagnosticClusterHistory", &NeuralRadiosity::getDiagnosticClusterHistory);
+    pass.def("inferDiagnosticSpecInputs", &NeuralRadiosity::inferDiagnosticSpecInputs);
     pass.def("setDiagnosticRenderOptions", &NeuralRadiosity::setDiagnosticRenderOptions);
     pass.def("setDiagnosticSpatialReuse", &NeuralRadiosity::setDiagnosticSpatialReuse);
     pass.def("setDiagnosticSpatialReuseLegacy", &NeuralRadiosity::setDiagnosticSpatialReuseLegacy);
     pass.def("setDiagnosticFarModeValidation", &NeuralRadiosity::setDiagnosticFarModeValidation);
     pass.def("setDiagnosticClusterRayBudget", &NeuralRadiosity::setDiagnosticClusterRayBudget);
+    pass.def("setDiagnosticGradualFrequencyUpdate", &NeuralRadiosity::setDiagnosticGradualFrequencyUpdate);
+    pass.def("setDiagnosticFrequencyCheck", &NeuralRadiosity::setDiagnosticFrequencyCheck);
+    pass.def("setDiagnosticFastRebuild", &NeuralRadiosity::setDiagnosticFastRebuild);
+    pass.def("setDiagnosticMergeCountConservation", &NeuralRadiosity::setDiagnosticMergeCountConservation);
     pass.def("reapplyDiagnosticPostFilterPlacement", &NeuralRadiosity::reapplyDiagnosticPostFilterPlacement,
         pybind11::arg("placement"), pybind11::arg("minExcess") = 0.1f, pybind11::arg("requireQuietRing") = false);
     pass.def("reapplyDiagnosticPostFilter", &NeuralRadiosity::reapplyDiagnosticPostFilter);
@@ -556,6 +565,13 @@ void NeuralRadiosity::execute(RenderContext* pRenderContext, const RenderData& r
     // This clock is independent of the training schedule and works while paused.
     mClusterVisibilityFrameAdvanced = !mClusterGeometryMoved || mClusterGeometryMovedPreviousFrame;
     if (mClusterVisibilityFrameAdvanced) ++mClusterVisibilityFrame;
+    // Two independent twelve-direction windows after a geometry edit.
+    const auto& camera = mpScene->getCamera()->getData();
+    const bool viewChanged = std::memcmp(&camera.viewProjMatNoJitter, &camera.prevViewProjMatNoJitter,
+                                         sizeof(camera.viewProjMatNoJitter)) != 0;
+    if (!mClusterHistoryValid || viewChanged) mClusterFrequencyFrames = 0;
+    else if (mClusterGeometryMoved) mClusterFrequencyFrames = 200;
+    else if (mClusterFrequencyFrames) --mClusterFrequencyFrames;
     mClusterGeometryMovedPreviousFrame = mClusterGeometryMoved;
     mClusterGeometryMoved = false;
 
@@ -853,12 +869,16 @@ void NeuralRadiosity::setScene(RenderContext* pRenderContext, const ref<Scene>& 
     mDiagnosticHistoryFrozen = false;
     mDiagnosticSpatialReuseLegacy = false;
     mEnableFarModeValidation = true;
+    mConserveClusterMergeCounts = true;
+    mEnableClusterFastRebuild = true;
     mEnableClusterRayBudget = true;
     mClusterVisibilityFrame = 0;
     mClusterVisibilityFrameAdvanced = true;
     mClusterGeometryMoved = false;
     mClusterGeometryMovedPreviousFrame = false;
     mpFarValidationStats.reset();
+    mpClusterFrequencyCounts.reset();
+    mClusterFrequencyFrames = 0;
     mpDiagnosticLHS.reset();
     mpDiagnosticRHS.reset();
     mpFirstSmoothPass = nullptr;
@@ -1475,10 +1495,8 @@ bool NeuralRadiosity::useClusterReuse() const
 
 void NeuralRadiosity::coneTrace(RenderContext* pRenderContext, const RenderData& renderData, std::shared_ptr<RayBatchBuffer> pRayBatch)
 {
-    // Dispatch by batch type: the training batches keep the original T=128
-    // group-wide K-Means (their specInput must stay bit-compatible with existing
-    // checkpoints), while the render batch goes through the screen-space
-    // spatiotemporal cluster reuse pipeline.
+    // Training always uses K-Means. Rendering may build the same specInput
+    // layout from the screen-space cluster history.
     if (pRayBatch == mpRenderBatch && useClusterReuse())
     {
         clusterReuse(pRenderContext, renderData);
@@ -1681,7 +1699,21 @@ void NeuralRadiosity::coneTraceScreenPass(RenderContext* pRenderContext, const R
     var[name]["visibilityFrame"] = mClusterVisibilityFrame;
     var[name]["visibilityFrameAdvanced"] = mClusterVisibilityFrameAdvanced ? 1u : 0u;
     var[name]["enableRayBudget"] = mEnableClusterRayBudget ? 1u : 0u;
+    var[name]["conserveMergeCounts"] = mConserveClusterMergeCounts ? 1u : 0u;
+    var[name]["enableFastRebuild"] = mEnableClusterFastRebuild ? 1u : 0u;
     var[name]["enableFarModeValidation"] = mEnableFarModeValidation ? 1u : 0u;
+    const uint32_t pixelCount = mFrameDim.x * mFrameDim.y;
+    if (!mpClusterFrequencyCounts || mpClusterFrequencyCounts->getElementCount() != pixelCount)
+    {
+        mpClusterFrequencyCounts = mpDevice->createStructuredBuffer(sizeof(uint32_t), pixelCount,
+            ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal, nullptr, false);
+        pRenderContext->clearUAV(mpClusterFrequencyCounts->getUAV().get(), uint4(0));
+    }
+    var["frequencyCounts"] = mpClusterFrequencyCounts;
+    var[name]["gradualFrequencyUpdate"] = mGradualFrequencyUpdate ? 1u : 0u;
+    var[name]["checkFrequency"] = mCheckClusterFrequency && mClusterFrequencyFrames > 0 ? 1u : 0u;
+    var[name]["frequencySurveyFrame"] = mCheckClusterFrequency && mClusterFrequencyFrames >= 188 &&
+        mClusterFrequencyFrames < 200 ? 200u - mClusterFrequencyFrames : 0u;
     var["farValidationStats"] = mpFarValidationStats;
     var["specSrc"] = mpRenderBatch->specSrc;
 
@@ -2663,6 +2695,28 @@ void NeuralRadiosity::setDiagnosticRenderOptions(bool postFilter, bool temporalR
     mVarsChanged = true;
 }
 
+std::vector<float> NeuralRadiosity::inferDiagnosticSpecInputs(const std::vector<uint8_t>& inputs)
+{
+    FALCOR_CHECK(mpRenderBatch && mpNRModel && mpRandomSmooth, "Render a frame before replaying inputs.");
+    const uint32_t stride = mpRenderBatch->specInput->getStructSize();
+    FALCOR_CHECK(!inputs.empty() && inputs.size() % stride == 0, "Invalid diagnostic input layout.");
+    const size_t count = inputs.size() / stride;
+    FALCOR_CHECK(count <= 16384, "Diagnostic replay is limited to 16384 rows.");
+    auto* ctx = mpDevice->getRenderContext();
+    ShaderVar reflection = mpRandomSmooth->getRootVar();
+    RayBatchBuffer scratch(mpDevice, reflection, padUp(uint32_t(count), kModelBatchAlign), mNumClusters,
+        "DiagnosticInputReplay", false, false, true);
+    scratch.specSize = uint32_t(count);
+    ctx->clearUAV(scratch.specInput->getUAV().get(), uint4(0));
+    ctx->updateBuffer(scratch.specInput.get(), inputs.data(), 0, inputs.size());
+    ctx->waitForFalcor(mpNRModel->stream(false));
+    mpNRModel->inference({nullptr, nullptr, 0}, scratch.getSpecPtrs());
+    ctx->waitForCuda(mpNRModel->stream(false));
+    std::vector<float> result(count * scratch.specColor->getStructSize() / sizeof(float));
+    ctx->readBuffer(scratch.specColor.get(), result.data(), 0, result.size() * sizeof(float));
+    return result;
+}
+
 std::string NeuralRadiosity::inspectRenderPixel(uint32_t x, uint32_t y)
 {
     using Json = nlohmann::json;
@@ -2702,6 +2756,13 @@ std::string NeuralRadiosity::inspectRenderPixel(uint32_t x, uint32_t y)
         ctx->readBuffer(mpClusterLockState[mClusterHistoryWriteIdx].get(), &lock, pixel * sizeof(uint32_t), sizeof(uint32_t));
         result["packed_cluster_history"] = packed;
         result["packed_lock_state"] = lock;
+        if (mpClusterFrequencyCounts)
+        {
+            uint32_t counts = 0;
+            ctx->readBuffer(mpClusterFrequencyCounts.get(), &counts, pixel * sizeof(counts), sizeof(counts));
+            result["frequency_counts"] = counts;
+            result["frequency_frames"] = mClusterFrequencyFrames;
+        }
     }
     return result.dump();
 }

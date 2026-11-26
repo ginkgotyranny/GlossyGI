@@ -4,7 +4,8 @@
     the estimator. Pixel-staggered eight-frame windows cover the GGX lobe.
 
     Two global extra-ray pools bound each dispatch to N + floor(N/2) samples:
-    floor(N/8) for adaptive accumulation, the remainder for far-mode validation.
+    While moving: floor(N/8) for accumulation, the remainder for validation.
+    With a fixed camera, validation is idle and its pool supports short rebuilds.
     Diagnostic legacy mode retains the previous independent probe for A/B tests.
 */
 import Scene.Shading;
@@ -47,6 +48,7 @@ RWStructuredBuffer<SpecClusterHistory> clusterHistory;
 // Packed ClusterLockState (change-detection EMAs), ping-ponged with the history.
 RWStructuredBuffer<uint> clusterLockState;
 RWStructuredBuffer<uint> farValidationStats;
+RWStructuredBuffer<uint> frequencyCounts;
 
 
 struct ConeTraceScreen
@@ -86,6 +88,18 @@ struct ConeTraceScreen
     uint enableVisibilityCheck = 1;
     uint enableFarModeValidation = 1;
     uint enableRayBudget = 1;
+    // Preserve counts during fixed-camera accumulation. Motion uses truncated
+    // pseudo-counts; retain that policy until separately validated.
+    uint conserveMergeCounts = 1;
+    uint enableFastRebuild = 1;
+    uint checkFrequency = 0;
+    uint gradualFrequencyUpdate = 1;
+    static const uint kSurveyUpdating = 0xfffbu;
+    static const uint kAdapting = 0xfffau;
+    uint frequencySurveyFrame = 0;
+    // Reserved fp16 NaN, distinct from the legacy pending reset and miss.
+    static const uint kFrequencyResetPending = 0xfffcu;
+    static const uint kFrequencyRebuild = 0xfffdu;
     uint visibilityFrame = 0;
     uint visibilityFrameAdvanced = 1;
 
@@ -134,7 +148,7 @@ struct ConeTraceScreen
         // so both paths must agree on it.
         const bool outlier = integrateClusterSample(
             cs, hitValid, hitValid ? rayT : 0.f, tanLobe, epsScene,
-            assignThreshold, maxCount, weakWeight, sigmaPriorScale
+            assignThreshold, maxCount, weakWeight, sigmaPriorScale, conserveMergeCounts != 0 && !cameraMoved()
         );
         if (outlier) ++numOutliers;
         return outlier;
@@ -192,7 +206,10 @@ struct ConeTraceScreen
     {
         if (enableRayBudget == 0) return true;
         const uint slot = validation ? 2u : 1u;
-        const uint limit = validation ? specSize / 2u - specSize / 8u : specSize / 8u;
+        // Far-mode validation runs only with a moving camera. Reclaim its
+        // otherwise idle pool for newly rebuilt fixed-camera pixels.
+        const uint regularLimit = enableFastRebuild != 0 && !cameraMoved() ? specSize / 2u : specSize / 8u;
+        const uint limit = validation ? specSize / 2u - regularLimit : regularLimit;
         const uint waveCount = WaveActiveSum(1u);
         const uint offset = WavePrefixSum(1u);
         uint start = 0u;
@@ -209,11 +226,131 @@ struct ConeTraceScreen
         return accepted;
     }
 
+    // Four four-bit hit counts followed by a draw count. Misses are implicit.
+    // Only a newly selected direction votes, once per visibility window.
+    bool frequencyChanged(uint pixelIndex, ClusterSet cs, bool hit, float t, float tanLobe)
+    {
+        uint counts = frequencyCounts[pixelIndex] + (1u << 16);
+        if (hit)
+        {
+            float residual;
+            int slot = findNearestCluster(cs, t, tanLobe, epsScene, residual);
+            if (slot >= 0) counts += 1u << (4u * uint(slot));
+        }
+        const uint draws = counts >> 16;
+        if (draws < 12u)
+        {
+            frequencyCounts[pixelIndex] = counts;
+            return false;
+        }
+        frequencyCounts[pixelIndex] = 0u;
+        uint hits = 0u;
+        bool changed = false;
+        [unroll]
+        for (uint k = 0; k < kClusterCount; ++k)
+        {
+            uint observed = (counts >> (4u * k)) & 15u;
+            hits += observed;
+            changed = changed || abs(float(observed) / draws - cs.w[k]) > 0.5f;
+        }
+        return changed || abs(float(hits) / draws - saturate(clusterWeightSum(cs))) > 0.35f;
+    }
+
+    // Signed residuals of the miss probability and the sample's depth rank.
+    // A well-calibrated mixture has expected midpoint rank 1/2 (miss is last).
+    // Comparing against the pre-update mixture also works when slots are merged.
+    float2 frequencyResidual(ClusterSet cs, bool hit, float t, float tanLobe)
+    {
+        float hitMass = saturate(clusterWeightSum(cs));
+        float rank = 0.5f * (1.f + hitMass);
+        if (hit)
+        {
+            float residual;
+            int slot = findNearestCluster(cs, t, tanLobe, epsScene, residual);
+            if (slot >= 0)
+            {
+                rank = 0.5f * cs.w[slot];
+                [unroll]
+                for (uint k = 0; k < kClusterCount; ++k)
+                    if (cs.t[k] < cs.t[slot]) rank += cs.w[k];
+            }
+        }
+        return float2(hit ? hitMass - 1.f : hitMass, rank - 0.5f);
+    }
+
+    void adaptFrequencySample(inout ClusterSet cs, bool hit, float t, float tanLobe)
+    {
+        integrateClusterSample(cs, hit, t, tanLobe, epsScene, assignThreshold,
+            maxCount, weakWeight, sigmaPriorScale, conserveMergeCounts != 0);
+    }
+
     void updateBudgetedHistory(
         inout ClusterSet cs, inout ClusterLockState state,
         const ShadingData sd, const IMaterialInstance mi, inout SampleGenerator sg,
         uint2 pixel, float tanLobe, uint rayBudget, inout uint tracedRays)
     {
+        const uint pixelIndex = pixel.y * frameDim.x + pixel.x;
+        if (state.visibilityDepth == kAdapting)
+        {
+            // Keep the old probabilities and anchors. Shorten their effective
+            // sample history for the next independent draws, then let it grow.
+            uint remaining = frequencyCounts[pixelIndex];
+            // The gather also reads these counts as confidence. Ease toward
+            // the short history so its neighbour weight changes progressively.
+            float targetCount = max(8.f, 0.84f * clusterObservationCount(cs));
+            capClusterObservations(cs, targetCount);
+            uint attempts = 0, outliers = 0;
+            accumulateRay(cs, sd, mi, sg, tanLobe, attempts, outliers, tracedRays);
+            frequencyCounts[pixelIndex] = remaining > 0u ? remaining - 1u : 0u;
+            if (remaining <= 1u) state.visibilityDepth = kFrequencyRebuild;
+            return;
+        }
+        if (gradualFrequencyUpdate != 0u && frequencySurveyFrame != 0u && enableVisibilityCheck != 0 &&
+            !cameraMoved() && (isClusterLocked(cs, lockCount) || state.visibilityDepth == kSurveyUpdating) &&
+            state.visibilityDepth != kVisibilityResetPending && state.visibilityDepth != kFrequencyRebuild)
+        {
+            bool continuing = state.visibilityDepth == kSurveyUpdating && frequencySurveyFrame > 1u;
+            float2 evidence = continuing ? unpackHalf2(frequencyCounts[pixelIndex]) : float2(0.f);
+            float t;
+            bool hit = traceDepthSample(sd, mi, sg, t, tracedRays);
+            evidence = 0.8f * evidence + frequencyResidual(cs, hit, t, tanLobe);
+            adaptFrequencySample(cs, hit, t, tanLobe);
+            state = emptyClusterLockState();
+            if (any(abs(evidence) > float2(1.8f, 1.2f)))
+            {
+                state.visibilityDepth = kAdapting;
+                frequencyCounts[pixelIndex] = 20u;
+            }
+            else
+            {
+                state.visibilityDepth = kSurveyUpdating;
+                frequencyCounts[pixelIndex] = packHalf2(evidence.x, evidence.y);
+            }
+            return;
+        }
+        if (state.visibilityDepth == kSurveyUpdating)
+        {
+            state = emptyClusterLockState();
+            frequencyCounts[pixelIndex] = 0u;
+            if (!isClusterLocked(cs, lockCount)) state.visibilityDepth = kFrequencyRebuild;
+        }
+        if (state.visibilityDepth == kFrequencyResetPending)
+        {
+            cs = emptyClusterSet();
+            state = emptyClusterLockState();
+            state.visibilityDepth = kFrequencyRebuild;
+        }
+        if (state.visibilityDepth == kFrequencyRebuild)
+        {
+            // Rebuild using only the ordinary baseline, one fresh draw per frame.
+            uint attempts = 0, outliers = 0;
+            accumulateRay(cs, sd, mi, sg, tanLobe, attempts, outliers, tracedRays);
+            if (isClusterLocked(cs, lockCount)) state = emptyClusterLockState();
+            return;
+        }
+        if (checkFrequency != 0 && (frequencySurveyFrame == 1u || !isClusterLocked(cs, lockCount) ||
+            (frequencySurveyFrame == 0u && (state.visibilityDepth == 0u || visibilityFrameAdvanced == 0u))))
+            frequencyCounts[pixelIndex] = 0u;
         if (state.visibilityDepth == kVisibilityResetPending)
         {
             cs = emptyClusterSet();
@@ -222,6 +359,13 @@ struct ConeTraceScreen
         uint numRays = 0;
         uint numOutliers = 0;
         bool needsFreshSample = true;
+        const bool allowFastRebuild = enableFastRebuild != 0 && !cameraMoved();
+        // Spend a short batch on new mixtures instead of stopping at their
+        // first inlier. This adds fresh evidence, not extra historical memory.
+        // While measuring the post-edit distribution, all accumulating pixels
+        // also use one baseline per frame. Resume the usual budget afterwards.
+        if (frequencySurveyFrame != 0u && !cameraMoved()) rayBudget = 1u;
+        bool rebuilding = allowFastRebuild && clusterObservationCount(cs) < 8.f;
         if (isClusterLocked(cs, lockCount))
         {
             float t = 0.f;
@@ -229,7 +373,16 @@ struct ConeTraceScreen
             bool changed = false;
             bool newDirection = true;
             const bool sharedDetector = enableVisibilityCheck != 0 && !cameraMoved();
-            if (sharedDetector)
+            const bool survey = sharedDetector && frequencySurveyFrame != 0u;
+            if (survey)
+            {
+                // After geometry settles, spend twelve baseline rays on distinct
+                // directions. The preceding motion frame retained its old-depth check.
+                hitValid = traceDepthSample(sd, mi, sg, t, tracedRays);
+                // Invalidate the repeated-direction reference when this survey ends.
+                state.visibilityDepth = 0u;
+            }
+            else if (sharedDetector)
             {
                 // Phase 0 checks the OLD direction with the baseline ray, then
                 // retains its reference. Phase 1 starts the new window. On the
@@ -254,11 +407,23 @@ struct ConeTraceScreen
             }
             ++numRays;
             // Do not count the same repeated outlier as eight independent votes.
-            if (newDirection)
+            if (newDirection && !survey)
                 updateClusterLockOutlier(state, cs, hitValid, t, tanLobe, epsScene, detectThreshold, detectRate);
             const bool unlock = state.outlier >= unlockOutlierRate || state.drift >= unlockDrift;
+            bool frequencyMismatch = false;
+            if (!changed && !unlock && sharedDetector && newDirection && checkFrequency != 0)
+                frequencyMismatch = frequencyChanged(pixelIndex, cs, hitValid, t, tanLobe);
+            if (frequencyMismatch)
+            {
+                // Keep the current frame intact. The next baseline starts a new
+                // estimator, independently of the direction that triggered it.
+                state.visibilityDepth = gradualFrequencyUpdate != 0u ? kAdapting : kFrequencyResetPending;
+                if (gradualFrequencyUpdate != 0u) frequencyCounts[pixelIndex] = 20u;
+                return;
+            }
             if (changed || unlock)
             {
+                rebuilding = allowFastRebuild;
                 if (changed) InterlockedAdd(farValidationStats[6], 1u);
                 if (sharedDetector)
                 {
@@ -279,7 +444,7 @@ struct ConeTraceScreen
                 {
                     unlockClusterSet(cs);
                     needsFreshSample = integrateClusterSample(cs, hitValid, t, tanLobe, epsScene,
-                        assignThreshold, maxCount, weakWeight, sigmaPriorScale);
+                        assignThreshold, maxCount, weakWeight, sigmaPriorScale, conserveMergeCounts != 0 && !cameraMoved());
                 }
             }
             else return;
@@ -287,7 +452,8 @@ struct ConeTraceScreen
         else state.visibilityDepth = 0u;
 
         [loop]
-        while (numRays < rayBudget && needsFreshSample)
+        while (numRays < rayBudget &&
+            (needsFreshSample || (rebuilding && clusterCountSum(cs) > 0.f)))
         {
             // One unconditional baseline; every later draw must reserve a token.
             if (numRays > 0u)
@@ -405,7 +571,7 @@ struct ConeTraceScreen
 
                     bool keepGoing = integrateClusterSample(
                         cs, hitValid, hitValid ? rayT : 0.f, tanLobe, epsScene,
-                        assignThreshold, maxCount, weakWeight, sigmaPriorScale
+                        assignThreshold, maxCount, weakWeight, sigmaPriorScale, conserveMergeCounts != 0 && !cameraMoved()
                     );
 
                     [loop]

@@ -318,6 +318,12 @@ public:
 
     /// Explicit, synchronous readback of one glossy pixel; no work during normal rendering.
     std::string inspectRenderPixel(uint32_t x, uint32_t y);
+    // Explicit readback/replay diagnostics; never used by normal execution.
+    ref<Buffer> getDiagnosticSpecInput() const { return mpRenderBatch ? mpRenderBatch->specInput : nullptr; }
+    ref<Buffer> getDiagnosticSpecIndex() const { return mpRenderBatch ? mpRenderBatch->specIndex : nullptr; }
+    ref<Buffer> getDiagnosticSpecActive() const { return mpRenderBatch ? mpRenderBatch->specActive : nullptr; }
+    ref<Buffer> getDiagnosticClusterHistory() const { return mClusterHistoryValid ? mpClusterHistory[mClusterHistoryWriteIdx] : nullptr; }
+    std::vector<float> inferDiagnosticSpecInputs(const std::vector<uint8_t>& inputs);
     /// Frozen-model ablations. Changes render settings only; never recreates or trains the model.
     void setDiagnosticRenderOptions(bool postFilter, bool temporalReuse, bool mirrorAlbedo, uint32_t rays, uint32_t kMeansIters);
     void setDiagnosticSpatialReuse(bool enabled)
@@ -343,6 +349,23 @@ public:
         FALCOR_CHECK(!mDiagnosticHistoryFrozen, "Release the history pin before changing tracing.");
         if (mEnableClusterRayBudget != enabled) clearHistory();
         mEnableClusterRayBudget = enabled;
+    }
+    /// Compare fixed-camera rebuild sampling with identical frozen weights.
+    void setDiagnosticGradualFrequencyUpdate(bool enabled) { mGradualFrequencyUpdate = enabled; }
+    void setDiagnosticFrequencyCheck(bool enabled) { mCheckClusterFrequency = enabled; }
+    void setDiagnosticFastRebuild(bool enabled)
+    {
+        FALCOR_CHECK(mTrainingPaused, "Render ablations require a frozen network.");
+        FALCOR_CHECK(!mDiagnosticHistoryFrozen, "Release the history pin before changing tracing.");
+        if (mEnableClusterFastRebuild != enabled) clearHistory();
+        mEnableClusterFastRebuild = enabled;
+    }
+    void setDiagnosticMergeCountConservation(bool enabled)
+    {
+        FALCOR_CHECK(mTrainingPaused, "Render ablations require a frozen network.");
+        FALCOR_CHECK(!mDiagnosticHistoryFrozen, "Release the history pin before changing tracing.");
+        if (mConserveClusterMergeCounts != enabled) clearHistory();
+        mConserveClusterMergeCounts = enabled;
     }
     std::string getFarModeValidationStats();
     /// Re-run only post processing on the last immutable resolve output for exact A/B tests.
@@ -496,8 +519,11 @@ private:
     uint32_t mDiagnosticInterval = 0;
     bool mDiagnosticHistoryFrozen = false;
     bool mDiagnosticSpatialReuseLegacy = false;
+    bool mEnableClusterFastRebuild = true;
+    bool mConserveClusterMergeCounts = true;
     bool mEnableFarModeValidation = true;
     ref<Buffer> mpFarValidationStats;
+    ref<Buffer> mpClusterFrequencyCounts;
     uint2 mDiagnosticPixel = uint2(735, 650);
     std::string mLastDiagnostics = "{}";
     std::string mProbeMetadata = "{}";
@@ -541,6 +567,9 @@ private:
     bool mEnableClusterRayBudget = true;
     uint32_t mClusterVisibilityFrame = 0;
     bool mClusterVisibilityFrameAdvanced = true;
+    bool mCheckClusterFrequency = true;
+    bool mGradualFrequencyUpdate = true;
+    uint32_t mClusterFrequencyFrames = 0;
     bool mClusterGeometryMoved = false;
     bool mClusterGeometryMovedPreviousFrame = false;
     /// Wipe all history whenever the scene reports moved geometry. Off by default:
@@ -608,7 +637,7 @@ private:
     bool mEnablePostFilter = true;
     /// FXAA switch for post filter.
     bool mEnableFXAA = true;
-    bool mEnableIsolatedHighlightFilter = true;
+    bool mEnableIsolatedHighlightFilter = false;
     /// Force cull mode for all geometry, otherwise set it based on the scene.
     bool mForceCullMode = false;
     /// Cull mode to use for when mForceCullMode is true.

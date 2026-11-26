@@ -340,7 +340,7 @@ int findNearestCluster(ClusterSet cs, float t, float tanLobe, float epsScene, ou
 }
 
 /** Fold mode j into mode i (weighted mean plus law of total variance) and free j. */
-void mergeClusterPair(inout ClusterSet cs, int i, int j)
+void mergeClusterPair(inout ClusterSet cs, int i, int j, bool conserveCounts)
 {
     float wi = max(cs.w[i], 1e-6f);
     float wj = max(cs.w[j], 1e-6f);
@@ -354,7 +354,9 @@ void mergeClusterPair(inout ClusterSet cs, int i, int j)
     cs.t[i] = mu;
     cs.sigma[i] = sqrt(max(var, 0.f));
     cs.w[i] = cs.w[i] + cs.w[j];
-    cs.n[i] = max(cs.n[i], cs.n[j]);
+    // These are disjoint hit populations. Losing their count increases the
+    // next probability update even though the merged probability is unchanged.
+    cs.n[i] = conserveCounts ? cs.n[i] + cs.n[j] : max(cs.n[i], cs.n[j]);
 
     cs.t[j] = 0.f;
     cs.sigma[j] = 0.f;
@@ -366,7 +368,7 @@ void mergeClusterPair(inout ClusterSet cs, int i, int j)
     weakest mode below the release threshold, and only if every slot carries
     real weight merge the closest pair (K=4 means just 6 candidate pairs).
 */
-int allocateClusterSlot(inout ClusterSet cs, float weakWeight, float tanLobe, float epsScene)
+int allocateClusterSlot(inout ClusterSet cs, float weakWeight, float tanLobe, float epsScene, bool conserveCounts = false)
 {
     int weakest = 0;
     float weakestW = FLT_MAX;
@@ -409,7 +411,7 @@ int allocateClusterSlot(inout ClusterSet cs, float weakWeight, float tanLobe, fl
         }
     }
 
-    if (mi != mj) mergeClusterPair(cs, mi, mj);
+    if (mi != mj) mergeClusterPair(cs, mi, mj, conserveCounts);
     return mj;
 }
 
@@ -674,7 +676,8 @@ bool integrateClusterSample(
     float assignThreshold,
     float maxCount,
     float weakWeight,
-    float sigmaPriorScale)
+    float sigmaPriorScale,
+    bool conserveCounts = false)
 {
     const float alphaW = 1.f / (clusterObservationCount(cs) + 1.f);
 
@@ -691,7 +694,7 @@ bool integrateClusterSample(
     int slot;
     if (outlier)
     {
-        slot = allocateClusterSlot(cs, weakWeight, tanLobe, epsScene);
+        slot = allocateClusterSlot(cs, weakWeight, tanLobe, epsScene, conserveCounts);
         birthCluster(cs, slot, t, max(sigmaPriorScale * tanLobe * t, epsScene));
     }
     else
@@ -801,9 +804,7 @@ void accumulateNeighborCluster(inout ClusterAccum acc, int slot, float weight, f
 /******************************************************************************
     Network input
 
-    Both the training path (group-wide K-Means over T=128 rays) and the render
-    path funnel through these two helpers, so the specInput layout and the
-    cluster formulas cannot drift apart and existing checkpoints stay valid.
+    Training and rendering share the specular cluster encoding.
 ******************************************************************************/
 
 /** The three per-cluster quantities the network consumes. */
@@ -815,8 +816,8 @@ struct ClusterOutput
 };
 
 /** Single source of truth for the cluster formulas:
-      clsPos    = (pos + t * reflectDir - bboxMin) / (bboxMax - bboxMin)
-      clsScale  = (sigma + tanLobe * t) / 2 / max(bboxMax - bboxMin)
+      clsPos    = saturate((pos + t * reflectDir - gridMin) / gridExtent)
+      clsScale  = (sigma + tanLobe * t) / 2 / max(gridExtent)
       clsWeight = w
 
     HashGridInterp picks levels by comparing clsScale with 1/resolution, a
@@ -835,11 +836,16 @@ ClusterOutput evalClusterOutput(
     float3 bboxMax)
 {
     ClusterOutput o;
-    o.clsPos = (pos + t * reflectDir - bboxMin) / (bboxMax - bboxMin);
+    // The cluster grid extends 10% of each scene dimension past each face.
+    const float kMarginPerSide = 0.1f;
+    const float3 sceneExtent = bboxMax - bboxMin;
+    const float3 gridMin = bboxMin - kMarginPerSide * sceneExtent;
+    const float3 gridExtent = (1.f + 2.f * kMarginPerSide) * sceneExtent;
+    const float3 gridPos = (clusterAnchor(pos, reflectDir, t) - gridMin) / max(gridExtent, float3(1e-8f));
+    o.clsPos = saturate(gridPos);
     o.clsScale = (sigma + tanLobe * t) / 2;
 #if NORMALIZE_CLS_SCALE
-    const float3 extent = bboxMax - bboxMin;
-    o.clsScale /= max(max(extent.x, extent.y), max(extent.z, 1e-6f));
+    o.clsScale /= max(max(gridExtent.x, gridExtent.y), max(gridExtent.z, 1e-6f));
 #endif
     o.clsWeight = weight;
     return o;
